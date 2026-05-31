@@ -1,0 +1,28 @@
+[package]
+name = "ruststream-nats-py"
+description = "PyO3 bindings for the RustStream NATS broker (native extension)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+publish = false
+
+[lib]
+name = "ruststream_nats_py_native"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+ruststream = { workspace = true, features = ["conformance"] }
+ruststream-nats = { workspace = true, features = ["testing"] }
+ruststream-pyo3.workspace = true
+futures.workspace = true
+pyo3.workspace = true
+pyo3-async-runtimes.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
+tokio-util.workspace = true

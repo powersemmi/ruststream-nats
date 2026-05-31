@@ -1,0 +1,221 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust ${{ matrix.toolchain }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, "1.85"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: ruststream-nats
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ruststream/ruststream-rs
+          persist-credentials: false
+          path: ruststream-rs
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ruststream/ruststream-py
+          persist-credentials: false
+          path: ruststream-py
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ruststream-nats
+
+      - name: cargo fmt
+        if: matrix.toolchain == 'stable'
+        working-directory: ruststream-nats
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        if: matrix.toolchain == 'stable'
+        working-directory: ruststream-nats
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: cargo check (no default features)
+        working-directory: ruststream-nats
+        run: cargo check --workspace --no-default-features
+
+      - name: cargo check (all features)
+        working-directory: ruststream-nats
+        run: cargo check --workspace --all-targets --all-features
+
+      - name: cargo test (handler-stub only, no live broker)
+        working-directory: ruststream-nats
+        run: |
+          cargo test --workspace --all-features \
+            --exclude ruststream-nats-py
+
+  broker-integration:
+    name: Broker integration (NATS)
+    runs-on: ubuntu-latest
+    services:
+      nats:
+        image: nats:2-alpine
+        ports:
+          - 4222:4222
+          - 8222:8222
+        options: >-
+          --health-cmd="wget -q -O- http://127.0.0.1:8222/healthz | grep -q ok"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=10
+        env:
+          NATS_SERVER_OPTIONS: "-js"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: ruststream-nats
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ruststream/ruststream-rs
+          persist-credentials: false
+          path: ruststream-rs
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ruststream-nats
+
+      - name: Run NATS integration tests
+        working-directory: ruststream-nats
+        env:
+          NATS_TEST_URL: nats://127.0.0.1:4222
+        run: cargo test -p ruststream-nats --test integration_nats -- --test-threads=1
+
+      - name: Run NATS conformance suite
+        working-directory: ruststream-nats
+        env:
+          NATS_TEST_URL: nats://127.0.0.1:4222
+        run: cargo test -p ruststream-nats --features testing --test conformance_nats -- --test-threads=1
+
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: ruststream-nats
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ruststream/ruststream-rs
+          persist-credentials: false
+          path: ruststream-rs
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ruststream/ruststream-py
+          persist-credentials: false
+          path: ruststream-py
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ruststream-nats
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        working-directory: ruststream-nats
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Sync dependencies
+        working-directory: ruststream-nats
+        run: uv sync
+
+      - name: Build ruststream wheel (sibling)
+        working-directory: ruststream-nats
+        run: uv run maturin develop --manifest-path ../ruststream-py/py/ruststream-py/Cargo.toml
+
+      - name: Build ruststream-nats native extension
+        working-directory: ruststream-nats
+        run: uv run maturin develop --manifest-path py/ruststream-nats-py/Cargo.toml
+
+      - name: ruff check
+        working-directory: ruststream-nats
+        run: uv run ruff check .
+
+      - name: ruff format check
+        working-directory: ruststream-nats
+        run: uv run ruff format --check .
+
+      - name: mypy
+        working-directory: ruststream-nats
+        run: uv run mypy
+
+      - name: pytest
+        working-directory: ruststream-nats
+        run: uv run pytest
+
+  security:
+    name: Security scans
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: codespell
+        run: uv run codespell
+
+      - name: bandit
+        run: uv run bandit -r py -c pyproject.toml
+
+      - name: semgrep
+        run: uv run semgrep scan --config "p/python" --config "p/security-audit" --error --quiet py
+
+      - name: zizmor
+        run: uv run zizmor .github/workflows

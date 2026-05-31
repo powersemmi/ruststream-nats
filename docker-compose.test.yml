@@ -1,0 +1,21 @@
+name: ruststream-tests
+
+services:
+  nats:
+    image: nats:2-alpine
+    container_name: ruststream-nats
+    command: ["-js", "-m", "8222", "--store_dir=/data"]
+    ports:
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8222/healthz | grep -q ok"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+volumes:
+  nats-data:

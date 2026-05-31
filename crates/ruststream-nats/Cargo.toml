@@ -1,0 +1,33 @@
+[package]
+name = "ruststream-nats"
+description = "NATS / JetStream broker implementation for the RustStream messaging framework."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["nats", "messaging", "jetstream", "broker", "faststream"]
+categories = ["asynchronous", "network-programming"]
+
+[lints]
+workspace = true
+
+[features]
+default = []
+testing = ["ruststream/conformance"]
+
+[dev-dependencies]
+ruststream = { workspace = true, features = ["conformance"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[dependencies]
+ruststream = { workspace = true, default-features = false }
+async-nats.workspace = true
+bytes.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true

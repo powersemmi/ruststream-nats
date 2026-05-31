@@ -1,122 +1,58 @@
-"""In-process test broker for `ruststream-nats`.
+"""Test driver for `ruststream-nats`.
 
-`NatsTestBroker` is a synchronous dispatcher with the same `subscriber` / `publisher`
-decorator surface as the real `NatsBroker`. `publish` performs NATS subject matching and
-fans the message out to every registered handler; ack/nack are effectively no-ops
-(Core NATS has no ack concept). Use it for fast tests of handlers, validators and
-middleware without standing up a NATS server.
+`TestNatsBroker` wraps an existing `NatsBroker` and drives its lifecycle for tests. The
+wrapper mechanics (transport swap, lifecycle, `expect_published`) come from
+`ruststream.testing.BrokerTestClient`; this module only supplies the NATS in-process
+transport.
 
-Broker-specific edge cases (JetStream durable cursor, ack_wait redelivery,
-max_ack_pending, retention) are intentionally NOT simulated. Exercise them against a real
-NATS server through `NatsBroker(url)`.
+Two modes:
+
+* `with_real=False` (default): the broker's transport is swapped for an in-process
+  dispatcher. `publish` performs NATS subject matching (`*` per token, `>` tail) and fans
+  the message out to the matching handlers, running the full middleware / validation / DI /
+  context pipeline with no network and no `nats-server`. ack/nack are no-ops on the broker
+  side (Core NATS has no ack); `on_error=FailureAction.REQUEUE` re-delivers to the same
+  subscriber. No broker-specific semantics (JetStream durable cursor, ack_wait redelivery,
+  max_ack_pending, retention) are simulated.
+* `with_real=True`: the broker connects to its configured NATS URL and runs unchanged. Use
+  it to re-run the same test against a live server.
 
 Example:
     ```python
-    import pytest
-    from ruststream import Message, RustStream
-    from ruststream_nats.testing import NatsTestBroker
+    import asyncio
 
-    @pytest.mark.asyncio
-    async def test_my_handler():
-        broker = NatsTestBroker()
-        received = []
+    from ruststream import Message
+    from ruststream_nats import NatsBroker
+    from ruststream_nats.testing import TestNatsBroker
 
-        @broker.subscriber("orders.created")
-        async def handle(msg: Message) -> None:
-            received.append(msg.payload)
+    broker = NatsBroker("nats://127.0.0.1:4222")
+    received: list[bytes] = []
 
-        async with RustStream(broker):
-            await broker.publish("orders.created", b"hi")
-            published = await broker.expect_published("orders.created", count=1)
+    @broker.subscriber("orders.*")
+    async def handle(msg: Message) -> None:
+        received.append(bytes(msg.payload))
 
-        assert received == [b"hi"]
-        assert published[0]["payload"] == b"hi"
+    async def test() -> None:
+        async with TestNatsBroker(broker) as br:
+            await br.publish("orders.created", b"o1")
+            await asyncio.sleep(0)
+        assert received == [b"o1"]
     ```
 """
 
-from collections.abc import Mapping, Sequence
-from typing import Any, TypedDict
+from ruststream.testing import BrokerTestClient, PublishedMessage, StubTransport
 
-from ruststream._broker import Broker, Router
-from ruststream.codecs import Codec
-from ruststream.di import DI
-from ruststream.failure import FailurePolicy
-from ruststream.metrics import MetricsRecorder
-
-from ruststream_nats._native import NatsTestBroker as _RawNatsTestBroker
-from ruststream_nats._native import Subscriber
+from ruststream_nats._native import NatsTestBroker as _RawTestRouter
 
 
-class PublishedMessage(TypedDict):
-    """One entry returned by `NatsTestBroker.expect_published`."""
+class TestNatsBroker(BrokerTestClient):
+    """`BrokerTestClient` backed by the NATS in-process subject router."""
 
-    topic: str
-    payload: bytes
-    headers: dict[str, bytes]
+    _SESSION_LABEL = "nats-test"
 
-
-class NatsTestBroker(Broker):
-    """In-process dispatcher broker. Construct with no arguments.
-
-    Args:
-        on_error: Failure policy applied to handler exceptions. Defaults to
-            `FailureAction.NACK`. Pass `FailureAction.REQUEUE` to re-deliver the same
-            message to the same subscriber, or a mapping for per-exception policies.
-        codec: Optional broker-level default codec. `None` falls back to raw bytes; pass a
-            registered codec name (`"json"`, `"orjson"`, ...) or a `Codec` instance.
-    """
-
-    def __init__(
-        self,
-        *,
-        on_error: FailurePolicy = None,
-        codec: Codec | str | None = None,
-        di: DI | None = None,
-        metrics: MetricsRecorder | None = None,
-    ) -> None:
-        super().__init__(on_error=on_error, codec=codec, di=di, metrics=metrics)
-        self._raw: _RawNatsTestBroker = _RawNatsTestBroker()
-
-    async def _open(self) -> None:
-        # No connection step: the broker exists in-process the moment it is constructed.
-        self._context.set_session("broker", "nats-test")
-
-    async def _close(self) -> None:
-        await self._raw.shutdown()
-
-    async def _subscribe(self, topic: str, **options: Any) -> Subscriber:
-        return await self._raw.subscribe(topic, **options)
-
-    async def _publish(self, topic: str, payload: bytes) -> None:
-        await self._raw.publish(topic, payload)
-
-    async def expect_published(
-        self,
-        topic: str,
-        count: int,
-        *,
-        timeout_secs: float = 1.0,
-    ) -> Sequence[PublishedMessage]:
-        """Await up to `count` messages on `topic` and return the recorded prefix.
-
-        Returns whatever has been recorded by the time `timeout_secs` elapses; never blocks
-        longer than the timeout.
-        """
-        raw: Sequence[Mapping[str, Any]] = await self._raw.expect_published(
-            topic, count, timeout_secs
-        )
-        return [
-            PublishedMessage(
-                topic=entry["topic"],
-                payload=entry["payload"],
-                headers=dict(entry["headers"]),
-            )
-            for entry in raw
-        ]
+    def _make_stub(self) -> StubTransport:
+        router: StubTransport = _RawTestRouter()
+        return router
 
 
-class NatsTestRouter(Router):
-    """Reusable bundle of subscriber registrations for `NatsTestBroker`."""
-
-
-__all__: tuple[str, ...] = ("NatsTestBroker", "NatsTestRouter", "PublishedMessage")
+__all__: tuple[str, ...] = ("PublishedMessage", "TestNatsBroker")

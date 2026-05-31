@@ -1,94 +1,93 @@
-"""pytest suite for `ruststream_nats.testing.NatsTestBroker`."""
+"""pytest suite for `ruststream_nats.testing.TestNatsBroker` in stub mode."""
 
 import asyncio
 
 import pytest
-from ruststream import Message, RustStream
-from ruststream_nats.testing import NatsTestBroker, NatsTestRouter
+from ruststream import Message
+from ruststream_nats import NatsBroker, NatsRouter
+from ruststream_nats.testing import TestNatsBroker
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_publish_reaches_decorated_subscriber(nats_test_broker: NatsTestBroker) -> None:
+async def test_publish_reaches_decorated_subscriber(nats_broker: NatsBroker) -> None:
     received: list[bytes] = []
     seen = asyncio.Event()
 
-    @nats_test_broker.subscriber("orders.created")
+    @nats_broker.subscriber("orders.created")
     async def handle(msg: Message) -> None:
-        received.append(msg.payload)
+        received.append(bytes(msg.payload))
         seen.set()
 
-    async with RustStream(nats_test_broker):
-        await nats_test_broker.publish("orders.created", b"o1")
+    async with TestNatsBroker(nats_broker) as br:
+        await br.publish("orders.created", b"o1")
         await asyncio.wait_for(seen.wait(), timeout=1.0)
 
     assert received == [b"o1"]
 
 
-async def test_wildcard_subscription_matches_single_token(
-    nats_test_broker: NatsTestBroker,
-) -> None:
+async def test_wildcard_subscription_matches_single_token(nats_broker: NatsBroker) -> None:
     star: list[bytes] = []
     star_done = asyncio.Event()
 
-    @nats_test_broker.subscriber("orders.*")
+    @nats_broker.subscriber("orders.*")
     async def handle(msg: Message) -> None:
-        star.append(msg.payload)
+        star.append(bytes(msg.payload))
         if len(star) == 2:
             star_done.set()
 
-    async with RustStream(nats_test_broker):
-        await nats_test_broker.publish("orders.created", b"a")
-        await nats_test_broker.publish("orders.updated", b"b")
-        await nats_test_broker.publish("payments.captured", b"c")
+    async with TestNatsBroker(nats_broker) as br:
+        await br.publish("orders.created", b"a")
+        await br.publish("orders.updated", b"b")
+        await br.publish("payments.captured", b"c")
         await asyncio.wait_for(star_done.wait(), timeout=1.0)
 
     assert star == [b"a", b"b"]
 
 
-async def test_tail_wildcard_matches_every_subject(nats_test_broker: NatsTestBroker) -> None:
+async def test_tail_wildcard_matches_every_subject(nats_broker: NatsBroker) -> None:
     tail: list[str] = []
     tail_done = asyncio.Event()
 
-    @nats_test_broker.subscriber(">")
+    @nats_broker.subscriber(">")
     async def handle(msg: Message) -> None:
         tail.append(bytes(msg.payload).decode())
         if len(tail) == 3:
             tail_done.set()
 
-    async with RustStream(nats_test_broker):
-        await nats_test_broker.publish("a", b"x")
-        await nats_test_broker.publish("a.b", b"y")
-        await nats_test_broker.publish("a.b.c", b"z")
+    async with TestNatsBroker(nats_broker) as br:
+        await br.publish("a", b"x")
+        await br.publish("a.b", b"y")
+        await br.publish("a.b.c", b"z")
         await asyncio.wait_for(tail_done.wait(), timeout=1.0)
 
     assert tail == ["x", "y", "z"]
 
 
 async def test_handler_exception_triggers_nack_drop_by_default(
-    nats_test_broker: NatsTestBroker,
+    nats_broker: NatsBroker,
 ) -> None:
     calls: list[bytes] = []
 
-    @nats_test_broker.subscriber("orders")
+    @nats_broker.subscriber("orders")
     async def handle(msg: Message) -> None:
-        calls.append(msg.payload)
+        calls.append(bytes(msg.payload))
         raise RuntimeError("boom")
 
-    async with RustStream(nats_test_broker):
-        await nats_test_broker.publish("orders", b"once")
+    async with TestNatsBroker(nats_broker) as br:
+        await br.publish("orders", b"once")
         await asyncio.sleep(0.1)
 
     assert calls == [b"once"]
 
 
 async def test_handler_exception_with_requeue_redelivers_once_more(
-    nats_test_broker_requeue: NatsTestBroker,
+    nats_broker_requeue: NatsBroker,
 ) -> None:
     seen = asyncio.Event()
     attempts = 0
 
-    @nats_test_broker_requeue.subscriber("retry.me")
+    @nats_broker_requeue.subscriber("retry.me")
     async def handle(msg: Message) -> None:
         nonlocal attempts
         attempts += 1
@@ -96,71 +95,66 @@ async def test_handler_exception_with_requeue_redelivers_once_more(
             raise RuntimeError("first attempt fails")
         seen.set()
 
-    async with RustStream(nats_test_broker_requeue):
-        await nats_test_broker_requeue.publish("retry.me", b"payload")
+    async with TestNatsBroker(nats_broker_requeue) as br:
+        await br.publish("retry.me", b"payload")
         await asyncio.wait_for(seen.wait(), timeout=1.0)
 
     assert attempts >= 2
 
 
 async def test_router_publisher_forwards_return_to_topic(
-    nats_test_broker: NatsTestBroker,
-    nats_test_router: NatsTestRouter,
+    nats_broker: NatsBroker,
+    nats_router: NatsRouter,
 ) -> None:
     responses: list[bytes] = []
     response_seen = asyncio.Event()
 
-    @nats_test_router.subscriber("req")
-    @nats_test_router.publisher("resp")
+    @nats_router.subscriber("req")
+    @nats_router.publisher("resp")
     async def handle_request(msg: Message) -> bytes:
         return b"reply-to-" + bytes(msg.payload)
 
-    @nats_test_router.subscriber("resp")
+    @nats_router.subscriber("resp")
     async def handle_response(msg: Message) -> None:
-        responses.append(msg.payload)
+        responses.append(bytes(msg.payload))
         response_seen.set()
 
-    nats_test_broker.include_router(nats_test_router)
+    nats_broker.include_router(nats_router)
 
-    async with RustStream(nats_test_broker):
-        await nats_test_broker.publish("req", b"req-1")
+    async with TestNatsBroker(nats_broker) as br:
+        await br.publish("req", b"req-1")
         await asyncio.wait_for(response_seen.wait(), timeout=1.0)
 
     assert responses == [b"reply-to-req-1"]
 
 
-async def test_router_attaches_to_test_broker(
-    nats_test_broker: NatsTestBroker,
-    nats_test_router: NatsTestRouter,
+async def test_router_attaches_to_broker(
+    nats_broker: NatsBroker,
+    nats_router: NatsRouter,
 ) -> None:
     received: list[bytes] = []
     seen = asyncio.Event()
 
-    @nats_test_router.subscriber("router.topic")
+    @nats_router.subscriber("router.topic")
     async def handle(msg: Message) -> None:
-        received.append(msg.payload)
+        received.append(bytes(msg.payload))
         seen.set()
 
-    nats_test_broker.include_router(nats_test_router)
+    nats_broker.include_router(nats_router)
 
-    async with RustStream(nats_test_broker):
-        await nats_test_broker.publish("router.topic", b"from-router")
+    async with TestNatsBroker(nats_broker) as br:
+        await br.publish("router.topic", b"from-router")
         await asyncio.wait_for(seen.wait(), timeout=1.0)
 
     assert received == [b"from-router"]
 
 
-async def test_expect_published_returns_recorded_messages(
-    nats_test_broker: NatsTestBroker,
-) -> None:
-    async with RustStream(nats_test_broker):
-        await nats_test_broker.publish("events", b"first")
-        await nats_test_broker.publish("events", b"second")
-        published = await nats_test_broker.expect_published(
-            "events",
-            count=2,
-            timeout_secs=1.0,
-        )
+async def test_expect_published_returns_recorded_messages(nats_broker: NatsBroker) -> None:
+    tester = TestNatsBroker(nats_broker)
+    async with tester as br:
+        await br.publish("events", b"first")
+        await br.publish("events", b"second")
+        published = await tester.expect_published("events", count=2, timeout_secs=1.0)
 
     assert len(published) == 2
     assert published[0]["topic"] == "events"
@@ -168,53 +162,60 @@ async def test_expect_published_returns_recorded_messages(
     assert published[1]["payload"] == b"second"
 
 
-async def test_expect_published_returns_partial_on_timeout(
-    nats_test_broker: NatsTestBroker,
-) -> None:
-    async with RustStream(nats_test_broker):
-        await nats_test_broker.publish("late", b"only-one")
-        published = await nats_test_broker.expect_published(
-            "late",
-            count=5,
-            timeout_secs=0.1,
-        )
+async def test_expect_published_returns_partial_on_timeout(nats_broker: NatsBroker) -> None:
+    tester = TestNatsBroker(nats_broker)
+    async with tester as br:
+        await br.publish("late", b"only-one")
+        published = await tester.expect_published("late", count=5, timeout_secs=0.1)
 
     assert len(published) == 1
     assert published[0]["payload"] == b"only-one"
 
 
+async def test_expect_published_rejects_real_mode(nats_broker: NatsBroker) -> None:
+    tester = TestNatsBroker(nats_broker, with_real=True)
+    with pytest.raises(RuntimeError, match="with_real=False"):
+        await tester.expect_published("events", count=1)
+
+
 async def test_publisher_decorator_round_trips_through_handler_stub(
-    nats_test_broker: NatsTestBroker,
+    nats_broker: NatsBroker,
 ) -> None:
     responses: list[bytes] = []
     response_seen = asyncio.Event()
 
-    @nats_test_broker.subscriber("req")
-    @nats_test_broker.publisher("resp")
+    @nats_broker.subscriber("req")
+    @nats_broker.publisher("resp")
     async def handle_request(msg: Message) -> bytes:
         return b"reply-to-" + bytes(msg.payload)
 
-    @nats_test_broker.subscriber("resp")
+    @nats_broker.subscriber("resp")
     async def handle_response(msg: Message) -> None:
-        responses.append(msg.payload)
+        responses.append(bytes(msg.payload))
         response_seen.set()
 
-    async with RustStream(nats_test_broker):
-        await nats_test_broker.publish("req", b"req-1")
+    async with TestNatsBroker(nats_broker) as br:
+        await br.publish("req", b"req-1")
         await asyncio.wait_for(response_seen.wait(), timeout=1.0)
 
     assert responses == [b"reply-to-req-1"]
 
 
-async def test_subscriber_rejects_invalid_jetstream_combo(
-    nats_test_broker: NatsTestBroker,
-) -> None:
-    @nats_test_broker.subscriber("orders", durable="worker")
+async def test_subscriber_rejects_invalid_jetstream_combo(nats_broker: NatsBroker) -> None:
+    @nats_broker.subscriber("orders", durable="worker")
     async def handle(msg: Message) -> None:
         pass
 
-    with pytest.raises(RuntimeError, match=r"durable|jetstream") as excinfo:
-        async with RustStream(nats_test_broker):
+    with pytest.raises(RuntimeError, match=r"durable|jetstream"):
+        async with TestNatsBroker(nats_broker):
             await asyncio.sleep(0)
 
-    assert excinfo.value is not None
+
+async def test_transport_restored_after_stub_context(nats_broker: NatsBroker) -> None:
+    """Leaving stub mode removes the instance-level transport shadows."""
+    assert "_publish" not in nats_broker.__dict__
+
+    async with TestNatsBroker(nats_broker):
+        assert "_publish" in nats_broker.__dict__
+
+    assert "_publish" not in nats_broker.__dict__

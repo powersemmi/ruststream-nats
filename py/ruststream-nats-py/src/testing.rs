@@ -1,8 +1,9 @@
-//! Python binding for the handler-stub `NatsTestBroker` / `NatsTestClient`.
+//! Python binding for the in-process handler-stub transport.
 //!
-//! Exposed as `ruststream_nats._native.NatsTestBroker`. The Python `ruststream_nats.testing`
-//! module wraps this with the same `Broker` lifecycle the production broker uses, so user
-//! code switching `NatsBroker(url)` to `NatsTestBroker()` keeps the same handler setup.
+//! Exposed as `ruststream_nats._native.NatsTestBroker` and consumed privately by
+//! `ruststream_nats.testing.TestNatsBroker`, which swaps it in as the transport of an
+//! existing `NatsBroker` so the broker's own handlers, middleware, codec and DI are
+//! exercised with no network.
 
 use std::sync::Arc;
 

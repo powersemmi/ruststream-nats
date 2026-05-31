@@ -19,7 +19,7 @@ ruststream-nats/
 └── pyproject.toml              uv workspace, tooling config
 ```
 
-Path dependencies on sibling repositories (`ruststream-rs`, `ruststream-py`) assume that all three repos live next to each other. After the 0.1 publish wave they flip to crates.io version ranges (`ruststream = ">=0.1, <0.2"`, `ruststream-pyo3 = ">=0.1, <0.2"`).
+Path dependencies on sibling repositories (`ruststream`, `ruststream-py`) assume that all three repos live next to each other. After the 0.1 publish wave they flip to crates.io version ranges (`ruststream = ">=0.1, <0.2"`, `ruststream-pyo3 = ">=0.1, <0.2"`).
 
 ## Quick start
 

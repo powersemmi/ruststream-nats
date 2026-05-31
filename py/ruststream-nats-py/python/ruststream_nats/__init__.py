@@ -1,8 +1,8 @@
 """NATS broker for the RustStream messaging framework.
 
 Pair with the core `ruststream` package, which exposes `RustStream` and the broker base
-class that the classes here extend. For handler-stub tests, use
-`ruststream_nats.testing.NatsTestBroker`.
+class that the classes here extend. To test handlers without a server, wrap the broker in
+`ruststream_nats.testing.TestNatsBroker`.
 """
 
 from ruststream_nats._broker import NatsBroker, NatsRouter

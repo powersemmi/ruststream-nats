@@ -19,7 +19,7 @@ ruststream-nats = { path = "crates/ruststream-nats" }
 # Cross-repo path deps. Sibling layout assumed: ruststream-rs/ and ruststream-py/
 # next to ruststream-nats/. Flip the path values to crates.io version ranges after
 # ruststream 0.1 and ruststream-pyo3 0.1 are published.
-ruststream = { path = "../ruststream-rs", default-features = false }
+ruststream = { path = "../ruststream", default-features = false }
 ruststream-pyo3 = { path = "../ruststream-py/crates/ruststream-pyo3" }
 
 async-nats = "0.46"

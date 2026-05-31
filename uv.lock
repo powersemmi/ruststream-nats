@@ -1434,9 +1434,27 @@ wheels = [
 ]
 
 [[package]]
+name = "ruststream"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/be/f3/1fbbbef0812c99833451b994a1380a3a5f165f566a80c966706b12a0204b/ruststream-0.1.0.tar.gz", hash = "sha256:90e3560ac0673e902130e38a6c199cd8ecce7e8bb1fab4ddfaa7e5fe206a4bfc", size = 105476, upload-time = "2026-05-31T14:44:29.734Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/3f/b8b2d50d63aabd7b039ce7c91d017fb94ae3c0be116870c1a0d12f2b110f/ruststream-0.1.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:dd1d23d2270445365e19dd82eff37b6d33d9a66ac04086a5eb1e914f4d56baa9", size = 532204, upload-time = "2026-05-31T14:44:24.196Z" },
+    { url = "https://files.pythonhosted.org/packages/16/e9/7853311f5b08ab738a301fdec6623b9c56414e6d5e95b9f657a5a6127e19/ruststream-0.1.0-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:97971835a9d4d6e9ddbe1b56ddf10995eaf9674a3ab4191d87f13fe8b44b176f", size = 555817, upload-time = "2026-05-31T14:44:25.832Z" },
+    { url = "https://files.pythonhosted.org/packages/24/ce/b8e360b1dceed99eb6ad97218d9948041179511183f53515e89545ee5801/ruststream-0.1.0-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5a25a4ed09dab4bbbbb42b95364a87e04b6c3f6c01597c02efb39e24a73d7567", size = 572400, upload-time = "2026-05-31T14:44:27.197Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/26/2590480fd9a148863e3c0b251ea9eb8ab12c75556010822807828fcb4781/ruststream-0.1.0-cp311-abi3-win_amd64.whl", hash = "sha256:34e6958bd75ddbd6dfc7a1115e986d07f1c9c5bca8d6701274a55a876b581eb5", size = 491180, upload-time = "2026-05-31T14:44:28.454Z" },
+]
+
+[[package]]
 name = "ruststream-nats"
-version = "0.0.1.dev0"
+version = "0.1.0"
 source = { editable = "py/ruststream-nats-py" }
+dependencies = [
+    { name = "ruststream" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "ruststream", specifier = ">=0.1.0,<0.2.0" }]
 
 [[package]]
 name = "ruststream-nats-workspace"

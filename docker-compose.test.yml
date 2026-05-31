@@ -11,7 +11,11 @@ services:
     volumes:
       - nats-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8222/healthz | grep -q ok"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O- http://127.0.0.1:8222/healthz | grep -q ok && wget -q -O- http://127.0.0.1:8222/jsz | grep -q server_id",
+        ]
       interval: 2s
       timeout: 2s
       retries: 10

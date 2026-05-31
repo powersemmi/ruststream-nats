@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "ruststream"
-version = "0.0.1-dev"
+version = "0.1.0"
 dependencies = [
  "bytes",
  "futures",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "ruststream-nats"
-version = "0.0.1-dev"
+version = "0.1.0"
 dependencies = [
  "async-nats",
  "bytes",
@@ -958,7 +958,7 @@ dependencies = [
 
 [[package]]
 name = "ruststream-nats-py"
-version = "0.0.1-dev"
+version = "0.1.0"
 dependencies = [
  "futures",
  "pyo3",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "ruststream-pyo3"
-version = "0.0.1-dev"
+version = "0.1.0"
 dependencies = [
  "futures",
  "pyo3",

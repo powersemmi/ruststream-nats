@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1-dev"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -19,8 +19,8 @@ ruststream-nats = { path = "crates/ruststream-nats" }
 # Cross-repo path deps. Sibling layout assumed: ruststream/ and ruststream-py/
 # next to ruststream-nats/. Flip the path values to crates.io version ranges after
 # ruststream 0.1 and ruststream-pyo3 0.1 are published.
-ruststream = { path = "../ruststream", default-features = false }
-ruststream-pyo3 = { path = "../ruststream-py/crates/ruststream-pyo3" }
+ruststream = { version = ">=0.1.0, <0.2.0", path = "../ruststream", default-features = false }
+ruststream-pyo3 = { version = ">=0.1.0, <0.2.0", path = "../ruststream-py/crates/ruststream-pyo3" }
 
 async-nats = "0.46"
 bytes = "1"

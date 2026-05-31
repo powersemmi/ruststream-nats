@@ -11,6 +11,9 @@ package = false
 [tool.uv.workspace]
 members = ["py/*"]
 
+# `ruststream` is resolved from PyPI (the ruststream-nats wheel depends on it). It must be
+# published before this workspace resolves; see the publish order in the repo README.
+
 [dependency-groups]
 dev = [
     "ruff>=0.8",
@@ -22,8 +25,6 @@ dev = [
     "maturin>=1.7,<2.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    # ruststream Python framework is consumed via the sibling ruststream-py repo workspace.
-    # Local dev: `uv pip install -e ../ruststream-py/py/ruststream-py` once after sync.
 ]
 
 

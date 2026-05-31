@@ -175,8 +175,6 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
-          # Remove `password` after setting up Trusted Publishing on pypi.org
-          password: ${{ secrets.PYPI_TOKEN }}
 
       - name: Generate release notes
         if: github.event_name == 'release'

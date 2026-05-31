@@ -84,10 +84,10 @@ jobs:
           - 4222:4222
           - 8222:8222
         options: >-
-          --health-cmd="wget -q -O- http://127.0.0.1:8222/healthz | grep -q ok"
+          --health-cmd="wget -q -O- http://127.0.0.1:8222/healthz | grep -q ok && wget -q -O- http://127.0.0.1:8222/jsz | grep -q server_id"
           --health-interval=2s
           --health-timeout=2s
-          --health-retries=10
+          --health-retries=15
         env:
           NATS_SERVER_OPTIONS: "-js"
     steps:

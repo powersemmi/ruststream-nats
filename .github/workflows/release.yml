@@ -178,6 +178,12 @@ jobs:
         with:
           packages-dir: dist
 
+      - name: Attach artifacts to release
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY"
+
       - name: Generate release notes
         if: github.event_name == 'release'
         env:

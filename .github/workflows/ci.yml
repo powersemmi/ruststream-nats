@@ -102,6 +102,12 @@ jobs:
           persist-credentials: false
           path: ruststream
 
+      - uses: actions/checkout@v4
+        with:
+          repository: powersemmi/ruststream-py
+          persist-credentials: false
+          path: ruststream-py
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 

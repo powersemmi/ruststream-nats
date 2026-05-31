@@ -77,19 +77,6 @@ jobs:
   broker-integration:
     name: Broker integration (NATS)
     runs-on: ubuntu-latest
-    services:
-      nats:
-        image: nats:2-alpine
-        ports:
-          - 4222:4222
-          - 8222:8222
-        options: >-
-          --health-cmd="wget -q -O- http://127.0.0.1:8222/healthz | grep -q ok && wget -q -O- http://127.0.0.1:8222/jsz | grep -q server_id"
-          --health-interval=2s
-          --health-timeout=2s
-          --health-retries=15
-        env:
-          NATS_SERVER_OPTIONS: "-js"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,6 +94,19 @@ jobs:
           repository: powersemmi/ruststream-py
           persist-credentials: false
           path: ruststream-py
+
+      - name: Start NATS with JetStream
+        run: |
+          docker run -d --name nats \
+            -p 127.0.0.1:4222:4222 \
+            -p 127.0.0.1:8222:8222 \
+            nats:2-alpine -js -m 8222
+
+      - name: Wait for NATS + JetStream
+        timeout-minutes: 1
+        run: |
+          timeout 30 bash -c 'until docker logs nats 2>&1 | grep -q "Server is ready"; do sleep 0.5; done'
+          docker logs nats
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -127,6 +127,10 @@ jobs:
         env:
           NATS_TEST_URL: nats://127.0.0.1:4222
         run: cargo test -p ruststream-nats --features testing --test conformance_nats -- --test-threads=1
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f nats
 
   python:
     name: Python ${{ matrix.python-version }}

@@ -124,6 +124,8 @@ jobs:
           target: ${{ matrix.platform.target }}
           manylinux: auto
           args: --release --out dist --manifest-path py/ruststream-nats-py/Cargo.toml
+        env:
+          CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
 
       - uses: actions/upload-artifact@v4
         with:

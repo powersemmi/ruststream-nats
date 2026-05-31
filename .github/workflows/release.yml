@@ -63,14 +63,20 @@ jobs:
           persist-credentials: false
           path: ruststream-py
 
+      - name: Exchange OIDC token for crates.io token
+        run: |
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=crates-io")
+          TOKEN=$(echo "$RESPONSE" | jq -r '.token')
+          echo "CARGO_REGISTRY_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: cargo publish ruststream-nats
         working-directory: ruststream-nats
         run: cargo publish -p ruststream-nats
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   wheels:
     name: Wheels ${{ matrix.platform.runner }} ${{ matrix.platform.target }}
@@ -159,9 +165,6 @@ jobs:
     name: Publish ruststream-nats to PyPI
     needs: [wheels, sdist]
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:

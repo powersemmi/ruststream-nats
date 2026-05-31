@@ -12,9 +12,7 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use ruststream::{
-    Headers, IncomingMessage, OutgoingMessage, Publisher, RequestReply, Subscriber,
-};
+use ruststream::{Headers, IncomingMessage, OutgoingMessage, Publisher, RequestReply, Subscriber};
 use ruststream_nats::{NatsBroker, SubscribeOptions};
 use tokio::time::timeout;
 

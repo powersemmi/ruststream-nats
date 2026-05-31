@@ -153,14 +153,33 @@ async fn jetstream_durable_consumer_ack() {
     let stream_name = format!("RS_TEST_{}", chrono_like_suffix());
 
     let ctx = async_nats::jetstream::new(broker.client());
-    let stream = ctx
-        .create_stream(async_nats::jetstream::stream::Config {
-            name: stream_name.clone(),
-            subjects: vec![subject.clone()],
-            ..Default::default()
-        })
-        .await
-        .expect("create_stream failed");
+    // JetStream may not be ready immediately after server startup; retry with backoff.
+    let stream = {
+        let mut backoff = Duration::from_millis(200);
+        let max_retries = 10;
+        let mut attempt = 0;
+        loop {
+            match ctx
+                .create_stream(async_nats::jetstream::stream::Config {
+                    name: stream_name.clone(),
+                    subjects: vec![subject.clone()],
+                    ..Default::default()
+                })
+                .await
+            {
+                Ok(s) => break s,
+                Err(err) if attempt < max_retries => {
+                    attempt += 1;
+                    eprintln!(
+                        "JetStream create_stream attempt {attempt}/{max_retries}: {err}; retrying in {backoff:?}"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff *= 2;
+                }
+                Err(err) => panic!("create_stream failed after {max_retries} retries: {err}"),
+            }
+        }
+    };
 
     let publisher = broker.publisher();
     publisher

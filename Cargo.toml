@@ -10,13 +10,13 @@ version = "0.0.1-dev"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
-repository = "https://github.com/ruststream/ruststream-nats"
+repository = "https://github.com/powersemmi/ruststream-nats"
 authors = ["RustStream contributors"]
 
 [workspace.dependencies]
 ruststream-nats = { path = "crates/ruststream-nats" }
 
-# Cross-repo path deps. Sibling layout assumed: ruststream-rs/ and ruststream-py/
+# Cross-repo path deps. Sibling layout assumed: ruststream/ and ruststream-py/
 # next to ruststream-nats/. Flip the path values to crates.io version ranges after
 # ruststream 0.1 and ruststream-pyo3 0.1 are published.
 ruststream = { path = "../ruststream", default-features = false }

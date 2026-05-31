@@ -29,13 +29,13 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: ruststream/ruststream
+          repository: powersemmi/ruststream
           persist-credentials: false
           path: ruststream
 
       - uses: actions/checkout@v4
         with:
-          repository: ruststream/ruststream-py
+          repository: powersemmi/ruststream-py
           persist-credentials: false
           path: ruststream-py
 
@@ -98,7 +98,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: ruststream/ruststream
+          repository: powersemmi/ruststream
           persist-credentials: false
           path: ruststream
 
@@ -137,13 +137,13 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: ruststream/ruststream
+          repository: powersemmi/ruststream
           persist-credentials: false
           path: ruststream
 
       - uses: actions/checkout@v4
         with:
-          repository: ruststream/ruststream-py
+          repository: powersemmi/ruststream-py
           persist-credentials: false
           path: ruststream-py
 

@@ -27,8 +27,8 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/moloko/RustStream"
-Repository = "https://github.com/moloko/RustStream"
+Homepage = "https://github.com/powersemmi/ruststream-nats"
+Repository = "https://github.com/powersemmi/ruststream-nats"
 
 [tool.maturin]
 python-source = "python"

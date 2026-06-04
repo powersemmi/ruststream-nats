@@ -41,7 +41,7 @@ impl PySubscriber {
                 .recv()
                 .await
                 .ok_or_else(|| PyStopAsyncIteration::new_err("subscription closed"))?;
-            Python::with_gil(|py| -> PyResult<Py<PyAny>> {
+            Python::attach(|py| -> PyResult<Py<PyAny>> {
                 let obj = Py::new(py, PyMessage::new(msg))?;
                 Ok(obj.into_any())
             })

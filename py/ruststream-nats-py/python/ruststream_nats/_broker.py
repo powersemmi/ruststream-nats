@@ -4,6 +4,7 @@ Provides a faststream-style decorator API on top of the low-level connect/publis
 primitives implemented in Rust.
 """
 
+from collections.abc import Iterable
 from typing import Any
 
 from ruststream._broker import Broker, Router
@@ -64,6 +65,11 @@ class NatsBroker(Broker):
         if self._raw is None:
             raise RuntimeError("NatsBroker is not started; call start() first")
         await self._raw.publish(topic, payload)
+
+    async def _publish_batch(self, topic: str, payloads: Iterable[bytes]) -> None:
+        if self._raw is None:
+            raise RuntimeError("NatsBroker is not started; call start() first")
+        await self._raw.publish_batch(topic, list(payloads))
 
 
 class NatsRouter(Router):

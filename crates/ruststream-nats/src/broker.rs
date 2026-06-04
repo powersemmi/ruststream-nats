@@ -1,7 +1,7 @@
 //! The [`NatsBroker`]: the entry point of the `async-nats` integration.
 
 use async_nats::jetstream::consumer::{PullConsumer, pull::Config as ConsumerConfig};
-use ruststream::Broker;
+use ruststream::{Broker, Subscribe};
 
 use crate::{
     error::NatsError, publisher::NatsPublisher, subscribe_options::SubscribeOptions,
@@ -154,8 +154,6 @@ impl NatsBroker {
 }
 
 impl Broker for NatsBroker {
-    type Subscriber = NatsSubscriber;
-    type Publisher = NatsPublisher;
     type Error = NatsError;
 
     async fn connect(&self) -> Result<(), Self::Error> {
@@ -165,5 +163,17 @@ impl Broker for NatsBroker {
     async fn shutdown(&self) -> Result<(), Self::Error> {
         self.shutdown_client().await;
         Ok(())
+    }
+}
+
+// By-name subscription capability: the runtime's default `Name` source resolves through this for
+// the common Core-subject case. The explicit `NatsBroker::` path on the inherent `subscribe`
+// disambiguates it from this trait method (inherent methods win, but spell it out for clarity).
+#[allow(clippy::use_self)]
+impl Subscribe for NatsBroker {
+    type Subscriber = NatsSubscriber;
+
+    async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
+        NatsBroker::subscribe(self, SubscribeOptions::new(name)).await
     }
 }

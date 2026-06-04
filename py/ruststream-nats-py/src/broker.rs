@@ -34,7 +34,7 @@ impl PyNatsBroker {
             let broker = NatsBroker::connect(url.as_str())
                 .await
                 .map_err(|err| to_pyerr(&err))?;
-            Python::with_gil(|py| -> PyResult<Py<PyAny>> {
+            Python::attach(|py| -> PyResult<Py<PyAny>> {
                 let obj = Py::new(
                     py,
                     Self {
@@ -59,6 +59,31 @@ impl PyNatsBroker {
                 .publish(OutgoingMessage::new(topic.as_str(), payload.as_slice()))
                 .await
                 .map_err(|err| to_pyerr(&err))
+        })
+    }
+
+    /// Publishes every payload in `payloads` to `topic`, then flushes once.
+    ///
+    /// Enqueues all messages on the shared client and crosses the Python/async boundary a
+    /// single time, instead of one awaitable per message. The trailing flush makes the call
+    /// resolve only after the client has handed the whole batch to the connection, preserving
+    /// producer flow control. Ordering is retained; this is not an atomic transaction.
+    fn publish_batch<'py>(
+        &self,
+        py: Python<'py>,
+        topic: String,
+        payloads: Vec<Vec<u8>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = Arc::clone(&self.inner);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let publisher = inner.publisher();
+            for payload in &payloads {
+                publisher
+                    .publish(OutgoingMessage::new(topic.as_str(), payload.as_slice()))
+                    .await
+                    .map_err(|err| to_pyerr(&err))?;
+            }
+            inner.client().flush().await.map_err(|err| to_pyerr(&err))
         })
     }
 
@@ -103,7 +128,7 @@ impl PyNatsBroker {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let subscriber = inner.subscribe(opts).await.map_err(|err| to_pyerr(&err))?;
             let (rx, cancel) = pump_subscriber(subscriber);
-            Python::with_gil(|py| -> PyResult<Py<PyAny>> {
+            Python::attach(|py| -> PyResult<Py<PyAny>> {
                 let obj = Py::new(py, PySubscriber::new(rx, cancel))?;
                 Ok(obj.into_any())
             })

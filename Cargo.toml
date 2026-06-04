@@ -6,7 +6,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -18,15 +18,15 @@ ruststream-nats = { path = "crates/ruststream-nats" }
 
 # Cross-repo path deps. Sibling layout assumed: ruststream/ and ruststream-py/
 # next to ruststream-nats/. Flip the path values to crates.io version ranges after
-# ruststream 0.1 and ruststream-pyo3 0.1 are published.
-ruststream = { version = ">=0.1.0, <0.2.0", path = "../ruststream", default-features = false }
-ruststream-pyo3 = { version = ">=0.1.0, <0.2.0", path = "../ruststream-py/crates/ruststream-pyo3" }
+# ruststream 0.2 and ruststream-pyo3 0.1 are published.
+ruststream = { version = ">=0.2.0, <0.3.0", path = "../ruststream", default-features = false }
+ruststream-pyo3 = { version = ">=0.2.0, <0.3.0", path = "../ruststream-py/crates/ruststream-pyo3" }
 
 async-nats = "0.46"
 bytes = "1"
 futures = "0.3"
-pyo3 = { version = "0.24", features = ["abi3-py311"] }
-pyo3-async-runtimes = { version = "0.24", features = ["tokio-runtime"] }
+pyo3 = { version = "0.28", features = ["abi3-py311"] }
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tokio-stream = "0.1"

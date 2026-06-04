@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "ruststream-nats"
-version = "0.1.0"
+version = "0.2.0"
 description = "NATS broker for the RustStream messaging framework (Python bindings)."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Typing :: Typed",
 ]
-dependencies = ["ruststream>=0.1.0,<0.2.0"]
+dependencies = ["ruststream>=0.2.0,<0.3.0"]
 
 [project.urls]
 Homepage = "https://github.com/powersemmi/ruststream-nats"

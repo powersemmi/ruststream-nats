@@ -54,9 +54,9 @@ impl Publisher for NatsTestPublisher {
     type Error = NatsError;
 
     async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
-        validate_publish_subject(msg.topic())?;
+        validate_publish_subject(msg.name())?;
         self.state.router.publish(
-            msg.topic().to_owned(),
+            msg.name().to_owned(),
             Bytes::copy_from_slice(msg.payload()),
             msg.headers().clone(),
         );
@@ -79,7 +79,7 @@ impl RequestReply for NatsTestPublisher {
         let mut headers = msg.headers().clone();
         headers.insert("reply-to", Bytes::from(inbox.clone()));
         let outgoing =
-            OutgoingMessage::new(msg.topic(), msg.payload()).with_headers(headers.clone());
+            OutgoingMessage::new(msg.name(), msg.payload()).with_headers(headers.clone());
 
         if let Err(err) = self.publish(outgoing).await {
             self.state.router.unsubscribe(id);

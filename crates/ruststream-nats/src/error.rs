@@ -28,6 +28,14 @@ pub enum NatsError {
     #[error("nats request timed out")]
     RequestTimeout,
 
+    /// An operation needing a live connection ran before [`crate::NatsBroker`] was connected.
+    ///
+    /// A broker built with [`NatsBroker::new`](crate::NatsBroker::new) connects lazily: the runtime
+    /// calls [`Broker::connect`](ruststream::Broker::connect) at startup. Publishing or subscribing
+    /// before that returns this error.
+    #[error("nats broker is not connected")]
+    NotConnected,
+
     /// The supplied [`crate::SubscribeOptions`] combine fields in a way the broker cannot honour
     /// (for example `durable(_)` without `jetstream(_)`, or `queue_group(_)` together with
     /// `jetstream(_)`).

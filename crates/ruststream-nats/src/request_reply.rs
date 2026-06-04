@@ -20,7 +20,7 @@ impl RequestReply for NatsPublisher {
         msg: OutgoingMessage<'_>,
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
-        let client = self.client_for_request();
+        let client = self.client_clone()?;
         let subject = msg.name().to_owned();
         let payload = Bytes::copy_from_slice(msg.payload());
         let headers_owned = headers_to_nats(msg.headers());
@@ -40,11 +40,5 @@ impl RequestReply for NatsPublisher {
             .await
             .map_err(|_| NatsError::RequestTimeout)??;
         Ok(NatsMessage::Core(Box::new(CoreMessage::new(response))))
-    }
-}
-
-impl NatsPublisher {
-    fn client_for_request(&self) -> async_nats::Client {
-        self.client_clone()
     }
 }

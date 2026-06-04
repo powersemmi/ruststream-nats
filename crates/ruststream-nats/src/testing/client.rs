@@ -7,7 +7,9 @@ use ruststream::{Broker, OutgoingMessage, Publisher, RawMessage, testing::TestCl
 use crate::{
     error::NatsError,
     subscribe_options::SubscribeOptions,
-    testing::{broker::NatsTestBroker, subscriber::NatsTestSubscriber},
+    testing::{
+        broker::NatsTestBroker, publisher::NatsTestPublisher, subscriber::NatsTestSubscriber,
+    },
 };
 
 /// Driver around a single [`NatsTestBroker`] instance.
@@ -28,6 +30,8 @@ impl std::fmt::Debug for NatsTestClient {
 
 impl TestClient for NatsTestClient {
     type Broker = NatsTestBroker;
+    type Subscriber = NatsTestSubscriber;
+    type Publisher = NatsTestPublisher;
     type Error = NatsError;
 
     async fn start() -> Result<Self, Self::Error> {
@@ -51,7 +55,7 @@ impl TestClient for NatsTestClient {
         self.broker.subscribe(SubscribeOptions::new(topic)).await
     }
 
-    async fn publisher(&self) -> Result<<Self::Broker as Broker>::Publisher, Self::Error> {
+    async fn publisher(&self) -> Result<Self::Publisher, Self::Error> {
         Ok(self.broker.publisher())
     }
 

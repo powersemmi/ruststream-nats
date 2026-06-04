@@ -16,10 +16,10 @@ members = ["py/*"]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.8",
+    "ruff>=0.15",
     "mypy>=1.13",
     "bandit[toml]>=1.7",
-    "semgrep>=1.95",
+    "semgrep>=1.165",
     "codespell>=2.3",
     "zizmor>=1.0",
     "maturin>=1.7,<2.0",

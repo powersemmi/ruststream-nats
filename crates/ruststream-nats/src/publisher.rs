@@ -31,7 +31,7 @@ impl Publisher for NatsPublisher {
     type Error = NatsError;
 
     async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
-        let subject = msg.topic().to_owned();
+        let subject = msg.name().to_owned();
         let payload = Bytes::copy_from_slice(msg.payload());
         let result = match headers_to_nats(msg.headers()) {
             Some(headers) => {

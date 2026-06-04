@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use ruststream::{Broker, RawMessage};
+use ruststream::{Broker, RawMessage, Subscribe};
 
 use crate::{
     error::NatsError,
@@ -106,8 +106,6 @@ impl NatsTestBroker {
 }
 
 impl Broker for NatsTestBroker {
-    type Subscriber = NatsTestSubscriber;
-    type Publisher = NatsTestPublisher;
     type Error = NatsError;
 
     async fn connect(&self) -> Result<(), Self::Error> {
@@ -117,6 +115,15 @@ impl Broker for NatsTestBroker {
     async fn shutdown(&self) -> Result<(), Self::Error> {
         self.state.router.clear();
         Ok(())
+    }
+}
+
+#[allow(clippy::use_self)]
+impl Subscribe for NatsTestBroker {
+    type Subscriber = NatsTestSubscriber;
+
+    async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
+        NatsTestBroker::subscribe(self, SubscribeOptions::new(name)).await
     }
 }
 

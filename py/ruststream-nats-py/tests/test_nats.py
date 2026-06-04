@@ -42,6 +42,27 @@ async def test_subscriber_decorator_round_trip() -> None:
 
 
 @requires_nats
+async def test_publish_batch_round_trip() -> None:
+    broker = NatsBroker(os.environ["NATS_TEST_URL"])
+
+    received: list[bytes] = []
+    done = asyncio.Event()
+
+    @broker.subscriber("ruststream.test.api.batch")
+    async def handle(msg: Message) -> None:
+        received.append(bytes(msg.payload))
+        if len(received) == 3:
+            done.set()
+
+    async with TestNatsBroker(broker, with_real=True) as br:
+        await asyncio.sleep(0.1)
+        await br.publish_batch("ruststream.test.api.batch", [b"a", b"b", b"c"])
+        await asyncio.wait_for(done.wait(), timeout=2.0)
+
+    assert received == [b"a", b"b", b"c"]
+
+
+@requires_nats
 async def test_router_attaches_to_broker() -> None:
     broker = NatsBroker(os.environ["NATS_TEST_URL"])
     router = NatsRouter()

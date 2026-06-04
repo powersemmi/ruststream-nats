@@ -81,7 +81,18 @@ jobs:
 
       - name: cargo publish ruststream-nats
         working-directory: ruststream-nats
-        run: cargo publish -p ruststream-nats
+        run: |
+          # Skip publishing when this version is already on crates.io, so re-running a
+          # release (or a partially-failed one) still succeeds.
+          name=ruststream-nats
+          version=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r --arg n "$name" '.packages[] | select(.name == $n) | .version')
+          index="https://index.crates.io/${name:0:2}/${name:2:2}/${name}"
+          if curl -fsSL "$index" 2>/dev/null | grep -qF "\"vers\":\"${version}\""; then
+            echo "$name $version already on crates.io, skipping"
+          else
+            cargo publish -p "$name"
+          fi
 
   wheels:
     name: Wheels ${{ matrix.platform.runner }} ${{ matrix.platform.target }}
@@ -184,13 +195,14 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          skip-existing: true
 
       - name: Attach artifacts to release
         if: github.event_name == 'release'
         env:
           TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Generate release notes
         if: github.event_name == 'release'

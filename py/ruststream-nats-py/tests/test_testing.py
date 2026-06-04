@@ -64,6 +64,32 @@ async def test_tail_wildcard_matches_every_subject(nats_broker: NatsBroker) -> N
     assert tail == ["x", "y", "z"]
 
 
+async def test_publish_batch_delivers_every_payload_in_order(nats_broker: NatsBroker) -> None:
+    received: list[bytes] = []
+    done = asyncio.Event()
+
+    @nats_broker.subscriber("batch.topic")
+    async def handle(msg: Message) -> None:
+        received.append(bytes(msg.payload))
+        if len(received) == 3:
+            done.set()
+
+    async with TestNatsBroker(nats_broker) as br:
+        await br.publish_batch("batch.topic", [b"a", b"b", b"c"])
+        await asyncio.wait_for(done.wait(), timeout=1.0)
+
+    assert received == [b"a", b"b", b"c"]
+
+
+async def test_publish_batch_records_each_message(nats_broker: NatsBroker) -> None:
+    tester = TestNatsBroker(nats_broker)
+    async with tester as br:
+        await br.publish_batch("events", [b"first", b"second"])
+        published = await tester.expect_published("events", count=2, timeout_secs=1.0)
+
+    assert [entry["payload"] for entry in published] == [b"first", b"second"]
+
+
 async def test_handler_exception_triggers_nack_drop_by_default(
     nats_broker: NatsBroker,
 ) -> None:

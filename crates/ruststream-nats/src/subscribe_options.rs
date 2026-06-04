@@ -6,8 +6,9 @@
 use std::time::Duration;
 
 pub use async_nats::jetstream::consumer::DeliverPolicy;
+use ruststream::SubscriptionSource;
 
-use crate::error::NatsError;
+use crate::{NatsBroker, error::NatsError, subscriber::NatsSubscriber};
 
 /// Builder describing one subscription against [`crate::NatsBroker`] (or its test counterpart).
 ///
@@ -183,6 +184,18 @@ impl SubscribeOptions {
             }
         }
         Ok(())
+    }
+}
+
+impl SubscriptionSource<NatsBroker> for SubscribeOptions {
+    type Subscriber = NatsSubscriber;
+
+    fn name(&self) -> &str {
+        self.subject()
+    }
+
+    async fn subscribe(self, broker: &NatsBroker) -> Result<Self::Subscriber, NatsError> {
+        broker.subscribe(self).await
     }
 }
 

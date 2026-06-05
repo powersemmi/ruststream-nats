@@ -12,11 +12,30 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use ruststream::{Headers, IncomingMessage, OutgoingMessage, Publisher, RequestReply, Subscriber};
+use ruststream::{
+    Headers, IncomingMessage, OutgoingMessage, Publisher, RequestReply, Subscriber,
+    conformance::harness,
+};
 use ruststream_nats::{NatsBroker, SubscribeOptions};
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(2);
+
+// Drives the broker-agnostic lazy-lifecycle conformance check: build with the synchronous
+// `NatsBroker::new`, connect, subscribe through `SubscribeOptions`, publish, ack, shut down.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lazy_lifecycle_conformance() {
+    let Ok(url) = std::env::var("NATS_TEST_URL") else {
+        return;
+    };
+    harness::lifecycle(
+        || NatsBroker::new(url.clone()),
+        |name| SubscribeOptions::new(name),
+        |broker| broker.publisher(),
+    )
+    .await;
+}
 
 async fn connect_or_skip() -> Option<NatsBroker> {
     let url = std::env::var("NATS_TEST_URL").ok()?;

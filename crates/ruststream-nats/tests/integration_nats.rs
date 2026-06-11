@@ -447,3 +447,107 @@ fn jetstream_app(
         })
         .with_broker(broker.clone(), build)
 }
+
+// Regression: 0.2 took the inner subscription out of an Option in `stream()` and panicked on
+// the second call; the Subscriber contract allows re-entry (the conformance helpers re-enter
+// `stream()` per call).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn core_stream_can_be_reentered() {
+    let Some(broker) = connect_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("reenter");
+
+    let mut subscriber = broker
+        .subscribe(SubscribeOptions::new(subject.clone()))
+        .await
+        .expect("subscribe failed");
+    let publisher = broker.publisher();
+
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"one"))
+        .await
+        .expect("publish failed");
+    {
+        let mut stream = std::pin::pin!(subscriber.stream());
+        let msg = timeout(WAIT, stream.next())
+            .await
+            .expect("timed out")
+            .expect("stream ended")
+            .expect("stream error");
+        assert_eq!(msg.payload(), b"one");
+    }
+
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"two"))
+        .await
+        .expect("publish failed");
+    let mut stream = std::pin::pin!(subscriber.stream());
+    let msg = timeout(WAIT, stream.next())
+        .await
+        .expect("timed out")
+        .expect("stream ended")
+        .expect("stream error");
+    assert_eq!(msg.payload(), b"two");
+    broker.shutdown_client().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jetstream_stream_can_be_reentered() {
+    let Some(broker) = connect_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("jsreenter");
+    let stream_name = format!("RS_TEST_RE_{}", chrono_like_suffix());
+
+    let ctx = async_nats::jetstream::new(broker.client());
+    ctx.create_stream(async_nats::jetstream::stream::Config {
+        name: stream_name.clone(),
+        subjects: vec![subject.clone()],
+        ..Default::default()
+    })
+    .await
+    .expect("create_stream failed");
+
+    let publisher = broker.publisher();
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"event-1"))
+        .await
+        .expect("publish failed");
+
+    let mut consumer = broker
+        .subscribe(
+            SubscribeOptions::new(subject.clone())
+                .jetstream(stream_name.clone())
+                .filter_subject(subject.clone()),
+        )
+        .await
+        .expect("consumer create failed");
+
+    {
+        let mut stream_iter = std::pin::pin!(consumer.stream());
+        let msg = timeout(WAIT, stream_iter.next())
+            .await
+            .expect("timed out")
+            .expect("stream ended")
+            .expect("stream error");
+        assert_eq!(msg.payload(), b"event-1");
+        msg.ack().await.expect("ack failed");
+    }
+
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"event-2"))
+        .await
+        .expect("publish failed");
+    let mut stream_iter = std::pin::pin!(consumer.stream());
+    let msg = timeout(WAIT, stream_iter.next())
+        .await
+        .expect("timed out")
+        .expect("stream ended")
+        .expect("stream error");
+    assert_eq!(msg.payload(), b"event-2");
+    msg.ack().await.expect("ack failed");
+
+    let _ = ctx.delete_stream(&stream_name).await;
+    broker.shutdown_client().await;
+}

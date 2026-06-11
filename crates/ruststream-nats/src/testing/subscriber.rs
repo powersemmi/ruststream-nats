@@ -9,7 +9,6 @@ use std::sync::{Arc, OnceLock};
 
 use futures::Stream;
 use ruststream::{AckError, Headers, IncomingMessage, Subscriber};
-use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
 
 use crate::{
     error::NatsError,
@@ -23,7 +22,7 @@ use crate::{
 pub struct NatsTestSubscriber {
     state: Arc<TestBrokerState>,
     id: SubscriptionId,
-    rx: Option<DeliveryReceiver>,
+    rx: DeliveryReceiver,
     requeue: DeliverySender,
 }
 
@@ -43,7 +42,7 @@ impl NatsTestSubscriber {
         Self {
             state,
             id,
-            rx: Some(rx),
+            rx,
             requeue,
         }
     }
@@ -60,15 +59,18 @@ impl Subscriber for NatsTestSubscriber {
     type Error = NatsError;
 
     fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
-        let rx = self
-            .rx
-            .take()
-            .expect("NatsTestSubscriber::stream called more than once");
         let requeue = self.requeue.clone();
-        UnboundedReceiverStream::new(rx).map(move |delivery| {
-            Ok(NatsTestMessage {
-                delivery: Some(delivery),
-                requeue: requeue.clone(),
+        // Poll the receiver in place rather than wrapping it in an owning stream, so `stream`
+        // can be called again after the returned stream is dropped (the runtime and the
+        // conformance helpers re-enter it per call).
+        futures::stream::poll_fn(move |cx| {
+            self.rx.poll_recv(cx).map(|next| {
+                next.map(|delivery| {
+                    Ok(NatsTestMessage {
+                        delivery: Some(delivery),
+                        requeue: requeue.clone(),
+                    })
+                })
             })
         })
     }

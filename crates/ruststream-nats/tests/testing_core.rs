@@ -244,3 +244,34 @@ async fn test_client_drives_expect_published() {
     assert_eq!(observed[1].payload(), b"second");
     client.shutdown().await.expect("shutdown");
 }
+
+// Regression: 0.2 took the receiver out of an Option in `stream()` and panicked on the second
+// call, while the Subscriber contract (and the conformance helpers, which re-enter `stream()`
+// per call) allow re-entry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stream_can_be_reentered() {
+    let broker = NatsTestBroker::new();
+    let mut subscriber = broker
+        .subscribe(SubscribeOptions::new("orders"))
+        .await
+        .expect("subscribe");
+    let publisher = broker.publisher();
+
+    publisher
+        .publish(OutgoingMessage::new("orders", b"one"))
+        .await
+        .expect("publish one");
+    {
+        let mut stream = Box::pin(subscriber.stream());
+        let got = next_payload(&mut stream).await;
+        assert_eq!(got, b"one");
+    }
+
+    publisher
+        .publish(OutgoingMessage::new("orders", b"two"))
+        .await
+        .expect("publish two");
+    let mut stream = Box::pin(subscriber.stream());
+    let got = next_payload(&mut stream).await;
+    assert_eq!(got, b"two");
+}

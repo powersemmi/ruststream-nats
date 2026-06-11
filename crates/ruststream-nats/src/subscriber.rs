@@ -1,9 +1,10 @@
 //! Unified NATS subscriber wrapping either a Core or a `JetStream` pull consumer.
 
+use std::pin::Pin;
+
 use async_nats::jetstream::consumer::pull::Stream as PullStream;
-use futures::{Stream, future::Either};
+use futures::{Stream, StreamExt, future::Either};
 use ruststream::Subscriber;
-use tokio_stream::StreamExt;
 use tracing::warn;
 
 use crate::{
@@ -13,10 +14,10 @@ use crate::{
 
 enum SubscriberKind {
     Core {
-        inner: Option<async_nats::Subscriber>,
+        inner: async_nats::Subscriber,
     },
     JetStream {
-        inner: Option<Box<PullStream>>,
+        inner: Pin<Box<PullStream>>,
         stream_name: String,
     },
 }
@@ -51,7 +52,7 @@ impl NatsSubscriber {
     pub(crate) const fn from_core(subject: String, inner: async_nats::Subscriber) -> Self {
         Self {
             subject,
-            kind: SubscriberKind::Core { inner: Some(inner) },
+            kind: SubscriberKind::Core { inner },
         }
     }
 
@@ -59,7 +60,7 @@ impl NatsSubscriber {
         Self {
             subject,
             kind: SubscriberKind::JetStream {
-                inner: Some(Box::new(inner)),
+                inner: Box::pin(inner),
                 stream_name,
             },
         }
@@ -71,27 +72,25 @@ impl Subscriber for NatsSubscriber {
     type Error = NatsError;
 
     fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
+        // Poll the inner subscription in place rather than moving it into the returned stream,
+        // so `stream` can be called again after the returned stream is dropped (the runtime and
+        // the conformance helpers re-enter it per call).
         match &mut self.kind {
-            SubscriberKind::Core { inner } => {
-                let inner = inner
-                    .take()
-                    .expect("NatsSubscriber::stream called more than once");
-                Either::Left(
-                    inner.map(|msg| Ok(NatsMessage::Core(Box::new(CoreMessage::new(msg))))),
-                )
-            }
-            SubscriberKind::JetStream { inner, .. } => {
-                let inner = *inner
-                    .take()
-                    .expect("NatsSubscriber::stream called more than once");
-                Either::Right(inner.map(|item| match item {
-                    Ok(msg) => Ok(NatsMessage::JetStream(Box::new(JetStreamMessage::new(msg)))),
-                    Err(err) => {
-                        warn!(target: "ruststream::nats", error = %err, "jetstream fetch error");
-                        Err(NatsError::JetStream(Box::new(err)))
+            SubscriberKind::Core { inner } => Either::Left(
+                futures::stream::poll_fn(move |cx| Pin::new(&mut *inner).poll_next(cx))
+                    .map(|msg| Ok(NatsMessage::Core(Box::new(CoreMessage::new(msg))))),
+            ),
+            SubscriberKind::JetStream { inner, .. } => Either::Right(
+                futures::stream::poll_fn(move |cx| inner.as_mut().poll_next(cx)).map(|item| {
+                    match item {
+                        Ok(msg) => Ok(NatsMessage::JetStream(Box::new(JetStreamMessage::new(msg)))),
+                        Err(err) => {
+                            warn!(target: "ruststream::nats", error = %err, "jetstream fetch error");
+                            Err(NatsError::JetStream(Box::new(err)))
+                        }
                     }
-                }))
-            }
+                }),
+            ),
         }
     }
 }

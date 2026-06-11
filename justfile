@@ -9,6 +9,7 @@ check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo check --workspace --all-targets --all-features
+    cargo check --workspace --no-default-features
 
 test:
     cargo test --workspace --all-features

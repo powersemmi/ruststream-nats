@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "ruststream-nats"
-version = "0.2.1"
+version = "0.3.0"
 description = "NATS broker for the RustStream messaging framework (Python bindings)."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"

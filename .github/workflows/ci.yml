@@ -126,10 +126,9 @@ jobs:
         with:
           persist-credentials: false
 
+      # No cache: there is no uv.lock anymore (uvx resolves the tools on the fly).
       - name: Install uv
         uses: astral-sh/setup-uv@v3
-        with:
-          enable-cache: true
 
       - name: codespell
         run: uvx codespell

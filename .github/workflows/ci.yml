@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, "1.85"]
+        toolchain: [stable, msrv]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,10 +33,23 @@ jobs:
           persist-credentials: false
           path: ruststream
 
+      # The MSRV leg follows `rust-version` in Cargo.toml, so an MSRV bump is a one-line change.
+      - name: Resolve toolchain
+        id: toolchain
+        working-directory: ruststream-nats
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: |
+          if [ "$TOOLCHAIN" = "msrv" ]; then
+            TOOLCHAIN="$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)"
+            test -n "$TOOLCHAIN"
+          fi
+          echo "toolchain=$TOOLCHAIN" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.toolchain }}
+          toolchain: ${{ steps.toolchain.outputs.toolchain }}
           components: rustfmt, clippy
 
       - name: Cache cargo

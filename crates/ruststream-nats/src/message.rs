@@ -46,7 +46,15 @@ impl Debug for CoreMessage {
 
 impl CoreMessage {
     pub(crate) fn new(inner: async_nats::Message) -> Self {
-        let headers = headers_from_nats(inner.headers.as_ref());
+        let mut headers = headers_from_nats(inner.headers.as_ref());
+        // NATS carries the request inbox in the wire-level `reply` field, not in a header.
+        // Surface it as the well-known `reply-to` header so framework handlers can respond
+        // (the in-memory testing broker already exposes it this way). The wire field is
+        // authoritative: it overrides a literal `reply-to` header if both are present.
+        // JetStream deliveries are excluded on purpose - there `reply` is the ack inbox.
+        if let Some(reply) = inner.reply.as_ref() {
+            headers.insert("reply-to", reply.as_str().to_owned());
+        }
         Self { inner, headers }
     }
 }
@@ -149,4 +157,32 @@ where
 #[allow(dead_code)]
 fn _empty_headers_keepalive() -> &'static Headers {
     empty_headers()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn core_message(reply: Option<&str>) -> NatsMessage {
+        NatsMessage::Core(Box::new(CoreMessage::new(async_nats::Message {
+            subject: "subj".into(),
+            reply: reply.map(Into::into),
+            payload: bytes::Bytes::from_static(b"x"),
+            headers: None,
+            status: None,
+            description: None,
+            length: 1,
+        })))
+    }
+
+    #[test]
+    fn core_reply_inbox_surfaces_as_reply_to_header() {
+        let msg = core_message(Some("_INBOX.42"));
+        assert_eq!(msg.headers().reply_to(), Some("_INBOX.42"));
+    }
+
+    #[test]
+    fn core_message_without_reply_has_no_reply_to() {
+        assert_eq!(core_message(None).headers().reply_to(), None);
+    }
 }

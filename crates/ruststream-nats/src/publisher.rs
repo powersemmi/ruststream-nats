@@ -1,9 +1,10 @@
 //! Publishes core NATS messages over an `async-nats` client.
 
-use std::sync::Arc;
-
+use async_nats::Client;
 use bytes::Bytes;
 use ruststream::{OutgoingMessage, Publisher};
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 use tokio::sync::OnceCell;
 
 use crate::{convert::headers_to_nats, error::NatsError};
@@ -15,21 +16,21 @@ use crate::{convert::headers_to_nats, error::NatsError};
 /// returns [`NatsError::NotConnected`].
 #[derive(Clone)]
 pub struct NatsPublisher {
-    client: Arc<OnceCell<async_nats::Client>>,
+    client: Arc<OnceCell<Client>>,
 }
 
-impl std::fmt::Debug for NatsPublisher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for NatsPublisher {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NatsPublisher").finish_non_exhaustive()
     }
 }
 
 impl NatsPublisher {
-    pub(crate) fn new(client: Arc<OnceCell<async_nats::Client>>) -> Self {
+    pub(crate) fn new(client: Arc<OnceCell<Client>>) -> Self {
         Self { client }
     }
 
-    pub(crate) fn client_clone(&self) -> Result<async_nats::Client, NatsError> {
+    pub(crate) fn client_clone(&self) -> Result<Client, NatsError> {
         self.client.get().cloned().ok_or(NatsError::NotConnected)
     }
 }

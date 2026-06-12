@@ -8,8 +8,9 @@
 use std::sync::{Arc, OnceLock};
 
 use futures::Stream;
-use ruststream::{AckError, Headers, IncomingMessage, Subscriber};
-use tokio_stream::{StreamExt, wrappers::UnboundedReceiverStream};
+use std::task::Poll;
+
+use ruststream::{AckError, BatchSubscriber, Headers, IncomingMessage, Partitioned, Subscriber};
 
 use crate::{
     error::NatsError,
@@ -23,7 +24,7 @@ use crate::{
 pub struct NatsTestSubscriber {
     state: Arc<TestBrokerState>,
     id: SubscriptionId,
-    rx: Option<DeliveryReceiver>,
+    rx: DeliveryReceiver,
     requeue: DeliverySender,
 }
 
@@ -43,7 +44,7 @@ impl NatsTestSubscriber {
         Self {
             state,
             id,
-            rx: Some(rx),
+            rx,
             requeue,
         }
     }
@@ -60,15 +61,18 @@ impl Subscriber for NatsTestSubscriber {
     type Error = NatsError;
 
     fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
-        let rx = self
-            .rx
-            .take()
-            .expect("NatsTestSubscriber::stream called more than once");
         let requeue = self.requeue.clone();
-        UnboundedReceiverStream::new(rx).map(move |delivery| {
-            Ok(NatsTestMessage {
-                delivery: Some(delivery),
-                requeue: requeue.clone(),
+        // Poll the receiver in place rather than wrapping it in an owning stream, so `stream`
+        // can be called again after the returned stream is dropped (the runtime and the
+        // conformance helpers re-enter it per call).
+        futures::stream::poll_fn(move |cx| {
+            self.rx.poll_recv(cx).map(|next| {
+                next.map(|delivery| {
+                    Ok(NatsTestMessage {
+                        delivery: Some(delivery),
+                        requeue: requeue.clone(),
+                    })
+                })
             })
         })
     }
@@ -113,6 +117,12 @@ impl NatsTestMessage {
     }
 }
 
+impl Partitioned for NatsTestMessage {
+    fn partition_key(&self) -> Option<&[u8]> {
+        self.headers().get(crate::PARTITION_KEY_HEADER)
+    }
+}
+
 impl IncomingMessage for NatsTestMessage {
     fn payload(&self) -> &[u8] {
         self.delivery
@@ -142,5 +152,37 @@ impl IncomingMessage for NatsTestMessage {
             let _ = self.requeue.send(delivery);
         }
         Ok(())
+    }
+}
+
+/// Max messages drained per batch on the testing subscriber (same role as `CORE_BATCH_LIMIT` on
+/// the real subscriber: bounds one synchronous drain without blocking on more arrivals).
+const TEST_BATCH_LIMIT: usize = 256;
+
+impl BatchSubscriber for NatsTestSubscriber {
+    type Batch = Vec<NatsTestMessage>;
+
+    /// Drains whatever is already buffered in the subscriber's channel (at least one, at most
+    /// [`TEST_BATCH_LIMIT`] messages). Blocks until the first message arrives, matching the
+    /// behaviour of the real [`crate::NatsSubscriber`] Core path.
+    fn batches(&mut self) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
+        let requeue = self.requeue.clone();
+        futures::stream::poll_fn(move |cx| {
+            let first = match self.rx.poll_recv(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(Some(d)) => NatsTestMessage::from_delivery(d, requeue.clone()),
+            };
+            let mut batch = vec![first];
+            while batch.len() < TEST_BATCH_LIMIT {
+                match self.rx.poll_recv(cx) {
+                    Poll::Ready(Some(d)) => {
+                        batch.push(NatsTestMessage::from_delivery(d, requeue.clone()));
+                    }
+                    Poll::Ready(None) | Poll::Pending => break,
+                }
+            }
+            Poll::Ready(Some(Ok(batch)))
+        })
     }
 }

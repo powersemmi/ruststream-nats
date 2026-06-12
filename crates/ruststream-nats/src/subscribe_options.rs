@@ -44,6 +44,8 @@ pub struct SubscribeOptions {
     ack_wait: Option<Duration>,
     max_ack_pending: Option<i64>,
     deliver_policy: Option<DeliverPolicy>,
+    pull_batch: Option<usize>,
+    pull_expires: Option<Duration>,
 }
 
 impl SubscribeOptions {
@@ -58,6 +60,8 @@ impl SubscribeOptions {
             ack_wait: None,
             max_ack_pending: None,
             deliver_policy: None,
+            pull_batch: None,
+            pull_expires: None,
         }
     }
 
@@ -107,6 +111,23 @@ impl SubscribeOptions {
         self
     }
 
+    /// Upper bound on messages per batch when the subscriber is driven through
+    /// [`BatchSubscriber::batches`](ruststream::BatchSubscriber::batches): one batch is one
+    /// `JetStream` fetch of up to this many messages. Defaults to 100. Has no effect on the
+    /// per-message [`Subscriber::stream`](ruststream::Subscriber::stream) path.
+    pub const fn pull_batch(mut self, max_messages: usize) -> Self {
+        self.pull_batch = Some(max_messages);
+        self
+    }
+
+    /// How long one `JetStream` fetch waits before delivering a partial (or retrying an empty)
+    /// batch. Defaults to 5 seconds. Has no effect on the per-message
+    /// [`Subscriber::stream`](ruststream::Subscriber::stream) path.
+    pub const fn pull_expires(mut self, expires: Duration) -> Self {
+        self.pull_expires = Some(expires);
+        self
+    }
+
     /// The subject pattern this subscription will receive messages on.
     #[must_use]
     pub fn subject(&self) -> &str {
@@ -149,6 +170,14 @@ impl SubscribeOptions {
         self.deliver_policy.unwrap_or(DeliverPolicy::All)
     }
 
+    pub(crate) fn pull_batch_or_default(&self) -> usize {
+        self.pull_batch.unwrap_or(100)
+    }
+
+    pub(crate) fn pull_expires_or_default(&self) -> Duration {
+        self.pull_expires.unwrap_or(Duration::from_secs(5))
+    }
+
     /// Rejects combinations the broker cannot honour. Called by every `subscribe`
     /// implementation before any work.
     ///
@@ -157,7 +186,8 @@ impl SubscribeOptions {
     /// Returns [`NatsError::InvalidOptions`] when:
     /// * `queue_group` is set together with `jetstream` (queue groups are Core-only);
     /// * any `JetStream`-only field (`durable`, `ack_wait`, `max_ack_pending`,
-    ///   `deliver_policy`, `filter_subject`) is set without `jetstream`.
+    ///   `deliver_policy`, `filter_subject`, `pull_batch`, `pull_expires`) is set without
+    ///   `jetstream`.
     pub fn validate(&self) -> Result<(), NatsError> {
         if self.subject.is_empty() {
             return Err(NatsError::InvalidOptions(
@@ -176,6 +206,8 @@ impl SubscribeOptions {
                 ("max_ack_pending", self.max_ack_pending.is_some()),
                 ("deliver_policy", self.deliver_policy.is_some()),
                 ("filter_subject", self.filter_subject.is_some()),
+                ("pull_batch", self.pull_batch.is_some()),
+                ("pull_expires", self.pull_expires.is_some()),
             ];
             if let Some((field, _)) = js_only.iter().find(|(_, set)| *set) {
                 return Err(NatsError::InvalidOptions(format!(
@@ -256,6 +288,15 @@ mod tests {
             .validate()
             .unwrap_err();
         assert!(matches!(err, NatsError::InvalidOptions(msg) if msg.contains("queue_group")));
+    }
+
+    #[test]
+    fn pull_batch_without_jetstream_is_rejected() {
+        let err = SubscribeOptions::new("x")
+            .pull_batch(64)
+            .validate()
+            .unwrap_err();
+        assert!(matches!(err, NatsError::InvalidOptions(msg) if msg.contains("pull_batch")));
     }
 
     #[test]

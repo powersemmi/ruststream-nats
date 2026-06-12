@@ -13,7 +13,7 @@ mod subscriber;
 
 pub use broker::NatsBroker;
 pub use error::NatsError;
-pub use message::{CoreMessage, JetStreamMessage, NatsMessage};
+pub use message::{CoreMessage, JetStreamMessage, NatsMessage, PARTITION_KEY_HEADER};
 pub use publisher::NatsPublisher;
 pub use subscribe_options::{DeliverPolicy, SubscribeOptions};
 pub use subscriber::NatsSubscriber;

@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use ruststream::{Broker, RawMessage, Subscribe};
+use ruststream::{Broker, DescribeServer, RawMessage, Subscribe};
 
 use crate::{
     error::NatsError,
@@ -133,4 +133,11 @@ pub(crate) fn validate_publish_subject(subject: &str) -> Result<(), NatsError> {
     validate_concrete_subject(subject).map_err(|err| {
         NatsError::Publish(Box::new(err) as Box<dyn std::error::Error + Send + Sync>)
     })
+}
+
+impl DescribeServer for NatsTestBroker {
+    fn describe_server(&self) -> ruststream::ServerSpec {
+        // The in-process broker has no real server; report a well-known in-memory address.
+        ruststream::ServerSpec::new("in-process", "nats")
+    }
 }

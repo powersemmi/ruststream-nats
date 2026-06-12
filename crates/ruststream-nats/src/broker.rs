@@ -1,9 +1,9 @@
 //! The [`NatsBroker`]: the entry point of the `async-nats` integration.
 
-use std::sync::Arc;
-
 use async_nats::jetstream::consumer::{PullConsumer, pull::Config as ConsumerConfig};
-use ruststream::{Broker, Subscribe};
+use async_nats::{Client, ToServerAddrs};
+use ruststream::{Broker, DescribeServer, ServerSpec, Subscribe};
+use std::sync::Arc;
 use tokio::sync::OnceCell;
 
 use crate::{
@@ -46,7 +46,7 @@ use crate::{
 /// ```
 #[derive(Clone)]
 pub struct NatsBroker {
-    client: Arc<OnceCell<async_nats::Client>>,
+    client: Arc<OnceCell<Client>>,
     addrs: Option<String>,
 }
 
@@ -74,7 +74,7 @@ impl NatsBroker {
     /// # Errors
     ///
     /// Returns [`NatsError::Connect`] when the connection cannot be established.
-    pub async fn connect(addrs: impl async_nats::ToServerAddrs) -> Result<Self, NatsError> {
+    pub async fn connect(addrs: impl ToServerAddrs) -> Result<Self, NatsError> {
         let client = async_nats::connect(addrs)
             .await
             .map_err(|err| NatsError::Connect(Box::new(err)))?;
@@ -84,7 +84,7 @@ impl NatsBroker {
     /// Wraps an already-connected `async-nats` client. Useful for advanced configuration
     /// (TLS, credentials, custom options).
     #[must_use]
-    pub fn from_client(client: async_nats::Client) -> Self {
+    pub fn from_client(client: Client) -> Self {
         Self {
             client: Arc::new(OnceCell::new_with(Some(client))),
             addrs: None,
@@ -100,7 +100,7 @@ impl NatsBroker {
     /// [`Broker::connect`] not run). Call it after startup, or build with [`connect`](Self::connect)
     /// / [`from_client`](Self::from_client).
     #[must_use]
-    pub fn client(&self) -> async_nats::Client {
+    pub fn client(&self) -> Client {
         self.client
             .get()
             .cloned()
@@ -108,7 +108,7 @@ impl NatsBroker {
     }
 
     /// The connected client, or [`NatsError::NotConnected`] when `connect` has not run yet.
-    fn connected(&self) -> Result<async_nats::Client, NatsError> {
+    fn connected(&self) -> Result<Client, NatsError> {
         self.client.get().cloned().ok_or(NatsError::NotConnected)
     }
 
@@ -182,6 +182,9 @@ impl NatsBroker {
             opts.subject().to_owned(),
             stream_name,
             messages,
+            consumer,
+            opts.pull_batch_or_default(),
+            opts.pull_expires_or_default(),
         ))
     }
 
@@ -232,6 +235,29 @@ impl Subscribe for NatsBroker {
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         NatsBroker::subscribe(self, SubscribeOptions::new(name)).await
+    }
+}
+
+/// `DescribeServer` reports the address of the NATS server this broker is connected to.
+///
+/// Only meaningful after [`Broker::connect`]; on an unconnected broker the spec falls back to the
+/// configured address string (or an empty host if none was provided and a pre-connected client was
+/// passed in).
+impl DescribeServer for NatsBroker {
+    fn describe_server(&self) -> ServerSpec {
+        // Prefer live server_info once connected; fall back to the configured address.
+        if let Some(client) = self.client.get() {
+            let info = client.server_info();
+            return ServerSpec::new(format!("{}:{}", info.host, info.port), "nats");
+        }
+        let host = self
+            .addrs
+            .as_deref()
+            .unwrap_or("")
+            .trim_start_matches("nats://")
+            .trim_start_matches("tls://")
+            .to_owned();
+        ServerSpec::new(host, "nats")
     }
 }
 

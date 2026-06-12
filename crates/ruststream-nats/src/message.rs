@@ -1,8 +1,10 @@
 //! Delivered-message wrapper that implements [`IncomingMessage`].
 
+use std::fmt::{Debug, Formatter};
 use std::sync::OnceLock;
 
-use ruststream::{AckError, Headers, IncomingMessage};
+use async_nats::jetstream::AckKind;
+use ruststream::{AckError, Headers, IncomingMessage, Partitioned};
 
 use crate::convert::headers_from_nats;
 
@@ -16,8 +18,8 @@ pub enum NatsMessage {
     JetStream(Box<JetStreamMessage>),
 }
 
-impl std::fmt::Debug for NatsMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for NatsMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Core(_) => f.debug_struct("NatsMessage::Core").finish_non_exhaustive(),
             Self::JetStream(_) => f
@@ -33,8 +35,8 @@ pub struct CoreMessage {
     headers: Headers,
 }
 
-impl std::fmt::Debug for CoreMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for CoreMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CoreMessage")
             .field("subject", &self.inner.subject.as_str())
             .field("payload_len", &self.inner.payload.len())
@@ -44,7 +46,15 @@ impl std::fmt::Debug for CoreMessage {
 
 impl CoreMessage {
     pub(crate) fn new(inner: async_nats::Message) -> Self {
-        let headers = headers_from_nats(inner.headers.as_ref());
+        let mut headers = headers_from_nats(inner.headers.as_ref());
+        // NATS carries the request inbox in the wire-level `reply` field, not in a header.
+        // Surface it as the well-known `reply-to` header so framework handlers can respond
+        // (the in-memory testing broker already exposes it this way). The wire field is
+        // authoritative: it overrides a literal `reply-to` header if both are present.
+        // JetStream deliveries are excluded on purpose - there `reply` is the ack inbox.
+        if let Some(reply) = inner.reply.as_ref() {
+            headers.insert("reply-to", reply.as_str().to_owned());
+        }
         Self { inner, headers }
     }
 }
@@ -55,8 +65,8 @@ pub struct JetStreamMessage {
     headers: Headers,
 }
 
-impl std::fmt::Debug for JetStreamMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for JetStreamMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JetStreamMessage")
             .field("subject", &self.inner.message.subject.as_str())
             .field("payload_len", &self.inner.message.payload.len())
@@ -106,7 +116,6 @@ impl IncomingMessage for NatsMessage {
         match self {
             Self::Core(_) => Err(AckError::Unsupported),
             Self::JetStream(m) => {
-                use async_nats::jetstream::AckKind;
                 let kind = if requeue {
                     AckKind::Nak(None)
                 } else {
@@ -121,6 +130,22 @@ impl IncomingMessage for NatsMessage {
     }
 }
 
+/// The well-known header key for per-message routing / partitioning.
+///
+/// Set this header on outgoing messages to control key-based fan-out when the runtime is
+/// configured with `workers(N, by_key)`. The value is opaque bytes; the runtime hashes it to
+/// assign a dispatch lane.
+pub const PARTITION_KEY_HEADER: &str = "nats-partition-key";
+
+/// `Partitioned` lets the `workers(N, by_key)` runtime feature assign a dispatch lane based on
+/// a well-known message header. NATS has no native partition concept, so the key travels as the
+/// [`PARTITION_KEY_HEADER`] header value and the sender is responsible for setting it.
+impl Partitioned for NatsMessage {
+    fn partition_key(&self) -> Option<&[u8]> {
+        self.headers().get(PARTITION_KEY_HEADER)
+    }
+}
+
 fn format_err<E>(err: E) -> Box<dyn std::error::Error + Send + Sync>
 where
     E: std::fmt::Display + Send + Sync + 'static,
@@ -132,4 +157,32 @@ where
 #[allow(dead_code)]
 fn _empty_headers_keepalive() -> &'static Headers {
     empty_headers()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn core_message(reply: Option<&str>) -> NatsMessage {
+        NatsMessage::Core(Box::new(CoreMessage::new(async_nats::Message {
+            subject: "subj".into(),
+            reply: reply.map(Into::into),
+            payload: bytes::Bytes::from_static(b"x"),
+            headers: None,
+            status: None,
+            description: None,
+            length: 1,
+        })))
+    }
+
+    #[test]
+    fn core_reply_inbox_surfaces_as_reply_to_header() {
+        let msg = core_message(Some("_INBOX.42"));
+        assert_eq!(msg.headers().reply_to(), Some("_INBOX.42"));
+    }
+
+    #[test]
+    fn core_message_without_reply_has_no_reply_to() {
+        assert_eq!(core_message(None).headers().reply_to(), None);
+    }
 }

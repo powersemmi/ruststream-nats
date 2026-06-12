@@ -16,7 +16,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check tag matches Cargo.toml and pyproject versions
+      - name: Check tag matches the Cargo.toml version
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -32,17 +32,7 @@ jobs:
             exit 1
           fi
 
-          PY_VERSION=$(python -c "
-          import tomllib
-          with open('py/ruststream-nats-py/pyproject.toml', 'rb') as f:
-              print(tomllib.load(f)['project']['version'])
-          ")
-          if [ "$TAG_VER" != "$PY_VERSION" ]; then
-            echo "Tag '${TAG}' does not match pyproject.toml version '$PY_VERSION'"
-            exit 1
-          fi
-
-          echo "Version $TAG_VER verified (Cargo + pyproject match)"
+          echo "Version $TAG_VER verified"
 
   crates-io:
     name: Publish ruststream-nats to crates.io
@@ -63,12 +53,6 @@ jobs:
           repository: powersemmi/ruststream
           persist-credentials: false
           path: ruststream
-
-      - uses: actions/checkout@v4
-        with:
-          repository: powersemmi/ruststream-py
-          persist-credentials: false
-          path: ruststream-py
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -93,123 +77,3 @@ jobs:
           else
             cargo publish -p "$name"
           fi
-
-  wheels:
-    name: Wheels ${{ matrix.platform.runner }} ${{ matrix.platform.target }}
-    needs: verify
-    runs-on: ${{ matrix.platform.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - runner: ubuntu-latest
-            target: x86_64
-          - runner: ubuntu-latest
-            target: aarch64
-          - runner: macos-14
-            target: aarch64
-          - runner: windows-latest
-            target: x64
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          path: ruststream-nats
-
-      - uses: actions/checkout@v4
-        with:
-          repository: powersemmi/ruststream
-          persist-credentials: false
-          path: ruststream
-
-      - uses: actions/checkout@v4
-        with:
-          repository: powersemmi/ruststream-py
-          persist-credentials: false
-          path: ruststream-py
-
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: ruststream-nats
-          target: ${{ matrix.platform.target }}
-          manylinux: auto
-          args: --release --out dist --manifest-path py/ruststream-nats-py/Cargo.toml
-        env:
-          CFLAGS_aarch64_unknown_linux_gnu: "-D__ARM_ARCH=8"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
-          path: ruststream-nats/dist
-
-  sdist:
-    name: sdist
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          path: ruststream-nats
-
-      - uses: actions/checkout@v4
-        with:
-          repository: powersemmi/ruststream
-          persist-credentials: false
-          path: ruststream
-
-      - uses: actions/checkout@v4
-        with:
-          repository: powersemmi/ruststream-py
-          persist-credentials: false
-          path: ruststream-py
-
-      - name: Build sdist
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: ruststream-nats
-          command: sdist
-          args: --out dist --manifest-path py/ruststream-nats-py/Cargo.toml
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: ruststream-nats/dist
-
-  pypi:
-    name: Publish ruststream-nats to PyPI
-    needs: [wheels, sdist]
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      contents: write
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist
-          skip-existing: true
-
-      - name: Attach artifacts to release
-        if: github.event_name == 'release'
-        env:
-          TAG: ${{ github.ref_name }}
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
-
-      - name: Generate release notes
-        if: github.event_name == 'release'
-        env:
-          TAG: ${{ github.ref_name }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          NOTES=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
-            -f tag_name="$TAG" -q .body)
-          gh release edit "$TAG" --notes "$NOTES" --repo "$GITHUB_REPOSITORY"

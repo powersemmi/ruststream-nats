@@ -1,8 +1,10 @@
 //! Delivered-message wrapper that implements [`IncomingMessage`].
 
+use std::fmt::{Debug, Formatter};
 use std::sync::OnceLock;
 
-use ruststream::{AckError, Headers, IncomingMessage};
+use async_nats::jetstream::AckKind;
+use ruststream::{AckError, Headers, IncomingMessage, Partitioned};
 
 use crate::convert::headers_from_nats;
 
@@ -16,8 +18,8 @@ pub enum NatsMessage {
     JetStream(Box<JetStreamMessage>),
 }
 
-impl std::fmt::Debug for NatsMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for NatsMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Core(_) => f.debug_struct("NatsMessage::Core").finish_non_exhaustive(),
             Self::JetStream(_) => f
@@ -33,8 +35,8 @@ pub struct CoreMessage {
     headers: Headers,
 }
 
-impl std::fmt::Debug for CoreMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for CoreMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CoreMessage")
             .field("subject", &self.inner.subject.as_str())
             .field("payload_len", &self.inner.payload.len())
@@ -55,8 +57,8 @@ pub struct JetStreamMessage {
     headers: Headers,
 }
 
-impl std::fmt::Debug for JetStreamMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for JetStreamMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JetStreamMessage")
             .field("subject", &self.inner.message.subject.as_str())
             .field("payload_len", &self.inner.message.payload.len())
@@ -106,7 +108,6 @@ impl IncomingMessage for NatsMessage {
         match self {
             Self::Core(_) => Err(AckError::Unsupported),
             Self::JetStream(m) => {
-                use async_nats::jetstream::AckKind;
                 let kind = if requeue {
                     AckKind::Nak(None)
                 } else {
@@ -118,6 +119,22 @@ impl IncomingMessage for NatsMessage {
                     .map_err(|err| AckError::Broker(format_err(err)))
             }
         }
+    }
+}
+
+/// The well-known header key for per-message routing / partitioning.
+///
+/// Set this header on outgoing messages to control key-based fan-out when the runtime is
+/// configured with `workers(N, by_key)`. The value is opaque bytes; the runtime hashes it to
+/// assign a dispatch lane.
+pub const PARTITION_KEY_HEADER: &str = "nats-partition-key";
+
+/// `Partitioned` lets the `workers(N, by_key)` runtime feature assign a dispatch lane based on
+/// a well-known message header. NATS has no native partition concept, so the key travels as the
+/// [`PARTITION_KEY_HEADER`] header value and the sender is responsible for setting it.
+impl Partitioned for NatsMessage {
+    fn partition_key(&self) -> Option<&[u8]> {
+        self.headers().get(PARTITION_KEY_HEADER)
     }
 }
 

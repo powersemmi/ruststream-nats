@@ -8,7 +8,9 @@
 use std::sync::{Arc, OnceLock};
 
 use futures::Stream;
-use ruststream::{AckError, Headers, IncomingMessage, Subscriber};
+use std::task::Poll;
+
+use ruststream::{AckError, BatchSubscriber, Headers, IncomingMessage, Partitioned, Subscriber};
 
 use crate::{
     error::NatsError,
@@ -115,6 +117,12 @@ impl NatsTestMessage {
     }
 }
 
+impl Partitioned for NatsTestMessage {
+    fn partition_key(&self) -> Option<&[u8]> {
+        self.headers().get(crate::PARTITION_KEY_HEADER)
+    }
+}
+
 impl IncomingMessage for NatsTestMessage {
     fn payload(&self) -> &[u8] {
         self.delivery
@@ -144,5 +152,37 @@ impl IncomingMessage for NatsTestMessage {
             let _ = self.requeue.send(delivery);
         }
         Ok(())
+    }
+}
+
+/// Max messages drained per batch on the testing subscriber (same role as `CORE_BATCH_LIMIT` on
+/// the real subscriber: bounds one synchronous drain without blocking on more arrivals).
+const TEST_BATCH_LIMIT: usize = 256;
+
+impl BatchSubscriber for NatsTestSubscriber {
+    type Batch = Vec<NatsTestMessage>;
+
+    /// Drains whatever is already buffered in the subscriber's channel (at least one, at most
+    /// [`TEST_BATCH_LIMIT`] messages). Blocks until the first message arrives, matching the
+    /// behaviour of the real [`crate::NatsSubscriber`] Core path.
+    fn batches(&mut self) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
+        let requeue = self.requeue.clone();
+        futures::stream::poll_fn(move |cx| {
+            let first = match self.rx.poll_recv(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(Some(d)) => NatsTestMessage::from_delivery(d, requeue.clone()),
+            };
+            let mut batch = vec![first];
+            while batch.len() < TEST_BATCH_LIMIT {
+                match self.rx.poll_recv(cx) {
+                    Poll::Ready(Some(d)) => {
+                        batch.push(NatsTestMessage::from_delivery(d, requeue.clone()));
+                    }
+                    Poll::Ready(None) | Poll::Pending => break,
+                }
+            }
+            Poll::Ready(Some(Ok(batch)))
+        })
     }
 }

@@ -10,11 +10,11 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use ruststream::{
-    Broker, Headers, IncomingMessage, OutgoingMessage, Publisher, RequestReply, Subscriber,
-    testing::TestClient,
+    BatchSubscriber, Broker, DescribeServer, Headers, IncomingMessage, OutgoingMessage,
+    Partitioned, Publisher, RequestReply, Subscriber, testing::TestClient,
 };
 use ruststream_nats::{
-    NatsError, SubscribeOptions,
+    NatsError, PARTITION_KEY_HEADER, SubscribeOptions,
     testing::{NatsTestBroker, NatsTestClient, NatsTestMessage},
 };
 
@@ -274,4 +274,173 @@ async fn stream_can_be_reentered() {
     let mut stream = Box::pin(subscriber.stream());
     let got = next_payload(&mut stream).await;
     assert_eq!(got, b"two");
+}
+
+#[tokio::test]
+async fn describe_server_returns_nats_protocol() {
+    let broker = NatsTestBroker::new();
+    // The testing broker does not connect to a server, but describe_server should still return
+    // a spec with "nats" as the protocol.
+    let spec = broker.describe_server();
+    assert_eq!(spec.protocol, "nats");
+}
+
+#[tokio::test]
+async fn partition_key_header_is_surfaced() {
+    let client = NatsTestClient::start().await.expect("start");
+    let mut sub = client.subscribe("events").await.expect("subscribe");
+
+    let mut headers = Headers::new();
+    headers.insert(PARTITION_KEY_HEADER, "tenant-a");
+
+    client
+        .publisher()
+        .await
+        .expect("publisher")
+        .publish(OutgoingMessage::new("events", b"payload").with_headers(headers))
+        .await
+        .expect("publish");
+
+    let mut stream = Box::pin(sub.stream());
+    let msg = tokio::time::timeout(WAIT, stream.next())
+        .await
+        .expect("delivery")
+        .expect("item")
+        .expect("ok");
+
+    assert_eq!(msg.partition_key(), Some(b"tenant-a".as_slice()));
+    msg.ack().await.ok();
+    client.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn batch_subscriber_yields_non_empty_batches() {
+    let client = NatsTestClient::start().await.expect("start");
+    let publisher = client.publisher().await.expect("publisher");
+
+    // Open the subscription before publishing so messages are buffered.
+    let mut sub = client.subscribe("batch").await.expect("subscribe");
+
+    for i in 0u8..5 {
+        publisher
+            .publish(OutgoingMessage::new("batch", &[i]))
+            .await
+            .expect("publish");
+    }
+
+    let mut batches = Box::pin(sub.batches());
+    let batch = tokio::time::timeout(WAIT, batches.next())
+        .await
+        .expect("batch within timeout")
+        .expect("stream has next")
+        .expect("ok batch");
+
+    assert!(!batch.is_empty(), "batch must contain at least one message");
+    // Ack each message in the batch.
+    for msg in batch {
+        msg.ack().await.ok();
+    }
+    client.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn partition_key_absent_yields_none() {
+    let client = NatsTestClient::start().await.expect("start");
+    let mut sub = client.subscribe("events.bare").await.expect("subscribe");
+
+    client
+        .publisher()
+        .await
+        .expect("publisher")
+        .publish(OutgoingMessage::new("events.bare", b"payload"))
+        .await
+        .expect("publish");
+
+    let mut stream = Box::pin(sub.stream());
+    let msg = tokio::time::timeout(WAIT, stream.next())
+        .await
+        .expect("delivery")
+        .expect("item")
+        .expect("ok");
+
+    assert_eq!(msg.partition_key(), None);
+    msg.ack().await.ok();
+    client.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn batch_drains_in_publish_order() {
+    let client = NatsTestClient::start().await.expect("start");
+    let publisher = client.publisher().await.expect("publisher");
+    let mut sub = client.subscribe("batch.order").await.expect("subscribe");
+
+    let count = 5u8;
+    for i in 0..count {
+        publisher
+            .publish(OutgoingMessage::new("batch.order", &[i]))
+            .await
+            .expect("publish");
+    }
+
+    let mut batches = Box::pin(sub.batches());
+    let batch = tokio::time::timeout(WAIT, batches.next())
+        .await
+        .expect("batch within timeout")
+        .expect("stream has next")
+        .expect("ok batch");
+
+    assert!(batch.len() <= usize::from(count));
+    for (i, msg) in batch.into_iter().enumerate() {
+        assert_eq!(msg.payload(), &[u8::try_from(i).expect("count fits u8")]);
+        msg.ack().await.ok();
+    }
+    client.shutdown().await.expect("shutdown");
+}
+
+// Same re-entry contract as `stream()`: dropping the batch stream and calling `batches()` again
+// must keep working.
+#[tokio::test]
+async fn batches_can_be_reentered() {
+    let client = NatsTestClient::start().await.expect("start");
+    let publisher = client.publisher().await.expect("publisher");
+    let mut sub = client.subscribe("batch.reenter").await.expect("subscribe");
+
+    publisher
+        .publish(OutgoingMessage::new("batch.reenter", b"one"))
+        .await
+        .expect("publish");
+    {
+        let mut batches = Box::pin(sub.batches());
+        let batch = tokio::time::timeout(WAIT, batches.next())
+            .await
+            .expect("batch within timeout")
+            .expect("stream has next")
+            .expect("ok batch");
+        assert_eq!(
+            batch.first().map(|m| m.payload().to_vec()),
+            Some(b"one".to_vec()),
+        );
+        for msg in batch {
+            msg.ack().await.ok();
+        }
+    }
+
+    publisher
+        .publish(OutgoingMessage::new("batch.reenter", b"two"))
+        .await
+        .expect("publish");
+    let mut batches = Box::pin(sub.batches());
+    let batch = tokio::time::timeout(WAIT, batches.next())
+        .await
+        .expect("batch within timeout")
+        .expect("stream has next")
+        .expect("ok batch");
+    assert_eq!(
+        batch.first().map(|m| m.payload().to_vec()),
+        Some(b"two".to_vec()),
+    );
+    for msg in batch {
+        msg.ack().await.ok();
+    }
+    client.shutdown().await.expect("shutdown");
 }

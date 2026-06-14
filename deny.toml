@@ -7,21 +7,8 @@ all-features = true
 
 [advisories]
 yanked = "deny"
-# Unavoidable advisories in the async-nats 0.46 TLS tree. async-nats pins these
-# transitive versions directly, so they cannot move without an upstream release;
-# they are reachable only through the optional TLS connection path. Drop each
-# entry once an async-nats bump resolves it.
-ignore = [
-    # rustls-pemfile (via rustls-native-certs) is unmaintained.
-    "RUSTSEC-2025-0134",
-    # rustls-webpki 0.102 CRL/name-constraint and CRL-parsing-panic advisories.
-    "RUSTSEC-2026-0049",
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0104",
-    # time 0.3.45 RFC 2822 parsing stack-exhaustion DoS.
-    "RUSTSEC-2026-0009",
-]
+
+ignore = []
 
 [licenses]
 # Apache-2.0/MIT-compatible permissive licenses only.

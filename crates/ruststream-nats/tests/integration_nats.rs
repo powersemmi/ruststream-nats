@@ -20,12 +20,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use futures::StreamExt;
 use ruststream::runtime::{
     AppInfo, Context, HandlerMetadata, HandlerResult, RustStream, RustStreamError,
 };
 use ruststream::{
     Broker, DescribeServer, Headers, IncomingMessage, OutgoingMessage, Partitioned, Publisher,
-    RequestReply, conformance::harness,
+    RequestReply, Subscriber, conformance::harness,
 };
 use ruststream_nats::{NatsBroker, NatsError, NatsMessage, PARTITION_KEY_HEADER, SubscribeOptions};
 use tokio::sync::{Notify, mpsc};
@@ -37,6 +38,19 @@ const STARTUP_WAIT: Duration = Duration::from_secs(10);
 
 fn nats_url() -> Option<String> {
     std::env::var("NATS_TEST_URL").ok()
+}
+
+/// Connects to the test server; `None` skips the test when `NATS_TEST_URL` is unset or the
+/// server is unreachable.
+async fn connect_or_skip() -> Option<NatsBroker> {
+    let url = nats_url()?;
+    match NatsBroker::connect(url.as_str()).await {
+        Ok(broker) => Some(broker),
+        Err(err) => {
+            eprintln!("could not reach NATS at {url}: {err}; skipping");
+            None
+        }
+    }
 }
 
 fn unique_suffix() -> u128 {
@@ -198,7 +212,7 @@ async fn app_surfaces_headers_and_partition_key_in_handler() {
                     let snapshot = (
                         msg.headers().content_type().map(str::to_owned),
                         msg.headers().get_str("x-trace-id").map(str::to_owned),
-                        msg.partition_key().map(<[u8]>::to_vec),
+                        Partitioned::partition_key(msg).map(<[u8]>::to_vec),
                     );
                     let tx = tx.clone();
                     async move {
@@ -446,4 +460,108 @@ fn jetstream_app(
             Ok::<_, Infallible>(())
         })
         .with_broker(broker.clone(), build)
+}
+
+// Regression: 0.2 took the inner subscription out of an Option in `stream()` and panicked on
+// the second call; the Subscriber contract allows re-entry (the conformance helpers re-enter
+// `stream()` per call).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn core_stream_can_be_reentered() {
+    let Some(broker) = connect_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("reenter");
+
+    let mut subscriber = broker
+        .subscribe(SubscribeOptions::new(subject.clone()))
+        .await
+        .expect("subscribe failed");
+    let publisher = broker.publisher();
+
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"one"))
+        .await
+        .expect("publish failed");
+    {
+        let mut stream = std::pin::pin!(subscriber.stream());
+        let msg = timeout(WAIT, stream.next())
+            .await
+            .expect("timed out")
+            .expect("stream ended")
+            .expect("stream error");
+        assert_eq!(msg.payload(), b"one");
+    }
+
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"two"))
+        .await
+        .expect("publish failed");
+    let mut stream = std::pin::pin!(subscriber.stream());
+    let msg = timeout(WAIT, stream.next())
+        .await
+        .expect("timed out")
+        .expect("stream ended")
+        .expect("stream error");
+    assert_eq!(msg.payload(), b"two");
+    broker.shutdown_client().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jetstream_stream_can_be_reentered() {
+    let Some(broker) = connect_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("jsreenter");
+    let stream_name = format!("RS_TEST_RE_{}", unique_suffix());
+
+    let ctx = async_nats::jetstream::new(broker.client());
+    ctx.create_stream(async_nats::jetstream::stream::Config {
+        name: stream_name.clone(),
+        subjects: vec![subject.clone()],
+        ..Default::default()
+    })
+    .await
+    .expect("create_stream failed");
+
+    let publisher = broker.publisher();
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"event-1"))
+        .await
+        .expect("publish failed");
+
+    let mut consumer = broker
+        .subscribe(
+            SubscribeOptions::new(subject.clone())
+                .jetstream(stream_name.clone())
+                .filter_subject(subject.clone()),
+        )
+        .await
+        .expect("consumer create failed");
+
+    {
+        let mut stream_iter = std::pin::pin!(consumer.stream());
+        let msg = timeout(WAIT, stream_iter.next())
+            .await
+            .expect("timed out")
+            .expect("stream ended")
+            .expect("stream error");
+        assert_eq!(msg.payload(), b"event-1");
+        msg.ack().await.expect("ack failed");
+    }
+
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"event-2"))
+        .await
+        .expect("publish failed");
+    let mut stream_iter = std::pin::pin!(consumer.stream());
+    let msg = timeout(WAIT, stream_iter.next())
+        .await
+        .expect("timed out")
+        .expect("stream ended")
+        .expect("stream error");
+    assert_eq!(msg.payload(), b"event-2");
+    msg.ack().await.expect("ack failed");
+
+    let _ = ctx.delete_stream(&stream_name).await;
+    broker.shutdown_client().await;
 }

@@ -34,12 +34,12 @@
 
 ```toml
 [dependencies]
-ruststream = { version = "0.3", features = ["macros", "json"] }
-ruststream-nats = "0.3"
+ruststream = { version = "0.4", features = ["macros", "json"] }
+ruststream-nats = "0.4"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-nats = { version = "0.3", features = ["testing"] }
+ruststream-nats = { version = "0.4", features = ["testing"] }
 ```
 
 ## Write a service

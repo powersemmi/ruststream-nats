@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://powersemmi.github.io/ruststream/latest/brokers/nats/">Documentation</a></b>
+  <b><a href="https://powersemmi.github.io/ruststream-nats/">Documentation</a></b>
 </p>
 
 ---
@@ -109,10 +109,24 @@ JetStream-specific behaviour (durable resume, redelivery timing) is covered by t
 ruststream-nats/
 ├── crates/
 │   └── ruststream-nats/        the published crate
+│       └── examples/           runnable nats_* examples (docs-site snippet sources)
+├── docs/                       the documentation site (MkDocs Material)
+├── mkdocs.yml                  docs site config
 └── Cargo.toml                  workspace
 ```
 
 The path dependency on the sibling `ruststream` repository assumes the repos live next to each other; published builds resolve against the crates.io version range (`ruststream = ">=0.3.0, <0.4.0"`).
+
+## Documentation
+
+The NATS broker docs live at [powersemmi.github.io/ruststream-nats](https://powersemmi.github.io/ruststream-nats/) and are built from `docs/` with MkDocs Material. The runnable `nats_*` examples under `crates/ruststream-nats/examples/` are embedded into the docs as snippets, so they stay compiled and in sync. Framework concepts (subscribers, routing, codecs, middleware, the CLI) live in the [RustStream docs](https://powersemmi.github.io/ruststream/).
+
+Build the site locally:
+
+```bash
+pip install -r docs/requirements.txt
+mkdocs serve
+```
 
 ## Contributing
 

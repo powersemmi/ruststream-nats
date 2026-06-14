@@ -19,7 +19,10 @@ default = []
 testing = ["ruststream/conformance"]
 
 [dev-dependencies]
-ruststream = { workspace = true, features = ["conformance"] }
+# The conformance harness drives the testing-feature broker; macros + json power the runnable
+# nats_* examples (the docs site embeds their snippets), and serde decodes their message types.
+ruststream = { workspace = true, features = ["conformance", "macros", "json"] }
+serde = { version = "1", features = ["derive"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 
 [dependencies]
@@ -30,3 +33,13 @@ futures.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+# The nats_* examples are the docs-site snippet sources; keep them runnable and snippet-checked here.
+[[example]]
+name = "nats_core"
+
+[[example]]
+name = "nats_jetstream"
+
+[[example]]
+name = "nats_request_reply"

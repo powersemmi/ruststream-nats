@@ -33,7 +33,12 @@ fmt:
 build:
     cargo build --workspace --release
 
-security: zizmor
+security: deny zizmor
+
+# Dependency-graph checks (advisories, licenses, duplicates, sources).
+# Needs cargo-deny: cargo install cargo-deny --locked
+deny:
+    cargo deny check
 
 zizmor:
     uvx zizmor .github/workflows

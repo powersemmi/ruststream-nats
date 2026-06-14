@@ -143,6 +143,12 @@ jobs:
         with:
           persist-credentials: false
 
+      # Dependency-graph gate: RustSec advisories, license allow-list, duplicate
+      # versions, and registry sources, per the checked-in deny.toml. Not path-
+      # gated: advisories arrive over time, not only with manifest changes.
+      - name: cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+
       # No cache: there is no uv.lock anymore (uvx resolves the tools on the fly).
       - name: Install uv
         uses: astral-sh/setup-uv@v3

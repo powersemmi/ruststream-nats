@@ -1,0 +1,52 @@
+# cargo-deny configuration: the dependency-graph half of the security gate.
+# Checks RustSec advisories, license compatibility, duplicate versions, and
+# registry sources. Run locally with `just deny`.
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+# Unavoidable advisories in the async-nats 0.46 TLS tree. async-nats pins these
+# transitive versions directly, so they cannot move without an upstream release;
+# they are reachable only through the optional TLS connection path. Drop each
+# entry once an async-nats bump resolves it.
+ignore = [
+    # rustls-pemfile (via rustls-native-certs) is unmaintained.
+    "RUSTSEC-2025-0134",
+    # rustls-webpki 0.102 CRL/name-constraint and CRL-parsing-panic advisories.
+    "RUSTSEC-2026-0049",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+    # time 0.3.45 RFC 2822 parsing stack-exhaustion DoS.
+    "RUSTSEC-2026-0009",
+]
+
+[licenses]
+# Apache-2.0/MIT-compatible permissive licenses only.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    # async-nats TLS/crypto tree: ring (Apache-2.0 AND ISC), curve25519-dalek
+    # and ed25519-dalek (BSD-3-Clause). All OSI-approved and permissive.
+    "BSD-3-Clause",
+    "ISC",
+    # webpki-roots ships the Mozilla CA bundle under CDLA-Permissive-2.0, a
+    # permissive data license covering the embedded certificate set.
+    "CDLA-Permissive-2.0",
+    # unicode-ident is (MIT OR Apache-2.0) AND Unicode-3.0; the Unicode license
+    # only covers the embedded character tables and is permissive.
+    "Unicode-3.0",
+]
+
+[bans]
+# clippy::cargo's multiple_crate_versions is allowed in the workspace lints
+# because the async-nats client tree pulls unavoidable duplicates; warn (not
+# deny) so the report stays visible without blocking on a transitive client's
+# dependency choices.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

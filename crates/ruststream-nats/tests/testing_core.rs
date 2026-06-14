@@ -308,7 +308,10 @@ async fn partition_key_header_is_surfaced() {
         .expect("item")
         .expect("ok");
 
-    assert_eq!(msg.partition_key(), Some(b"tenant-a".as_slice()));
+    assert_eq!(
+        Partitioned::partition_key(&msg),
+        Some(b"tenant-a".as_slice())
+    );
     msg.ack().await.ok();
     client.shutdown().await.expect("shutdown");
 }
@@ -363,7 +366,7 @@ async fn partition_key_absent_yields_none() {
         .expect("item")
         .expect("ok");
 
-    assert_eq!(msg.partition_key(), None);
+    assert_eq!(Partitioned::partition_key(&msg), None);
     msg.ack().await.ok();
     client.shutdown().await.expect("shutdown");
 }

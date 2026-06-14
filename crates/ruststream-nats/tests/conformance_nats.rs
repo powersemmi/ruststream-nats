@@ -1,14 +1,72 @@
-//! Drives `ruststream-conformance::harness::run_suite` against the handler-stub
-//! [`NatsTestClient`]. This is the acceptance gate for the Phase 5 pivot -- if anything in the
-//! Core dispatch surface regresses, this test breaks first.
+//! Conformance suites against a real NATS server. Each check verifies a different contract
+//! surface: `run_suite` proves routing against the handler-stub `NatsTestClient`; `lifecycle`
+//! proves the lazy-startup contract through the real `NatsBroker`; the capability suites prove
+//! optional trait implementations. All but `run_suite` are gated behind `NATS_TEST_URL`.
+//!
+//! Run locally with a running NATS server:
+//!
+//! ```bash
+//! just brokers-up
+//! NATS_TEST_URL=nats://127.0.0.1:4222 cargo test -p ruststream-nats --test conformance_nats
+//! ```
+//!
+//! In CI, the `broker-integration` job spins up `docker-compose.test.yml` first.
 
 #![cfg(feature = "testing")]
 
-use ruststream::conformance::harness;
+use ruststream::conformance::{capabilities, harness};
 use ruststream::testing::TestClient;
 use ruststream_nats::testing::NatsTestClient;
+use ruststream_nats::{NatsBroker, SubscribeOptions};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nats_test_client_passes_conformance_suite() {
     harness::run_suite(NatsTestClient::start).await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn passes_lifecycle() {
+    let Some(url) = nats_url() else {
+        return;
+    };
+    harness::lifecycle(
+        || NatsBroker::new(url.clone()),
+        |subject| SubscribeOptions::new(subject),
+        |broker| broker.publisher(),
+    )
+    .await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn passes_request_reply() {
+    let Some(url) = nats_url() else {
+        return;
+    };
+    capabilities::request_reply(
+        || NatsBroker::new(url.clone()),
+        |subject| SubscribeOptions::new(subject),
+        |broker| broker.publisher(),
+        |broker| broker.publisher(),
+    )
+    .await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn passes_batches() {
+    let Some(url) = nats_url() else {
+        return;
+    };
+    capabilities::batches(
+        || NatsBroker::new(url.clone()),
+        |subject| SubscribeOptions::new(subject),
+        |broker| broker.publisher(),
+    )
+    .await;
+}
+
+fn nats_url() -> Option<String> {
+    std::env::var("NATS_TEST_URL").ok()
 }

@@ -1,7 +1,8 @@
 //! Conformance suites against a real NATS server. Each check verifies a different contract
-//! surface: `run_suite` proves routing against the handler-stub `NatsTestClient`; `lifecycle`
-//! proves the lazy-startup contract through the real `NatsBroker`; the capability suites prove
-//! optional trait implementations. All but `run_suite` are gated behind `NATS_TEST_URL`.
+//! surface: `run_suite` proves Core routing in process against the `NatsTestBroker`'s
+//! [`TestableBroker`](ruststream::testing::TestableBroker) impl; `lifecycle` proves the
+//! lazy-startup contract through the real `NatsBroker`; the capability suites prove optional
+//! trait implementations. All but `run_suite` are gated behind `NATS_TEST_URL`.
 //!
 //! Run locally with a running NATS server:
 //!
@@ -15,13 +16,12 @@
 #![cfg(feature = "testing")]
 
 use ruststream::conformance::{capabilities, harness};
-use ruststream::testing::TestClient;
-use ruststream_nats::testing::NatsTestClient;
+use ruststream_nats::testing::NatsTestBroker;
 use ruststream_nats::{NatsBroker, SubscribeOptions};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn nats_test_client_passes_conformance_suite() {
-    harness::run_suite(NatsTestClient::start).await;
+async fn nats_test_broker_passes_conformance_suite() {
+    harness::run_suite(NatsTestBroker::new).await;
 }
 
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]

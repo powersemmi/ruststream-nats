@@ -79,6 +79,58 @@ jobs:
         working-directory: ruststream-nats
         run: cargo test --workspace --all-features
 
+  templates:
+    name: Templates (render + compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: ruststream-nats
+
+      # The rendered scaffolds pin `ruststream` and `ruststream-nats` by version; until 0.5 is
+      # published the sibling checkout supplies the unpublished crate through the injected patch.
+      - uses: actions/checkout@v4
+        with:
+          repository: powersemmi/ruststream
+          persist-credentials: false
+          path: ruststream
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ruststream-nats
+
+      - name: Install cargo-generate
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-generate
+
+      # Template-contract drift check: render each scaffold and compile it, so a broker API change
+      # that breaks a template fails here, not a user's first `cargo build`. The rendered projects
+      # pin both crates by version; until 0.5 is published, patch each to the sibling checkout so the
+      # scaffold builds against the local crates.
+      - name: Render and check templates
+        working-directory: ruststream-nats
+        env:
+          RUSTSTREAM_PATH: ${{ github.workspace }}/ruststream
+          NATS_PATH: ${{ github.workspace }}/ruststream-nats/crates/ruststream-nats
+        run: |
+          for tpl in nats nats-js; do
+            name="smoke-$tpl"
+            cargo generate --path "templates/$tpl" --name "$name" --destination "$RUNNER_TEMP" --vcs none
+            {
+              echo ""
+              echo "[patch.crates-io]"
+              echo "ruststream = { path = \"$RUSTSTREAM_PATH\" }"
+              echo "ruststream-nats = { path = \"$NATS_PATH\" }"
+            } >> "$RUNNER_TEMP/$name/Cargo.toml"
+            cargo check --manifest-path "$RUNNER_TEMP/$name/Cargo.toml"
+          done
+
   broker-integration:
     name: Broker integration (NATS)
     runs-on: ubuntu-latest

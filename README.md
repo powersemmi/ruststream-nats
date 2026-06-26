@@ -28,7 +28,7 @@
 - **Lazy startup contract.** `NatsBroker::new(url)` is synchronous and does no I/O; the runtime connects once at startup, so the broker composes with `#[ruststream::app]`. An existing connection plugs in via `NatsBroker::from_client`.
 - **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively; Core NATS reports `AckError::Unsupported` instead of pretending.
 - **Request/reply.** `NatsPublisher` implements the `RequestReply` capability over native NATS request semantics.
-- **In-process test broker.** The `testing` feature ships `NatsTestBroker` / `NatsTestClient`, a handler-stub transport that reproduces Core routing (no server, no JetStream simulation) and passes the framework's conformance suite.
+- **In-process test broker.** The `testing` feature ships `NatsTestBroker`, a handler-stub transport that reproduces Core routing (no server, no JetStream simulation), implements `ruststream::testing::TestableBroker`, and passes the framework's conformance suite in process.
 
 ## Install
 
@@ -40,6 +40,15 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 ruststream-nats = { version = "0.4", features = ["testing"] }
+```
+
+## Scaffold
+
+Generate a ready-to-run service with [`cargo generate`](https://github.com/cargo-generate/cargo-generate) - `nats` for a Core NATS starter, `nats-js` for a durable JetStream consumer:
+
+```bash
+cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nats --name my-service
+cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nats-js --name my-service
 ```
 
 ## Write a service
@@ -88,17 +97,17 @@ async fn handle(order: &Order) -> HandlerResult { /* ... */ }
 
 ## Test it
 
-The `testing` feature runs handlers against an in-process NATS stand-in - no server, same routing:
+The `testing` feature runs handlers against an in-process NATS stand-in - no server, same routing. Inject a message as an external producer would with `TestableBroker::inject`, then assert on what a handler published with the free `expect_published`:
 
 ```rust
-use ruststream_nats::testing::NatsTestClient;
-use ruststream::testing::TestClient;
+use ruststream::OutgoingMessage;
+use ruststream::testing::{TestableBroker, expect_published};
+use ruststream_nats::testing::NatsTestBroker;
 
-let client = NatsTestClient::start().await?;
-client.publish("orders.created", br#"{"id":1}"#).await?;
-let replies = client
-    .expect_published("confirmations", 1, std::time::Duration::from_secs(1))
-    .await?;
+let broker = NatsTestBroker::new();
+broker.inject(OutgoingMessage::new("orders.created", br#"{"id":1}"#));
+let confirmations =
+    expect_published(&broker, "confirmations", 1, std::time::Duration::from_secs(1)).await;
 ```
 
 JetStream-specific behaviour (durable resume, redelivery timing) is covered by the env-gated integration suite instead: `just test-brokers` spins up `nats:2-alpine` with JetStream and runs the live tests plus the framework conformance suite against it.

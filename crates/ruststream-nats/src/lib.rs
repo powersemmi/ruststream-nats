@@ -11,6 +11,8 @@ mod request_reply;
 mod subscribe_options;
 mod subscriber;
 
+pub mod context;
+
 pub use broker::NatsBroker;
 pub use error::NatsError;
 pub use message::{CoreMessage, JetStreamMessage, NatsMessage, PARTITION_KEY_HEADER};

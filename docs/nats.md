@@ -80,9 +80,11 @@ exposed to handlers, so the responder end of an RPC pair is today another NATS s
 
 ## Testing
 
-The `testing` feature ships `NatsTestBroker` / `NatsTestClient`: an in-process broker with real
-NATS subject matching (`*` and `>` wildcards), header propagation, and request-reply - no
-`nats-server`, no docker. See
+The `testing` feature ships `NatsTestBroker`: an in-process broker with real NATS subject matching
+(`*` and `>` wildcards), header propagation, and request-reply - no `nats-server`, no docker. It
+implements `ruststream::testing::TestableBroker`, so the same broker drives the `TestApp` harness
+and the conformance suite; inject traffic with `broker.inject(OutgoingMessage::new(..))` and assert
+on published output with the free `ruststream::testing::expect_published`. See
 [Testing handlers against in-memory NATS](https://powersemmi.github.io/ruststream/latest/guides/testing/#testing-handlers-against-in-memory-nats).
 
 JetStream edge cases (durable resume, `ack_wait` redelivery, retention) are not simulated; test

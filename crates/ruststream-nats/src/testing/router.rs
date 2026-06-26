@@ -3,7 +3,7 @@
 //! [`SubjectRouter`] keeps the set of live subscriptions keyed by [`SubscriptionId`]. Every
 //! [`SubjectRouter::publish`] copies the delivery to every subscription whose
 //! [`SubjectPattern`] matches and appends a snapshot to a per-subject log so test code can
-//! assert on observed traffic via [`SubjectRouter::expect_published`].
+//! assert on observed traffic via [`SubjectRouter::published`].
 //!
 //! Subscriptions are removed explicitly through [`SubjectRouter::unsubscribe`]; the test
 //! subscriber wrapper calls this from its `Drop` impl so dropping a subscriber stops fanout.
@@ -14,15 +14,11 @@ use std::{
         Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 use bytes::Bytes;
-use ruststream::{Headers, RawMessage};
-use tokio::{
-    sync::{Notify, mpsc},
-    time::timeout,
-};
+use ruststream::{Headers, RawMessage, testing::Coordinator};
+use tokio::sync::mpsc;
 
 use crate::testing::subject::SubjectPattern;
 
@@ -56,7 +52,6 @@ struct RouterState {
 #[derive(Default)]
 pub(crate) struct SubjectRouter {
     state: Mutex<RouterState>,
-    notify: Notify,
     next_id: AtomicU64,
 }
 
@@ -96,7 +91,19 @@ impl SubjectRouter {
     }
 
     /// Fans out `delivery` to every matching subscription and records it in the published log.
-    pub(crate) fn publish(&self, subject: String, payload: Bytes, headers: Headers) {
+    ///
+    /// Under a [`TestApp`](ruststream::testing::TestApp) run a `coordinator` is threaded in: every
+    /// live enqueue into a dispatch-driven subscriber is counted with
+    /// [`Coordinator::enqueued`] so the harness can drive to quiescence. Request-reply inboxes
+    /// (`_INBOX.`) are skipped: their reply is consumed by the requester, not a dispatch loop, so it
+    /// carries no coordinator and would never be decremented.
+    pub(crate) fn publish(
+        &self,
+        subject: String,
+        payload: Bytes,
+        headers: Headers,
+        coordinator: Option<&Coordinator>,
+    ) {
         let snapshot =
             RawMessage::new(subject.clone(), payload.clone()).with_headers(headers.clone());
         let mut to_notify: Vec<DeliverySender> = Vec::new();
@@ -108,62 +115,35 @@ impl SubjectRouter {
                     to_notify.push(sub.sender.clone());
                 }
             }
-            drop(state);
         }
-        self.notify.notify_waiters();
 
+        let is_inbox = subject.starts_with("_INBOX.");
         let delivery = Delivery {
             subject,
             payload,
             headers,
         };
         for tx in to_notify {
-            let _ = tx.send(delivery.clone());
-        }
-    }
-
-    /// Waits until `count` deliveries have landed on `subject` (or the timeout elapses) and
-    /// returns the matching prefix of the log. Returns whatever is recorded on timeout, never
-    /// blocking past it.
-    pub(crate) async fn expect_published(
-        &self,
-        subject: &str,
-        count: usize,
-        timeout_dur: Duration,
-    ) -> Vec<RawMessage> {
-        let wait = async {
-            loop {
-                if let Some(messages) = self.snapshot(subject, count) {
-                    return messages;
-                }
-                self.notify.notified().await;
+            let sent = tx.send(delivery.clone());
+            if sent.is_ok()
+                && !is_inbox
+                && let Some(coordinator) = coordinator
+            {
+                coordinator.enqueued();
             }
-        };
-        timeout(timeout_dur, wait)
-            .await
-            .unwrap_or_else(|_| self.partial_snapshot(subject, count))
-    }
-
-    fn snapshot(&self, subject: &str, count: usize) -> Option<Vec<RawMessage>> {
-        let state = self.state.lock().expect("nats test router mutex poisoned");
-        let entries = state.log.get(subject)?;
-        if entries.len() < count {
-            return None;
         }
-        let messages: Vec<RawMessage> = entries.iter().take(count).cloned().collect();
-        drop(state);
-        Some(messages)
     }
 
-    fn partial_snapshot(&self, subject: &str, count: usize) -> Vec<RawMessage> {
-        let state = self.state.lock().expect("nats test router mutex poisoned");
-        let messages = state
+    /// Returns every message recorded for `subject`, in publish order. Backs
+    /// [`TestableBroker::published`](ruststream::testing::TestableBroker::published).
+    pub(crate) fn published(&self, subject: &str) -> Vec<RawMessage> {
+        self.state
+            .lock()
+            .expect("nats test router mutex poisoned")
             .log
             .get(subject)
-            .map(|entries| entries.iter().take(count).cloned().collect())
-            .unwrap_or_default();
-        drop(state);
-        messages
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Drops every subscription and clears the published log. Used by broker shutdown.
@@ -186,8 +166,6 @@ impl std::fmt::Debug for SubjectRouter {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use super::*;
 
     fn make_pattern(s: &str) -> SubjectPattern {
@@ -204,7 +182,12 @@ mod tests {
         let (_id_a, _tx_a, mut rx_a) = router.subscribe(make_pattern("orders"));
         let (_id_b, _tx_b, mut rx_b) = router.subscribe(make_pattern("events"));
 
-        router.publish("orders".into(), Bytes::from_static(b"o1"), no_headers());
+        router.publish(
+            "orders".into(),
+            Bytes::from_static(b"o1"),
+            no_headers(),
+            None,
+        );
 
         let got = rx_a.recv().await.expect("delivered");
         assert_eq!(got.payload.as_ref(), b"o1");
@@ -225,6 +208,7 @@ mod tests {
             "orders.created".into(),
             Bytes::from_static(b"x"),
             no_headers(),
+            None,
         );
 
         assert!(rx_a.recv().await.is_some());
@@ -238,37 +222,41 @@ mod tests {
         let (id, _tx, mut rx) = router.subscribe(make_pattern("orders"));
         router.unsubscribe(id);
 
-        router.publish("orders".into(), Bytes::from_static(b"x"), no_headers());
+        router.publish(
+            "orders".into(),
+            Bytes::from_static(b"x"),
+            no_headers(),
+            None,
+        );
 
         assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]
-    async fn expect_published_waits_until_count_reached() {
+    async fn published_log_records_in_order() {
         let router = SubjectRouter::default();
-        let publisher = async {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            router.publish("events".into(), Bytes::from_static(b"a"), no_headers());
-            router.publish("events".into(), Bytes::from_static(b"b"), no_headers());
-        };
-        let collector = async {
-            router
-                .expect_published("events", 2, Duration::from_secs(1))
-                .await
-        };
-        let ((), messages) = tokio::join!(publisher, collector);
+        router.publish(
+            "events".into(),
+            Bytes::from_static(b"a"),
+            no_headers(),
+            None,
+        );
+        router.publish(
+            "events".into(),
+            Bytes::from_static(b"b"),
+            no_headers(),
+            None,
+        );
+
+        let messages = router.published("events");
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].payload(), b"a");
         assert_eq!(messages[1].payload(), b"b");
     }
 
     #[tokio::test]
-    async fn expect_published_returns_what_is_available_on_timeout() {
+    async fn published_log_is_empty_for_unknown_subject() {
         let router = SubjectRouter::default();
-        router.publish("events".into(), Bytes::from_static(b"a"), no_headers());
-        let messages = router
-            .expect_published("events", 5, Duration::from_millis(20))
-            .await;
-        assert_eq!(messages.len(), 1);
+        assert!(router.published("never").is_empty());
     }
 }

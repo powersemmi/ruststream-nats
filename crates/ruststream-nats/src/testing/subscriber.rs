@@ -10,7 +10,10 @@ use std::sync::{Arc, OnceLock};
 use futures::Stream;
 use std::task::Poll;
 
-use ruststream::{AckError, BatchSubscriber, Headers, IncomingMessage, Partitioned, Subscriber};
+use ruststream::{
+    AckError, BatchSubscriber, Headers, IncomingMessage, Partitioned, Subscriber,
+    testing::Coordinator,
+};
 
 use crate::{
     error::NatsError,
@@ -26,6 +29,9 @@ pub struct NatsTestSubscriber {
     id: SubscriptionId,
     rx: DeliveryReceiver,
     requeue: DeliverySender,
+    /// A clone of the broker's harness coordinator, threaded into each yielded message so a requeue
+    /// re-counts and a consumed delivery decrements. `None` outside a harness run.
+    coordinator: Option<Coordinator>,
 }
 
 impl std::fmt::Debug for NatsTestSubscriber {
@@ -40,12 +46,14 @@ impl NatsTestSubscriber {
         id: SubscriptionId,
         rx: DeliveryReceiver,
         requeue: DeliverySender,
+        coordinator: Option<Coordinator>,
     ) -> Self {
         Self {
             state,
             id,
             rx,
             requeue,
+            coordinator,
         }
     }
 }
@@ -62,16 +70,18 @@ impl Subscriber for NatsTestSubscriber {
 
     fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
         let requeue = self.requeue.clone();
+        let coordinator = self.coordinator.clone();
         // Poll the receiver in place rather than wrapping it in an owning stream, so `stream`
         // can be called again after the returned stream is dropped (the runtime and the
         // conformance helpers re-enter it per call).
         futures::stream::poll_fn(move |cx| {
             self.rx.poll_recv(cx).map(|next| {
                 next.map(|delivery| {
-                    Ok(NatsTestMessage {
-                        delivery: Some(delivery),
-                        requeue: requeue.clone(),
-                    })
+                    Ok(NatsTestMessage::new(
+                        delivery,
+                        requeue.clone(),
+                        coordinator.clone(),
+                    ))
                 })
             })
         })
@@ -86,6 +96,21 @@ impl Subscriber for NatsTestSubscriber {
 pub struct NatsTestMessage {
     delivery: Option<Delivery>,
     requeue: DeliverySender,
+    /// A clone of the broker's harness coordinator. When set, this delivery is counted in flight
+    /// and is decremented once when the message is consumed or dropped (see the `Drop` impl).
+    /// `None` outside a harness run and for request-reply inbox replies (not dispatch-driven).
+    coordinator: Option<Coordinator>,
+}
+
+impl Drop for NatsTestMessage {
+    /// Counts this delivery consumed exactly once: on ack, nack, or an unsettled drop (a fail-fast
+    /// panic). A requeue (`nack(true)`) re-enqueues a fresh delivery first, so the in-flight count
+    /// stays balanced across redelivery.
+    fn drop(&mut self) {
+        if let Some(coordinator) = &self.coordinator {
+            coordinator.consumed();
+        }
+    }
 }
 
 impl std::fmt::Debug for NatsTestMessage {
@@ -100,11 +125,23 @@ impl std::fmt::Debug for NatsTestMessage {
 }
 
 impl NatsTestMessage {
-    pub(crate) fn from_delivery(delivery: Delivery, requeue: DeliverySender) -> Self {
+    /// Builds a message carrying a harness coordinator clone (dispatch-driven deliveries).
+    pub(crate) fn new(
+        delivery: Delivery,
+        requeue: DeliverySender,
+        coordinator: Option<Coordinator>,
+    ) -> Self {
         Self {
             delivery: Some(delivery),
             requeue,
+            coordinator,
         }
+    }
+
+    /// Builds a message with no coordinator: a request-reply inbox reply, consumed by the requester
+    /// rather than a dispatch loop, so it is never counted in flight.
+    pub(crate) fn from_delivery(delivery: Delivery, requeue: DeliverySender) -> Self {
+        Self::new(delivery, requeue, None)
     }
 
     /// Returns the subject this message was published to.
@@ -149,7 +186,14 @@ impl IncomingMessage for NatsTestMessage {
             .take()
             .expect("NatsTestMessage ack/nack invoked twice");
         if requeue {
-            let _ = self.requeue.send(delivery);
+            let sent = self.requeue.send(delivery);
+            // The requeue bypasses fanout, so count the re-enqueue here to balance this message's
+            // `Drop` decrement. The redelivered copy is consumed (and decremented) in turn.
+            if sent.is_ok()
+                && let Some(coordinator) = &self.coordinator
+            {
+                coordinator.enqueued();
+            }
         }
         Ok(())
     }
@@ -167,17 +211,24 @@ impl BatchSubscriber for NatsTestSubscriber {
     /// behaviour of the real [`crate::NatsSubscriber`] Core path.
     fn batches(&mut self) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
         let requeue = self.requeue.clone();
+        let coordinator = self.coordinator.clone();
         futures::stream::poll_fn(move |cx| {
             let first = match self.rx.poll_recv(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Ready(Some(d)) => NatsTestMessage::from_delivery(d, requeue.clone()),
+                Poll::Ready(Some(d)) => {
+                    NatsTestMessage::new(d, requeue.clone(), coordinator.clone())
+                }
             };
             let mut batch = vec![first];
             while batch.len() < TEST_BATCH_LIMIT {
                 match self.rx.poll_recv(cx) {
                     Poll::Ready(Some(d)) => {
-                        batch.push(NatsTestMessage::from_delivery(d, requeue.clone()));
+                        batch.push(NatsTestMessage::new(
+                            d,
+                            requeue.clone(),
+                            coordinator.clone(),
+                        ));
                     }
                     Poll::Ready(None) | Poll::Pending => break,
                 }

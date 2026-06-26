@@ -1,8 +1,9 @@
 //! Integration tests for the handler-stub NATS test broker.
 //!
-//! Drives the public surface (`NatsTestBroker`, `NatsTestPublisher`, `NatsTestSubscriber`,
-//! `NatsTestClient`) without going through any harness, to keep failures localised. `JetStream`
-//! edge-case semantics live in `tests/integration_nats.rs` against a real NATS server.
+//! Drives the public surface (`NatsTestBroker`, `NatsTestPublisher`, `NatsTestSubscriber`)
+//! without going through any harness, to keep failures localised. The published-log assertions use
+//! the free `ruststream::testing::expect_published`. `JetStream` edge-case semantics live in
+//! `tests/integration_nats.rs` against a real NATS server.
 
 #![cfg(feature = "testing")]
 
@@ -11,12 +12,20 @@ use std::time::Duration;
 use futures::{Stream, StreamExt};
 use ruststream::{
     BatchSubscriber, Broker, DescribeServer, Headers, IncomingMessage, OutgoingMessage,
-    Partitioned, Publisher, RequestReply, Subscriber, testing::TestClient,
+    Partitioned, Publisher, RequestReply, Subscriber, testing::expect_published,
 };
 use ruststream_nats::{
     NatsError, PARTITION_KEY_HEADER, SubscribeOptions,
-    testing::{NatsTestBroker, NatsTestClient, NatsTestMessage},
+    testing::{NatsTestBroker, NatsTestMessage},
 };
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use ruststream::runtime::{AppInfo, HandlerResult, RustStream};
+use ruststream::subscriber;
+use ruststream::testing::TestApp;
+use serde::{Deserialize, Serialize};
 
 const WAIT: Duration = Duration::from_secs(1);
 
@@ -227,22 +236,23 @@ async fn headers_are_propagated_to_subscribers() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_client_drives_expect_published() {
-    let client = NatsTestClient::start().await.expect("start");
-    TestClient::publish(&client, "events", b"first")
+async fn broker_observes_published_log() {
+    let broker = NatsTestBroker::new();
+    let publisher = broker.publisher();
+    publisher
+        .publish(OutgoingMessage::new("events", b"first"))
         .await
         .expect("publish first");
-    TestClient::publish(&client, "events", b"second")
+    publisher
+        .publish(OutgoingMessage::new("events", b"second"))
         .await
         .expect("publish second");
-    let observed = client
-        .expect_published("events", 2, Duration::from_secs(1))
-        .await
-        .expect("expect_published");
+
+    let observed = expect_published(&broker, "events", 2, Duration::from_secs(1)).await;
     assert_eq!(observed.len(), 2);
     assert_eq!(observed[0].payload(), b"first");
     assert_eq!(observed[1].payload(), b"second");
-    client.shutdown().await.expect("shutdown");
+    broker.shutdown().await.expect("shutdown");
 }
 
 // Regression: 0.2 took the receiver out of an Option in `stream()` and panicked on the second
@@ -280,23 +290,25 @@ async fn stream_can_be_reentered() {
 async fn describe_server_returns_nats_protocol() {
     let broker = NatsTestBroker::new();
     // The testing broker does not connect to a server, but describe_server should still return
-    // a spec with "nats" as the protocol.
+    // a spec with "nats" as the protocol and no host (in-process).
     let spec = broker.describe_server();
     assert_eq!(spec.protocol, "nats");
+    assert_eq!(spec.host, None);
 }
 
 #[tokio::test]
 async fn partition_key_header_is_surfaced() {
-    let client = NatsTestClient::start().await.expect("start");
-    let mut sub = client.subscribe("events").await.expect("subscribe");
+    let broker = NatsTestBroker::new();
+    let mut sub = broker
+        .subscribe(SubscribeOptions::new("events"))
+        .await
+        .expect("subscribe");
 
     let mut headers = Headers::new();
     headers.insert(PARTITION_KEY_HEADER, "tenant-a");
 
-    client
+    broker
         .publisher()
-        .await
-        .expect("publisher")
         .publish(OutgoingMessage::new("events", b"payload").with_headers(headers))
         .await
         .expect("publish");
@@ -313,16 +325,19 @@ async fn partition_key_header_is_surfaced() {
         Some(b"tenant-a".as_slice())
     );
     msg.ack().await.ok();
-    client.shutdown().await.expect("shutdown");
+    broker.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
 async fn batch_subscriber_yields_non_empty_batches() {
-    let client = NatsTestClient::start().await.expect("start");
-    let publisher = client.publisher().await.expect("publisher");
+    let broker = NatsTestBroker::new();
+    let publisher = broker.publisher();
 
     // Open the subscription before publishing so messages are buffered.
-    let mut sub = client.subscribe("batch").await.expect("subscribe");
+    let mut sub = broker
+        .subscribe(SubscribeOptions::new("batch"))
+        .await
+        .expect("subscribe");
 
     for i in 0u8..5 {
         publisher
@@ -343,18 +358,19 @@ async fn batch_subscriber_yields_non_empty_batches() {
     for msg in batch {
         msg.ack().await.ok();
     }
-    client.shutdown().await.expect("shutdown");
+    broker.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
 async fn partition_key_absent_yields_none() {
-    let client = NatsTestClient::start().await.expect("start");
-    let mut sub = client.subscribe("events.bare").await.expect("subscribe");
-
-    client
-        .publisher()
+    let broker = NatsTestBroker::new();
+    let mut sub = broker
+        .subscribe(SubscribeOptions::new("events.bare"))
         .await
-        .expect("publisher")
+        .expect("subscribe");
+
+    broker
+        .publisher()
         .publish(OutgoingMessage::new("events.bare", b"payload"))
         .await
         .expect("publish");
@@ -368,14 +384,17 @@ async fn partition_key_absent_yields_none() {
 
     assert_eq!(Partitioned::partition_key(&msg), None);
     msg.ack().await.ok();
-    client.shutdown().await.expect("shutdown");
+    broker.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
 async fn batch_drains_in_publish_order() {
-    let client = NatsTestClient::start().await.expect("start");
-    let publisher = client.publisher().await.expect("publisher");
-    let mut sub = client.subscribe("batch.order").await.expect("subscribe");
+    let broker = NatsTestBroker::new();
+    let publisher = broker.publisher();
+    let mut sub = broker
+        .subscribe(SubscribeOptions::new("batch.order"))
+        .await
+        .expect("subscribe");
 
     let count = 5u8;
     for i in 0..count {
@@ -397,16 +416,19 @@ async fn batch_drains_in_publish_order() {
         assert_eq!(msg.payload(), &[u8::try_from(i).expect("count fits u8")]);
         msg.ack().await.ok();
     }
-    client.shutdown().await.expect("shutdown");
+    broker.shutdown().await.expect("shutdown");
 }
 
 // Same re-entry contract as `stream()`: dropping the batch stream and calling `batches()` again
 // must keep working.
 #[tokio::test]
 async fn batches_can_be_reentered() {
-    let client = NatsTestClient::start().await.expect("start");
-    let publisher = client.publisher().await.expect("publisher");
-    let mut sub = client.subscribe("batch.reenter").await.expect("subscribe");
+    let broker = NatsTestBroker::new();
+    let publisher = broker.publisher();
+    let mut sub = broker
+        .subscribe(SubscribeOptions::new("batch.reenter"))
+        .await
+        .expect("subscribe");
 
     publisher
         .publish(OutgoingMessage::new("batch.reenter", b"one"))
@@ -445,5 +467,80 @@ async fn batches_can_be_reentered() {
     for msg in batch {
         msg.ack().await.ok();
     }
-    client.shutdown().await.expect("shutdown");
+    broker.shutdown().await.expect("shutdown");
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct Order {
+    id: u64,
+}
+
+#[subscriber("orders")]
+async fn ack_order(order: &Order) -> HandlerResult {
+    let _ = order;
+    HandlerResult::Ack
+}
+
+/// Counts how many times the retry handler ran, wired as typed app state.
+#[derive(Clone, Default)]
+struct Attempts(Arc<AtomicUsize>);
+
+#[subscriber("retry")]
+async fn retry_then_ack(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> HandlerResult {
+    let _ = order;
+    // Requeue once, then ack: exercises `nack(requeue = true)` -> `enqueued` re-count balanced
+    // against the delivery's `Drop` -> `consumed` decrement.
+    if ctx.state().0.fetch_add(1, Ordering::SeqCst) == 0 {
+        HandlerResult::retry()
+    } else {
+        HandlerResult::Ack
+    }
+}
+
+// The harness installs its coordinator into `NatsTestBroker`, so `publish` must drive the in-process
+// reaction to quiescence (every `enqueued` balanced by a `consumed`) before returning.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_app_drives_nats_test_broker_to_quiescence() {
+    let app =
+        RustStream::new(AppInfo::new("svc", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
+            b.include(ack_order);
+        });
+    let tb = TestApp::start(app).await.expect("start");
+
+    tb.broker::<NatsTestBroker>()
+        .publish("orders", &Order { id: 1 })
+        .await
+        .expect("publish must drive the reaction to quiescence");
+
+    tb.broker::<NatsTestBroker>()
+        .subscriber("orders")
+        .assert_called_once()
+        .with(&Order { id: 1 })
+        .settled(HandlerResult::Ack);
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+// A requeue re-enqueues a fresh delivery, so the harness must still reach quiescence: the second
+// delivery's ack balances the count. The handler is called exactly twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_app_requeue_stays_balanced() {
+    let app = RustStream::new(AppInfo::new("svc", "0.1.0"))
+        .on_startup(|()| async { Ok::<_, std::convert::Infallible>(Attempts::default()) })
+        .with_broker(NatsTestBroker::new(), |b| {
+            b.include(retry_then_ack);
+        });
+    let tb = TestApp::start(app).await.expect("start");
+
+    tb.broker::<NatsTestBroker>()
+        .publish("retry", &Order { id: 7 })
+        .await
+        .expect("publish must drive the requeue reaction to quiescence");
+
+    tb.broker::<NatsTestBroker>()
+        .subscriber("retry")
+        .assert_called(2)
+        .settled(HandlerResult::Ack);
+
+    tb.shutdown().await.expect("shutdown");
 }

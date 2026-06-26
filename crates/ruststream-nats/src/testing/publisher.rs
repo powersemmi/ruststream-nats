@@ -59,6 +59,7 @@ impl Publisher for NatsTestPublisher {
             msg.name().to_owned(),
             Bytes::copy_from_slice(msg.payload()),
             msg.headers().clone(),
+            self.state.coordinator().as_ref(),
         );
         Ok(())
     }

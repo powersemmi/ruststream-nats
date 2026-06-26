@@ -422,8 +422,8 @@ async fn app_describe_server_reports_live_address() {
     let spec = broker.describe_server();
     assert_eq!(spec.protocol, "nats");
     assert!(
-        !spec.host.is_empty(),
-        "host must be non-empty after connect"
+        spec.host.as_deref().is_some_and(|host| !host.is_empty()),
+        "host must be present and non-empty after connect"
     );
 
     running.stop().await;

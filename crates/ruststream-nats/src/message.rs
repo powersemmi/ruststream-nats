@@ -79,6 +79,16 @@ impl JetStreamMessage {
         let headers = headers_from_nats(inner.message.headers.as_ref());
         Self { inner, headers }
     }
+
+    /// The native `JetStream` delivery metadata (stream/consumer name and sequences, redelivery
+    /// count, pending count), parsed from the `$JS.ACK` reply subject.
+    ///
+    /// Returns `None` when the reply subject is absent or malformed - i.e. the underlying
+    /// `async_nats` parse failed - so a caller building a context can fall back to "no metadata"
+    /// rather than surfacing an error on the per-delivery hot path.
+    pub(crate) fn info(&self) -> Option<async_nats::jetstream::message::Info<'_>> {
+        self.inner.info().ok()
+    }
 }
 
 fn empty_headers() -> &'static Headers {

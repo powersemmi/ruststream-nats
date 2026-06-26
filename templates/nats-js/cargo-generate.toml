@@ -1,0 +1,8 @@
+# cargo-generate manifest for the NATS JetStream RustStream starter.
+#
+# Render it with:
+#   cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nats-js --name my-service
+#
+# `{{project-name}}` (the --name value) is a cargo-generate built-in; no placeholders need declaring.
+[template]
+description = "A NATS JetStream RustStream starter service (durable pull consumer)"

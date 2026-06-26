@@ -42,6 +42,15 @@ serde = { version = "1", features = ["derive"] }
 ruststream-nats = { version = "0.4", features = ["testing"] }
 ```
 
+## Scaffold
+
+Generate a ready-to-run service with [`cargo generate`](https://github.com/cargo-generate/cargo-generate) - `nats` for a Core NATS starter, `nats-js` for a durable JetStream consumer:
+
+```bash
+cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nats --name my-service
+cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nats-js --name my-service
+```
+
 ## Write a service
 
 ```rust

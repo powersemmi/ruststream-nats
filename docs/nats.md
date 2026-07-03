@@ -6,8 +6,8 @@ subscribers, routing, codecs, middleware), see the
 [RustStream documentation](https://powersemmi.github.io/ruststream/).
 
 ```toml
-ruststream = { version = "0.4", features = ["macros"] }
-ruststream-nats = "0.4"
+ruststream = { version = "0.5", features = ["macros"] }
+ruststream-nats = "0.5"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -85,7 +85,7 @@ The `testing` feature ships `NatsTestBroker`: an in-process broker with real NAT
 implements `ruststream::testing::TestableBroker`, so the same broker drives the `TestApp` harness
 and the conformance suite; inject traffic with `broker.inject(OutgoingMessage::new(..))` and assert
 on published output with the free `ruststream::testing::expect_published`. See
-[Testing handlers against in-memory NATS](https://powersemmi.github.io/ruststream/latest/guides/testing/#testing-handlers-against-in-memory-nats).
+[Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
 JetStream edge cases (durable resume, `ack_wait` redelivery, retention) are not simulated; test
 them against a real server, gated behind `NATS_TEST_URL`.

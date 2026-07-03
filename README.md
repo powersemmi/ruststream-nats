@@ -34,12 +34,12 @@
 
 ```toml
 [dependencies]
-ruststream = { version = "0.4", features = ["macros", "json"] }
-ruststream-nats = "0.4"
+ruststream = { version = "0.5", features = ["macros", "json"] }
+ruststream-nats = "0.5"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-nats = { version = "0.4", features = ["testing"] }
+ruststream-nats = { version = "0.5", features = ["testing"] }
 ```
 
 ## Scaffold
@@ -54,7 +54,7 @@ cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nat
 ## Write a service
 
 ```rust
-use ruststream::runtime::{AppInfo, HandlerResult, RustStream};
+use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
 use ruststream::subscriber;
 use ruststream_nats::NatsBroker;
 use serde::Deserialize;
@@ -71,7 +71,7 @@ async fn handle(order: &Order) -> HandlerResult {
 }
 
 #[ruststream::app]
-fn app() -> RustStream {
+fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0"))
         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| b.include(handle))
 }
@@ -120,11 +120,12 @@ ruststream-nats/
 │   └── ruststream-nats/        the published crate
 │       └── examples/           runnable nats_* examples (docs-site snippet sources)
 ├── docs/                       the documentation site (MkDocs Material)
+├── templates/                  cargo-generate scaffolds (nats, nats-js)
 ├── mkdocs.yml                  docs site config
 └── Cargo.toml                  workspace
 ```
 
-The path dependency on the sibling `ruststream` repository assumes the repos live next to each other; published builds resolve against the crates.io version range (`ruststream = ">=0.3.0, <0.4.0"`).
+The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.5.0, <0.6.0"`).
 
 ## Documentation
 

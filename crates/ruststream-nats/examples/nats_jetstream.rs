@@ -24,7 +24,7 @@
 //!
 //! [`include_on`]: ruststream::runtime::BrokerScope::include_on
 
-use ruststream::runtime::{AppInfo, HandlerResult, RustStream};
+use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
 use ruststream::subscriber;
 use ruststream_nats::{NatsBroker, SubscribeOptions};
 use serde::Deserialize;
@@ -51,7 +51,7 @@ async fn audit(order: &Order) -> HandlerResult {
 // --8<-- [end:decorator]
 
 #[ruststream::app]
-fn app() -> RustStream {
+fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {

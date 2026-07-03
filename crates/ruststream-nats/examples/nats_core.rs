@@ -18,7 +18,7 @@
 //! ```
 
 // --8<-- [start:handler]
-use ruststream::runtime::{AppInfo, HandlerResult, RustStream};
+use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
 use ruststream::subscriber;
 use ruststream_nats::NatsBroker;
 use serde::Deserialize;
@@ -37,7 +37,7 @@ async fn handle(order: &Order) -> HandlerResult {
 
 // --8<-- [start:app]
 #[ruststream::app]
-fn app() -> RustStream {
+fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {

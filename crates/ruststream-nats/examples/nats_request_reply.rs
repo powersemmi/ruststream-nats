@@ -11,12 +11,12 @@
 
 use std::time::Duration;
 
-use ruststream::runtime::{AppInfo, RustStream};
+use ruststream::runtime::{App, AppInfo, RustStream};
 use ruststream::{IncomingMessage, OutgoingMessage, RequestReply};
 use ruststream_nats::{NatsBroker, NatsError};
 
 #[ruststream::app]
-fn app() -> RustStream {
+fn app() -> impl App {
     let broker = NatsBroker::new("nats://localhost:4222");
     // Built before connect: the publisher resolves the live connection on first use.
     let requester = broker.publisher();

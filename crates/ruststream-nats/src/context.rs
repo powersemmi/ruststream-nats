@@ -118,12 +118,12 @@ const _: fn() = || {
 /// `const` value (for use at the call site, `ctx.context(keys::STREAM_SEQUENCE)`). Every key reads
 /// `None` on a core delivery or when the `JetStream` reply subject could not be parsed.
 pub mod keys {
-    use ruststream::Field;
+    use ruststream::{ContextField, Field};
 
     use super::JetStreamContext;
 
     /// Selector for the stream sequence number; see [`STREAM_SEQUENCE`].
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     pub struct StreamSequence;
 
     /// The monotonically increasing sequence the message holds within its stream.
@@ -136,8 +136,16 @@ pub mod keys {
         }
     }
 
+    impl ContextField for StreamSequence {
+        type Context = JetStreamContext;
+        type Value = Option<u64>;
+        fn read(self, cx: &JetStreamContext) -> Option<u64> {
+            cx.info.as_ref().map(|i| i.stream_sequence)
+        }
+    }
+
     /// Selector for the consumer sequence number; see [`CONSUMER_SEQUENCE`].
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     pub struct ConsumerSequence;
 
     /// The sequence the message holds within this consumer's delivery stream.
@@ -150,8 +158,16 @@ pub mod keys {
         }
     }
 
+    impl ContextField for ConsumerSequence {
+        type Context = JetStreamContext;
+        type Value = Option<u64>;
+        fn read(self, cx: &JetStreamContext) -> Option<u64> {
+            cx.info.as_ref().map(|i| i.consumer_sequence)
+        }
+    }
+
     /// Selector for the server-side delivery count; see [`DELIVERED`].
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     pub struct Delivered;
 
     /// The number of times the server has delivered this message.
@@ -167,8 +183,16 @@ pub mod keys {
         }
     }
 
+    impl ContextField for Delivered {
+        type Context = JetStreamContext;
+        type Value = Option<i64>;
+        fn read(self, cx: &JetStreamContext) -> Option<i64> {
+            cx.info.as_ref().map(|i| i.delivered)
+        }
+    }
+
     /// Selector for the pending count; see [`PENDING`].
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     pub struct Pending;
 
     /// The number of messages the server still has pending for this consumer behind this one.
@@ -181,8 +205,16 @@ pub mod keys {
         }
     }
 
+    impl ContextField for Pending {
+        type Context = JetStreamContext;
+        type Value = Option<u64>;
+        fn read(self, cx: &JetStreamContext) -> Option<u64> {
+            cx.info.as_ref().map(|i| i.pending)
+        }
+    }
+
     /// Selector for the stream name; see [`STREAM`].
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     pub struct Stream;
 
     /// The name of the stream this message was delivered from.
@@ -195,8 +227,16 @@ pub mod keys {
         }
     }
 
+    impl ContextField for Stream {
+        type Context = JetStreamContext;
+        type Value = Option<String>;
+        fn read(self, cx: &JetStreamContext) -> Option<String> {
+            cx.info.as_ref().map(|i| i.stream.clone())
+        }
+    }
+
     /// Selector for the consumer name; see [`CONSUMER`].
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     pub struct Consumer;
 
     /// The name of the durable (or ephemeral) consumer this message was delivered through.
@@ -206,6 +246,14 @@ pub mod keys {
         type Value<'a> = Option<&'a str>;
         fn get(self, cx: &JetStreamContext) -> Option<&str> {
             cx.info.as_ref().map(|i| i.consumer.as_str())
+        }
+    }
+
+    impl ContextField for Consumer {
+        type Context = JetStreamContext;
+        type Value = Option<String>;
+        fn read(self, cx: &JetStreamContext) -> Option<String> {
+            cx.info.as_ref().map(|i| i.consumer.clone())
         }
     }
 }
@@ -240,6 +288,19 @@ mod tests {
         assert_eq!(PENDING.get(&cx), Some(5));
         assert_eq!(STREAM.get(&cx), Some("ORDERS"));
         assert_eq!(CONSUMER.get(&cx), Some("orders-worker"));
+    }
+
+    #[test]
+    fn context_field_keys_yield_owned_values() {
+        use ruststream::ContextField;
+
+        use super::keys::{Consumer, Delivered, Stream, StreamSequence};
+
+        let cx = populated();
+        assert_eq!(StreamSequence.read(&cx), Some(42));
+        assert_eq!(Delivered.read(&cx), Some(3));
+        assert_eq!(Stream.read(&cx), Some("ORDERS".to_owned()));
+        assert_eq!(Consumer.read(&cx), Some("orders-worker".to_owned()));
     }
 
     #[test]

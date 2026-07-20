@@ -126,7 +126,7 @@ ruststream-nats/
 └── Cargo.toml                  workspace
 ```
 
-The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.5.0, <0.6.0"`).
+The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.5.2, <0.6.0"`).
 
 ## Documentation
 

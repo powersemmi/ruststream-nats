@@ -119,9 +119,9 @@ ruststream-nats/
 ├── crates/
 │   └── ruststream-nats/        the published crate
 │       └── examples/           runnable nats_* examples (docs-site snippet sources)
-├── docs/                       the documentation site (MkDocs Material)
+├── docs/                       the documentation site (properdocs + Material)
 ├── templates/                  cargo-generate scaffolds (nats, nats-js)
-├── mkdocs.yml                  docs site config
+├── properdocs.yml              docs site config
 └── Cargo.toml                  workspace
 ```
 
@@ -129,13 +129,13 @@ The crate resolves `ruststream` against the crates.io version range (`ruststream
 
 ## Documentation
 
-The NATS broker docs live at [powersemmi.github.io/ruststream-nats](https://powersemmi.github.io/ruststream-nats/) and are built from `docs/` with MkDocs Material. The runnable `nats_*` examples under `crates/ruststream-nats/examples/` are embedded into the docs as snippets, so they stay compiled and in sync. Framework concepts (subscribers, routing, codecs, middleware, the CLI) live in the [RustStream docs](https://powersemmi.github.io/ruststream/).
+The NATS broker docs live at [powersemmi.github.io/ruststream-nats](https://powersemmi.github.io/ruststream-nats/) and are built from `docs/` with properdocs and the Material theme. The runnable `nats_*` examples under `crates/ruststream-nats/examples/` are embedded into the docs as snippets, so they stay compiled and in sync. Framework concepts (subscribers, routing, codecs, middleware, the CLI) live in the [RustStream docs](https://powersemmi.github.io/ruststream/).
 
 Build the site locally:
 
 ```bash
 pip install -r docs/requirements.txt
-mkdocs serve
+properdocs serve
 ```
 
 ## Contributing

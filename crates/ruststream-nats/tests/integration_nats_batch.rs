@@ -8,6 +8,7 @@
 //!
 //! Skipped unless `NATS_TEST_URL` is set (see `integration_nats.rs` for how to run).
 
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -89,7 +90,7 @@ async fn pull_batch_caps_batch_size() {
             SubscribeOptions::new(fx.subject.clone())
                 .jetstream(fx.stream.clone())
                 .filter_subject(fx.subject.clone())
-                .pull_batch(3)
+                .pull_batch(NonZeroUsize::new(3).unwrap())
                 .pull_expires(Duration::from_millis(300)),
         )
         .await
@@ -134,7 +135,7 @@ async fn batches_skip_empty_fetches() {
             SubscribeOptions::new(fx.subject.clone())
                 .jetstream(fx.stream.clone())
                 .filter_subject(fx.subject.clone())
-                .pull_batch(10)
+                .pull_batch(NonZeroUsize::new(10).unwrap())
                 .pull_expires(Duration::from_millis(150)),
         )
         .await
@@ -188,7 +189,7 @@ async fn batches_can_be_reentered() {
             SubscribeOptions::new(fx.subject.clone())
                 .jetstream(fx.stream.clone())
                 .filter_subject(fx.subject.clone())
-                .pull_batch(10)
+                .pull_batch(NonZeroUsize::new(10).unwrap())
                 .pull_expires(Duration::from_millis(300)),
         )
         .await

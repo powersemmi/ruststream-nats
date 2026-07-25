@@ -3,6 +3,7 @@
 //! Designed to map cleanly onto the `#[subscriber(...)]` proc-macro from Phase 10 -- each
 //! keyword in the macro corresponds to a single builder method on this struct.
 
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 pub use async_nats::jetstream::consumer::DeliverPolicy;
@@ -44,7 +45,7 @@ pub struct SubscribeOptions {
     ack_wait: Option<Duration>,
     max_ack_pending: Option<i64>,
     deliver_policy: Option<DeliverPolicy>,
-    pull_batch: Option<usize>,
+    pull_batch: Option<NonZeroUsize>,
     pull_expires: Option<Duration>,
 }
 
@@ -115,7 +116,10 @@ impl SubscribeOptions {
     /// [`BatchSubscriber::batches`](ruststream::BatchSubscriber::batches): one batch is one
     /// `JetStream` fetch of up to this many messages. Defaults to 100. Has no effect on the
     /// per-message [`Subscriber::stream`](ruststream::Subscriber::stream) path.
-    pub const fn pull_batch(mut self, max_messages: usize) -> Self {
+    ///
+    /// The bound is [`NonZeroUsize`]: a zero-message fetch returns empty immediately, which
+    /// would spin the batch loop at full CPU without ever yielding an item.
+    pub const fn pull_batch(mut self, max_messages: NonZeroUsize) -> Self {
         self.pull_batch = Some(max_messages);
         self
     }
@@ -123,6 +127,9 @@ impl SubscribeOptions {
     /// How long one `JetStream` fetch waits before delivering a partial (or retrying an empty)
     /// batch. Defaults to 5 seconds. Has no effect on the per-message
     /// [`Subscriber::stream`](ruststream::Subscriber::stream) path.
+    ///
+    /// Must be non-zero: a fetch that expires immediately turns the batch loop into a hot
+    /// spin. [`validate`](Self::validate) rejects `Duration::ZERO`.
     pub const fn pull_expires(mut self, expires: Duration) -> Self {
         self.pull_expires = Some(expires);
         self
@@ -171,7 +178,7 @@ impl SubscribeOptions {
     }
 
     pub(crate) fn pull_batch_or_default(&self) -> usize {
-        self.pull_batch.unwrap_or(100)
+        self.pull_batch.map_or(100, NonZeroUsize::get)
     }
 
     pub(crate) fn pull_expires_or_default(&self) -> Duration {
@@ -187,7 +194,9 @@ impl SubscribeOptions {
     /// * `queue_group` is set together with `jetstream` (queue groups are Core-only);
     /// * any `JetStream`-only field (`durable`, `ack_wait`, `max_ack_pending`,
     ///   `deliver_policy`, `filter_subject`, `pull_batch`, `pull_expires`) is set without
-    ///   `jetstream`.
+    ///   `jetstream`;
+    /// * `pull_expires` is zero (an immediately-expiring fetch would spin the batch loop at
+    ///   full CPU without yielding anything).
     pub fn validate(&self) -> Result<(), NatsError> {
         if self.subject.is_empty() {
             return Err(NatsError::InvalidOptions(
@@ -215,6 +224,13 @@ impl SubscribeOptions {
                 )));
             }
         }
+        if self.pull_expires == Some(Duration::ZERO) {
+            return Err(NatsError::InvalidOptions(
+                "pull_expires must be non-zero; an immediately-expiring fetch busy-loops \
+                 without yielding a batch"
+                    .into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -240,6 +256,16 @@ mod tests {
         let opts = SubscribeOptions::new("orders.*");
         opts.validate().expect("core ok");
         assert!(!opts.is_jetstream());
+    }
+
+    #[test]
+    fn zero_pull_expires_is_rejected() {
+        let err = SubscribeOptions::new("orders.*")
+            .jetstream("ORDERS")
+            .pull_expires(Duration::ZERO)
+            .validate()
+            .expect_err("an immediately-expiring fetch must be rejected");
+        assert!(matches!(err, NatsError::InvalidOptions(_)));
     }
 
     #[test]
@@ -293,7 +319,7 @@ mod tests {
     #[test]
     fn pull_batch_without_jetstream_is_rejected() {
         let err = SubscribeOptions::new("x")
-            .pull_batch(64)
+            .pull_batch(NonZeroUsize::new(64).unwrap())
             .validate()
             .unwrap_err();
         assert!(matches!(err, NatsError::InvalidOptions(msg) if msg.contains("pull_batch")));

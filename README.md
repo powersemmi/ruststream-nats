@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://github.com/powersemmi/ruststream-nats/actions/workflows/ci.yml"><img src="https://github.com/powersemmi/ruststream-nats/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://crates.io/crates/ruststream-nats"><img src="https://img.shields.io/crates/v/ruststream-nats.svg" alt="crates.io"></a>
+  <a href="https://crates.io/crates/ruststream-nats"><img src="https://img.shields.io/crates/dr/ruststream-nats" alt="Recent downloads"></a>
   <a href="https://docs.rs/ruststream-nats"><img src="https://img.shields.io/docsrs/ruststream-nats" alt="docs.rs"></a>
   <img src="https://img.shields.io/badge/MSRV-1.85-blue.svg" alt="MSRV 1.85">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License">
@@ -119,23 +120,23 @@ ruststream-nats/
 ├── crates/
 │   └── ruststream-nats/        the published crate
 │       └── examples/           runnable nats_* examples (docs-site snippet sources)
-├── docs/                       the documentation site (MkDocs Material)
+├── docs/                       the documentation site (properdocs + Material)
 ├── templates/                  cargo-generate scaffolds (nats, nats-js)
-├── mkdocs.yml                  docs site config
+├── properdocs.yml              docs site config
 └── Cargo.toml                  workspace
 ```
 
-The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.5.0, <0.6.0"`).
+The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.5.2, <0.6.0"`).
 
 ## Documentation
 
-The NATS broker docs live at [powersemmi.github.io/ruststream-nats](https://powersemmi.github.io/ruststream-nats/) and are built from `docs/` with MkDocs Material. The runnable `nats_*` examples under `crates/ruststream-nats/examples/` are embedded into the docs as snippets, so they stay compiled and in sync. Framework concepts (subscribers, routing, codecs, middleware, the CLI) live in the [RustStream docs](https://powersemmi.github.io/ruststream/).
+The NATS broker docs live at [powersemmi.github.io/ruststream-nats](https://powersemmi.github.io/ruststream-nats/) and are built from `docs/` with properdocs and the Material theme. The runnable `nats_*` examples under `crates/ruststream-nats/examples/` are embedded into the docs as snippets, so they stay compiled and in sync. Framework concepts (subscribers, routing, codecs, middleware, the CLI) live in the [RustStream docs](https://powersemmi.github.io/ruststream/).
 
 Build the site locally:
 
 ```bash
 pip install -r docs/requirements.txt
-mkdocs serve
+properdocs serve
 ```
 
 ## Contributing

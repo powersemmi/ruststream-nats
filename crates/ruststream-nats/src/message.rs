@@ -2,6 +2,7 @@
 
 use std::fmt::{Debug, Formatter};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use async_nats::jetstream::AckKind;
 use ruststream::{AckError, Headers, IncomingMessage, Partitioned};
@@ -138,6 +139,37 @@ impl IncomingMessage for NatsMessage {
             }
         }
     }
+
+    /// Whether this delivery can honor a native delayed redelivery.
+    ///
+    /// `true` for every `JetStream` delivery: the protocol carries the delay in the negative
+    /// acknowledgement itself, so no opt-in infrastructure is needed. Core NATS has no
+    /// acknowledgement at all, so a core delivery reports `false` and the runtime applies its
+    /// broker-agnostic deferred re-publish instead.
+    fn supports_nack_after(&self) -> bool {
+        matches!(self, Self::JetStream(_))
+    }
+
+    /// Redelivers this message no sooner than `delay`, natively: `JetStream`'s negative
+    /// acknowledgement takes the delay as its argument (`-NAK {"delay": ns}`), so the server holds
+    /// the message for that long and then redelivers it on this consumer. Nothing is re-published
+    /// and no copy is made, so the delivery count, the stream sequence, and the payload all stay
+    /// the ones the message was first delivered with.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AckError::Unsupported`] on a core (non-JetStream) delivery, and
+    /// [`AckError::Broker`] when the acknowledgement cannot be sent.
+    async fn nack_after(self, delay: Duration) -> Result<(), AckError> {
+        match self {
+            Self::Core(_) => Err(AckError::Unsupported),
+            Self::JetStream(m) => m
+                .inner
+                .ack_with(AckKind::Nak(Some(delay)))
+                .await
+                .map_err(|err| AckError::Broker(format_err(err))),
+        }
+    }
 }
 
 /// The well-known header key for per-message routing / partitioning.
@@ -194,5 +226,23 @@ mod tests {
     #[test]
     fn core_message_without_reply_has_no_reply_to() {
         assert_eq!(core_message(None).headers().reply_to(), None);
+    }
+
+    // Core NATS has no acknowledgement, so it must not claim the native delay: the runtime reads
+    // this to decide between the native `-NAK {"delay"}` and its own deferred re-publish. The
+    // JetStream arm answers `true` and is exercised against a real server (a
+    // `async_nats::jetstream::Message` has no in-process constructor).
+    #[test]
+    fn core_delivery_does_not_claim_native_delayed_redelivery() {
+        assert!(!core_message(None).supports_nack_after());
+    }
+
+    #[tokio::test]
+    async fn core_delivery_reports_nack_after_unsupported() {
+        let err = core_message(None)
+            .nack_after(Duration::from_secs(1))
+            .await
+            .expect_err("core NATS cannot honor a delayed redelivery");
+        assert!(matches!(err, AckError::Unsupported));
     }
 }

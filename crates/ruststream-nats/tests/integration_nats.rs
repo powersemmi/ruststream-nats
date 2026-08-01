@@ -19,9 +19,9 @@
 //! run, so leftovers are inert.
 
 use std::convert::Infallible;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use async_nats::jetstream::Context as JetStreamContext;
 use async_nats::jetstream::stream::Config as StreamConfig;
@@ -323,6 +323,76 @@ async fn app_jetstream_retry_outcome_redelivers() {
     assert!(
         attempts.load(Ordering::SeqCst) >= 2,
         "the first delivery was NAK'd, so the broker must redeliver",
+    );
+
+    running.stop().await;
+    outside.shutdown().await.expect("outside connection closes");
+}
+
+/// How long the delayed-retry handler asks `JetStream` to hold the message.
+const RETRY_DELAY: Duration = Duration::from_secs(1);
+
+// `retry_after` on JetStream must ride the protocol's own delayed negative acknowledgement rather
+// than the runtime's deferred re-publish fallback. The two are told apart by the clock: the
+// fallback (which this scope does not even configure a publisher for) requeues immediately, while
+// the native `-NAK {"delay"}` holds the message server-side. The measurement spans handler entry to
+// handler entry, so it also contains the nack round trip and can only overshoot the delay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app_jetstream_retry_after_is_delayed_natively() {
+    let Some(outside) = outside_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("delay");
+    let stream = unique_stream("DELAY");
+
+    let (tx, mut rx) = mpsc::channel::<Duration>(8);
+    // Written once, by the first delivery; the redelivery reads it to measure the gap.
+    let first_seen: Arc<OnceLock<Instant>> = Arc::new(OnceLock::new());
+    let handler_seen = Arc::clone(&first_seen);
+    let app = jetstream_app("it-delay", &outside, &stream, &subject, {
+        let subject = subject.clone();
+        let stream = stream.clone();
+        move |b| {
+            b.subscribe(
+                SubscribeOptions::new(subject.clone())
+                    .jetstream(stream)
+                    .filter_subject(subject),
+                move |_msg: &NatsMessage, _ctx: &mut Context| {
+                    let seen = Arc::clone(&handler_seen);
+                    let tx = tx.clone();
+                    async move {
+                        match seen.get() {
+                            None => {
+                                let _ = seen.set(Instant::now());
+                                HandlerResult::retry_after(RETRY_DELAY)
+                            }
+                            Some(first) => {
+                                tx.send(first.elapsed()).await.ok();
+                                HandlerResult::Ack
+                            }
+                        }
+                    }
+                },
+                HandlerMetadata::raw("delay"),
+            );
+        }
+    });
+    let running = start_app(app).await;
+
+    outside
+        .publisher(NatsPublish)
+        .publish(OutgoingMessage::new(subject.as_str(), b"not-yet"))
+        .await
+        .expect("publish failed");
+
+    let elapsed = timeout(RETRY_DELAY * 8, rx.recv())
+        .await
+        .expect("timed out waiting for the delayed redelivery")
+        .expect("handler channel closed");
+    assert!(
+        elapsed >= RETRY_DELAY,
+        "the redelivery came back after {elapsed:?}, before the {RETRY_DELAY:?} the handler asked \
+         for; a native delayed NAK holds the message server-side",
     );
 
     running.stop().await;

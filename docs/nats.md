@@ -69,6 +69,19 @@ Beyond `jetstream` and `durable`, the builder carries `queue_group` (Core NATS l
 settings `pull_batch` / `pull_expires`. Incompatible combinations (for example `queue_group`
 together with `jetstream`) are rejected with a clear error before any I/O.
 
+### Acknowledgement and delayed retry
+
+A JetStream delivery settles natively: `HandlerResult::Ack` acks it, `HandlerResult::retry()` sends
+a negative acknowledgement, and `HandlerResult::drop()` terminates it. Delayed retry is native too:
+`HandlerResult::retry_after(delay)` carries the delay in the negative acknowledgement itself, so the
+server holds the message for that long and then redelivers it on the same consumer - with its stream
+sequence and its delivery count intact, since nothing is re-published and no copy is made. The
+runtime's broker-agnostic deferred re-publish is not involved.
+
+Core NATS has no acknowledgement concept at all. A core delivery reports `AckError::Unsupported`
+rather than pretending, and declines the native delay, so a `retry_after` there falls back to the
+runtime's deferred re-publish.
+
 ## Publishing
 
 A publisher is a policy plus the live connection. The policy holds no connection, so it is

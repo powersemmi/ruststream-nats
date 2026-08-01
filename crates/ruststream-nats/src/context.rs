@@ -4,7 +4,7 @@
 //! and consumer sequence numbers, the server-side redelivery count, and the pending count - by
 //! declaring [`JetStreamContext`] as its per-delivery context and reading fields with the
 //! compile-time [`keys`]. The runtime builds the context once per delivery via
-//! [`BuildContext`](ruststream::BuildContext); resolving a key is a direct field read, with no
+//! [`BuildContext`]; resolving a key is a direct field read, with no
 //! hashing, boxing, or downcasting.
 //!
 //! This is purely additive: the default context is `()` (no fields), so existing handlers are

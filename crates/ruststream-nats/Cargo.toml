@@ -16,7 +16,9 @@ workspace = true
 
 [features]
 default = []
-testing = ["ruststream/conformance", "ruststream/testing"]
+# The in-process test broker (TestableBroker + TestApp support). The conformance harness is a
+# broker-author tool and stays in this repo's dev-dependencies, not in the user-facing feature.
+testing = ["ruststream/testing"]
 
 [dev-dependencies]
 # The conformance harness drives the testing-feature broker; macros + json power the runnable

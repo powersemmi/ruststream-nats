@@ -23,7 +23,7 @@ use crate::{
     },
 };
 
-/// Subscriber returned by [`crate::testing::NatsTestBroker::subscribe`].
+/// Subscriber returned by [`crate::testing::ConnectedNatsTestBroker::subscribe_with`].
 pub struct NatsTestSubscriber {
     state: Arc<TestBrokerState>,
     id: SubscriptionId,
@@ -207,7 +207,7 @@ impl BatchSubscriber for NatsTestSubscriber {
     type Batch = Vec<NatsTestMessage>;
 
     /// Drains whatever is already buffered in the subscriber's channel (at least one, at most
-    /// [`TEST_BATCH_LIMIT`] messages). Blocks until the first message arrives, matching the
+    /// 256 messages). Blocks until the first message arrives, matching the
     /// behaviour of the real [`crate::NatsSubscriber`] Core path.
     fn batches(&mut self) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
         let requeue = self.requeue.clone();

@@ -35,8 +35,11 @@ struct JetStreamKind {
 /// A NATS subscription.
 ///
 /// Backed transparently by either a Core subscription (no ack) or a `JetStream` pull consumer
-/// (full ack/nack/term). Construct via [`crate::NatsBroker::subscribe`] with
-/// [`crate::SubscribeOptions`].
+/// (full ack/nack/term). Construct via [`ConnectedNatsBroker::subscribe_with`] with
+/// [`SubscribeOptions`], or let the runtime resolve a [`SubscribeOptions`] source at startup.
+///
+/// [`ConnectedNatsBroker::subscribe_with`]: crate::ConnectedNatsBroker::subscribe_with
+/// [`SubscribeOptions`]: crate::SubscribeOptions
 pub struct NatsSubscriber {
     subject: String,
     kind: SubscriberKind,
@@ -132,7 +135,7 @@ impl BatchSubscriber for NatsSubscriber {
     /// [`pull_expires`](crate::SubscribeOptions::pull_expires) before delivering a partial batch
     /// (an empty fetch is retried, so the stream never yields empty batches). Core NATS has no
     /// wire-level batching; there a batch is whatever the client has already buffered locally
-    /// (at least one message, at most [`CORE_BATCH_LIMIT`]), with no added latency.
+    /// (at least one message, at most 256), with no added latency.
     ///
     /// Drive a subscriber through either [`Subscriber::stream`] or `batches`, not both at once:
     /// on `JetStream` each issues its own pull requests, so deliveries would be split between

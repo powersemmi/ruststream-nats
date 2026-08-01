@@ -8,7 +8,7 @@
 //! Start a NATS server first (`nats-server`, or `docker run -p 4222:4222 nats`), then:
 //!
 //! ```text
-//! cargo run --example nats_core --features macros,json -- run
+//! cargo run --example nats_core -- run
 //! ```
 //!
 //! Publish an order from another terminal with the NATS CLI:

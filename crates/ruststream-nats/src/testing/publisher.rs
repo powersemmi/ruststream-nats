@@ -1,4 +1,5 @@
-//! [`NatsTestPublisher`]: `Publisher` + `RequestReply` on top of the in-memory router.
+//! The in-process publish pair: the [`NatsTestPublish`] policy and its live
+//! [`NatsTestPublisher`].
 
 use std::{
     sync::{
@@ -9,12 +10,12 @@ use std::{
 };
 
 use bytes::Bytes;
-use ruststream::{OutgoingMessage, Publisher, RequestReply};
+use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply};
 
 use crate::{
     error::NatsError,
     testing::{
-        broker::{TestBrokerState, validate_publish_subject},
+        broker::{ConnectedNatsTestBroker, TestBrokerState, validate_publish_subject},
         router::Delivery,
         subject::SubjectPattern,
         subscriber::NatsTestMessage,
@@ -32,7 +33,42 @@ fn new_inbox_subject() -> String {
     format!("_INBOX.{nanos:x}{seq:x}")
 }
 
-/// Publisher returned by [`crate::testing::NatsTestBroker::publisher`].
+/// The in-process publish policy, mirroring [`NatsPublish`](crate::NatsPublish) on the real
+/// broker.
+///
+/// # Examples
+///
+/// ```
+/// use ruststream_nats::testing::NatsTestPublish;
+///
+/// let policy = NatsTestPublish;
+/// # let _ = policy;
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[must_use]
+pub struct NatsTestPublish;
+
+impl NatsTestPublish {
+    /// Pairs the policy with the connected test broker.
+    #[must_use]
+    pub fn bind(self, connected: &ConnectedNatsTestBroker) -> NatsTestPublisher {
+        NatsTestPublisher::new(connected.state())
+    }
+}
+
+impl PublishPolicy<ConnectedNatsTestBroker> for NatsTestPublish {
+    type Live = NatsTestPublisher;
+
+    async fn pair(self, connected: &ConnectedNatsTestBroker) -> Result<Self::Live, PairError> {
+        Ok(self.bind(connected))
+    }
+}
+
+/// Publisher returned by
+/// [`ConnectedNatsTestBroker::publisher`](crate::testing::ConnectedNatsTestBroker::publisher).
+///
+/// Like the real publisher it aliases the transport and may outlive it: after the broker shuts
+/// down every publish reports [`NatsError::Closed`].
 #[derive(Clone)]
 pub struct NatsTestPublisher {
     state: Arc<TestBrokerState>,
@@ -54,6 +90,7 @@ impl Publisher for NatsTestPublisher {
     type Error = NatsError;
 
     async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+        self.state.ensure_live(msg.name())?;
         validate_publish_subject(msg.name())?;
         self.state.router.publish(
             msg.name().to_owned(),

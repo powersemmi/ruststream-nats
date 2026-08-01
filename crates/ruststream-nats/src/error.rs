@@ -20,21 +20,30 @@ pub enum NatsError {
     #[error("nats subscribe error: {0}")]
     Subscribe(#[source] Box<dyn StdError + Send + Sync>),
 
-    /// JetStream-specific operation failed (consumer creation, ack, etc.).
+    /// JetStream-specific operation failed (consumer creation, publish acknowledgement, ack).
     #[error("nats jetstream error: {0}")]
     JetStream(#[source] Box<dyn StdError + Send + Sync>),
+
+    /// Draining the connection during
+    /// [`shutdown`](ruststream::ConnectedBroker::shutdown) failed.
+    #[error("nats shutdown error: {0}")]
+    Shutdown(#[source] Box<dyn StdError + Send + Sync>),
 
     /// A request / reply operation timed out before a reply was received.
     #[error("nats request timed out")]
     RequestTimeout,
 
-    /// An operation needing a live connection ran before [`crate::NatsBroker`] was connected.
+    /// A publisher aliasing the connection was used after the broker shut down.
     ///
-    /// A broker built with [`NatsBroker::new`](crate::NatsBroker::new) connects lazily: the runtime
-    /// calls [`Broker::connect`](ruststream::Broker::connect) at startup. Publishing or subscribing
-    /// before that returns this error.
-    #[error("nats broker is not connected")]
-    NotConnected,
+    /// The lifecycle ladder makes misuse through the owner's handle a compile error:
+    /// [`ConnectedBroker::shutdown`](ruststream::ConnectedBroker::shutdown) consumes the connected
+    /// broker. Publishers paired off it earlier keep aliasing the closed connection, so their
+    /// operations report this instead of silently succeeding against a dead connection.
+    #[error("nats connection is closed; cannot reach {subject}")]
+    Closed {
+        /// The subject the closed publisher was asked to reach.
+        subject: String,
+    },
 
     /// The supplied [`crate::SubscribeOptions`] combine fields in a way the broker cannot honour
     /// (for example `durable(_)` without `jetstream(_)`, or `queue_group(_)` together with

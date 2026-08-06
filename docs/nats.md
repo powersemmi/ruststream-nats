@@ -67,7 +67,7 @@ follows the chain), which is what the `nats-js` CLI scaffold generates:
 Beyond `jetstream` and `durable`, the builder carries `queue_group` (Core NATS load balancing),
 `filter_subject`, `ack_wait`, `max_ack_pending`, `deliver_policy`, and the pull-consumer batch
 settings `pull_batch` / `pull_expires`. Incompatible combinations (for example `queue_group`
-together with `jetstream`) are rejected with a clear error before any I/O.
+together with `jetstream`) are rejected with an error before any I/O.
 
 ### Acknowledgement and delayed retry
 
@@ -79,8 +79,8 @@ sequence and its delivery count intact, since nothing is re-published and no cop
 runtime's broker-agnostic deferred re-publish is not involved.
 
 Core NATS has no acknowledgement concept at all. A core delivery reports `AckError::Unsupported`
-rather than pretending, and declines the native delay, so a `retry_after` there falls back to the
-runtime's deferred re-publish.
+rather than silently succeeding, and declines the native delay, so a `retry_after` there falls back
+to the runtime's deferred re-publish.
 
 ## Publishing
 

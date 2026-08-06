@@ -1,7 +1,7 @@
 //! Builder describing one NATS subscription, Core or `JetStream`.
 //!
-//! Designed to map cleanly onto the `#[subscriber(...)]` proc-macro from Phase 10 -- each
-//! keyword in the macro corresponds to a single builder method on this struct.
+//! It is the crate's [`SubscriptionSource`]: the value a `#[subscriber(..)]` handler carries, and
+//! the value the runtime resolves once against the connected broker at startup.
 
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -9,9 +9,9 @@ use std::time::Duration;
 pub use async_nats::jetstream::consumer::DeliverPolicy;
 use ruststream::SubscriptionSource;
 
-use crate::{NatsBroker, error::NatsError, subscriber::NatsSubscriber};
+use crate::{ConnectedNatsBroker, error::NatsError, subscriber::NatsSubscriber};
 
-/// Builder describing one subscription against [`crate::NatsBroker`] (or its test counterpart).
+/// Builder describing one subscription against a connected NATS broker (or its test counterpart).
 ///
 /// Core NATS is the default. Calling [`SubscribeOptions::jetstream`] switches to a `JetStream`
 /// pull-consumer; remaining `JetStream`-only fields (durable name, ack wait, max ack pending,
@@ -235,15 +235,18 @@ impl SubscribeOptions {
     }
 }
 
-impl SubscriptionSource<NatsBroker> for SubscribeOptions {
+impl SubscriptionSource<ConnectedNatsBroker> for SubscribeOptions {
     type Subscriber = NatsSubscriber;
 
     fn name(&self) -> &str {
         self.subject()
     }
 
-    async fn subscribe(self, broker: &NatsBroker) -> Result<Self::Subscriber, NatsError> {
-        broker.subscribe(self).await
+    async fn subscribe(
+        self,
+        connected: &ConnectedNatsBroker,
+    ) -> Result<Self::Subscriber, NatsError> {
+        connected.subscribe_with(self).await
     }
 }
 

@@ -1,115 +1,227 @@
-//! The [`NatsBroker`]: the entry point of the `async-nats` integration.
+//! The broker ladder: [`NatsBroker`] -> [`ConnectedNatsBroker`] -> [`ClosedNatsBroker`].
+//!
+//! Construction is synchronous and I/O-free; the connection is dialled by the consuming
+//! [`Broker::connect`], and the connected form is the only value carrying a publish or subscribe
+//! surface. [`ConnectedBroker::shutdown`] consumes it in turn and returns the terminal witness.
 
-use async_nats::jetstream::consumer::{PullConsumer, pull::Config as ConsumerConfig};
-use async_nats::{Client, ToServerAddrs};
-use ruststream::{Broker, DescribeServer, ServerSpec, Subscribe};
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use tokio::sync::OnceCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use async_nats::jetstream;
+use async_nats::jetstream::consumer::{PullConsumer, pull::Config as ConsumerConfig};
+use async_nats::{Client, ConnectOptions};
+use ruststream::{Broker, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe};
 
 use crate::{
-    error::NatsError, publisher::NatsPublisher, subscribe_options::SubscribeOptions,
+    error::NatsError,
+    publisher::{NatsPublish, NatsPublishPolicy},
+    subscribe_options::SubscribeOptions,
     subscriber::NatsSubscriber,
 };
 
-/// A NATS broker handle backed by an [`async_nats::Client`].
+/// The live connection, shared by the connected broker and every publisher paired off it.
+pub(crate) struct NatsConnection {
+    client: Client,
+    closed: AtomicBool,
+}
+
+impl Debug for NatsConnection {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NatsConnection")
+            .field("closed", &self.closed.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
+impl NatsConnection {
+    fn new(client: Client) -> Arc<Self> {
+        Arc::new(Self {
+            client,
+            closed: AtomicBool::new(false),
+        })
+    }
+
+    /// The client, or [`NatsError::Closed`] once the broker has shut down.
+    ///
+    /// Why this stays a runtime check: publishers paired before the shutdown alias the connection
+    /// and outlive it, and the typed ladder can only rule out misuse through the owner's handle.
+    pub(crate) fn live_client(&self, subject: &str) -> Result<&Client, NatsError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(NatsError::Closed {
+                subject: subject.to_owned(),
+            });
+        }
+        Ok(&self.client)
+    }
+
+    pub(crate) const fn client(&self) -> &Client {
+        &self.client
+    }
+}
+
+/// A NATS broker: configuration captured, no I/O performed yet.
 ///
-/// Construct it synchronously with [`NatsBroker::new`] and let the runtime connect it at startup,
-/// or eagerly with [`NatsBroker::connect`] / [`NatsBroker::from_client`]. The handle is cheap to
-/// clone, and clones share one connection. Subscriptions (Core or `JetStream`) are opened uniformly
-/// through [`NatsBroker::subscribe`] with [`SubscribeOptions`]; the broker dispatches internally on
-/// whether the options describe a `JetStream` consumer.
+/// [`new`](Self::new) is synchronous and records only the server address, so a NATS service is
+/// assembled with the synchronous `#[ruststream::app]` builder like any other broker. The runtime
+/// calls [`Broker::connect`] once at startup, which consumes this value and yields the
+/// [`ConnectedNatsBroker`] witness: subscriptions and publishers exist only from there, so "not
+/// connected" is not representable.
 ///
-/// # Lazy connection
-///
-/// [`new`](Self::new) performs no I/O: it only records the server address. The connection is opened
-/// by [`Broker::connect`], which the runtime calls once at startup, so a NATS service can be built
-/// with the synchronous `#[ruststream::app]` macro. Publishers handed out before `connect` resolve
-/// the shared connection on first use; operations that need it before `connect` return
-/// [`NatsError::NotConnected`].
+/// Authentication, TLS, and other client tuning ride an
+/// [`async_nats::ConnectOptions`](ConnectOptions) attached with [`with_options`](Self::with_options);
+/// building the options performs no I/O either.
 ///
 /// # Examples
 ///
-/// ```no_run
-/// use ruststream_nats::{NatsBroker, SubscribeOptions};
-///
-/// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let broker = NatsBroker::connect("nats://localhost:4222").await?;
-/// let publisher = broker.publisher();
-/// let core_sub = broker.subscribe(SubscribeOptions::new("orders.created")).await?;
-/// let js_sub = broker
-///     .subscribe(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("worker"))
-///     .await?;
-/// # let _ = (publisher, core_sub, js_sub);
-/// broker.shutdown_client().await;
-/// # Ok(())
-/// # }
 /// ```
-#[derive(Clone)]
+/// use ruststream_nats::NatsBroker;
+///
+/// let broker = NatsBroker::new("nats://localhost:4222");
+/// # let _ = broker;
+/// ```
+#[derive(Debug, Clone)]
+#[must_use]
 pub struct NatsBroker {
-    client: Arc<OnceCell<Client>>,
-    addrs: Option<String>,
-}
-
-impl std::fmt::Debug for NatsBroker {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NatsBroker").finish_non_exhaustive()
-    }
+    addrs: String,
+    options: ConnectOptions,
 }
 
 impl NatsBroker {
-    /// Creates a broker that connects to `addrs` when [`Broker::connect`] runs.
-    ///
-    /// Synchronous and performs no I/O, so it slots into the `#[ruststream::app]` builder; the
-    /// connection is opened lazily at startup. See the [type docs](Self#lazy-connection).
-    #[must_use]
+    /// Records the server address (`nats://host:port`, or a comma-separated list). No I/O.
     pub fn new(addrs: impl Into<String>) -> Self {
         Self {
-            client: Arc::new(OnceCell::new()),
-            addrs: Some(addrs.into()),
+            addrs: addrs.into(),
+            options: ConnectOptions::default(),
         }
     }
 
-    /// Connects to a NATS server eagerly, returning an already-connected broker.
+    /// Sets the `async-nats` connection options used when [`Broker::connect`] dials the server:
+    /// credentials, TLS, ping interval, reconnect behaviour.
     ///
-    /// # Errors
+    /// # Examples
     ///
-    /// Returns [`NatsError::Connect`] when the connection cannot be established.
-    pub async fn connect(addrs: impl ToServerAddrs) -> Result<Self, NatsError> {
-        let client = async_nats::connect(addrs)
-            .await
-            .map_err(|err| NatsError::Connect(Box::new(err)))?;
-        Ok(Self::from_client(client))
+    /// ```
+    /// use async_nats::ConnectOptions;
+    /// use ruststream_nats::NatsBroker;
+    ///
+    /// let broker = NatsBroker::new("nats://localhost:4222")
+    ///     .with_options(ConnectOptions::with_user_and_password("svc".into(), "secret".into()));
+    /// # let _ = broker;
+    /// ```
+    pub fn with_options(mut self, options: ConnectOptions) -> Self {
+        self.options = options;
+        self
     }
 
-    /// Wraps an already-connected `async-nats` client. Useful for advanced configuration
-    /// (TLS, credentials, custom options).
+    /// The configured server address.
+    #[must_use]
+    pub fn addrs(&self) -> &str {
+        &self.addrs
+    }
+}
+
+impl Broker for NatsBroker {
+    type Error = NatsError;
+    type Connected = ConnectedNatsBroker;
+
+    async fn connect(self) -> Result<Self::Connected, Self::Error> {
+        let client = self
+            .options
+            .connect(self.addrs.as_str())
+            .await
+            .map_err(|err| NatsError::Connect(Box::new(err)))?;
+        Ok(ConnectedNatsBroker::from_client(client))
+    }
+}
+
+/// `DescribeServer` reports the configured NATS address, which is what the `AsyncAPI` document
+/// records for the service. The live coordinates the server reports once connected are on
+/// [`ConnectedNatsBroker`].
+impl DescribeServer for NatsBroker {
+    fn describe_server(&self) -> ServerSpec {
+        let host = self
+            .addrs
+            .trim_start_matches("nats://")
+            .trim_start_matches("tls://")
+            .to_owned();
+        ServerSpec::new(host, "nats")
+    }
+}
+
+/// The typed witness that [`Broker::connect`] succeeded: holds the live connection.
+///
+/// Everything connection-bound hangs off this value: subscriptions ([`Subscribe`],
+/// [`SubscribeOptions`]) and publishers ([`publisher`](Self::publisher)).
+/// [`ConnectedBroker::shutdown`] consumes it, so a publish or subscribe after shutdown is a
+/// compile error for the owner of the handle.
+#[derive(Debug)]
+pub struct ConnectedNatsBroker {
+    connection: Arc<NatsConnection>,
+}
+
+impl ConnectedNatsBroker {
+    /// Adopts an already-connected `async-nats` client as the connected form.
+    ///
+    /// The escape hatch for a client built outside the framework (a shared client, or an
+    /// authentication flow `ConnectOptions` cannot express). Prefer
+    /// [`NatsBroker::with_options`] where it fits: only the plain [`NatsBroker`] slots into the
+    /// synchronous app builder.
     #[must_use]
     pub fn from_client(client: Client) -> Self {
         Self {
-            client: Arc::new(OnceCell::new_with(Some(client))),
-            addrs: None,
+            connection: NatsConnection::new(client),
         }
     }
 
-    /// Returns a clone of the underlying client. Useful for advanced operations not yet covered
-    /// by the wrapper, including building a `JetStream` context directly.
+    /// A live publisher for `policy`.
     ///
-    /// # Panics
+    /// [`NatsPublish`] pairs into the Core NATS publisher (request/reply included);
+    /// [`JetStreamPublish`](crate::JetStreamPublish) pairs into the `JetStream` publisher, which
+    /// awaits the stream's publish acknowledgement. Both are cheap to build and cheap to clone.
     ///
-    /// Panics if the broker has not connected yet (built with [`new`](Self::new) and
-    /// [`Broker::connect`] not run). Call it after startup, or build with [`connect`](Self::connect)
-    /// / [`from_client`](Self::from_client).
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ruststream::Broker;
+    /// use ruststream_nats::{JetStreamPublish, NatsBroker, NatsPublish};
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// let connected = NatsBroker::new("nats://localhost:4222").connect().await?;
+    /// let core = connected.publisher(NatsPublish);
+    /// let jetstream = connected.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
+    /// # let _ = (core, jetstream);
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
-    pub fn client(&self) -> Client {
-        self.client
-            .get()
-            .cloned()
-            .expect("NatsBroker::client() called before connect()")
+    pub fn publisher<P: NatsPublishPolicy>(&self, policy: P) -> P::Live {
+        policy.bind(self)
     }
 
-    /// The connected client, or [`NatsError::NotConnected`] when `connect` has not run yet.
-    fn connected(&self) -> Result<Client, NatsError> {
-        self.client.get().cloned().ok_or(NatsError::NotConnected)
+    /// A clone of the underlying `async-nats` client, for operations this crate does not wrap.
+    #[must_use]
+    pub fn client(&self) -> Client {
+        self.connection.client().clone()
+    }
+
+    /// The coordinates the server announced on this connection, which may differ from the
+    /// configured address (a cluster route, a discovered peer).
+    #[must_use]
+    pub fn server_spec(&self) -> ServerSpec {
+        let info = self.connection.client().server_info();
+        ServerSpec::new(format!("{}:{}", info.host, info.port), "nats")
+    }
+
+    /// A `JetStream` context on this connection, for stream and consumer administration
+    /// (creating the stream a consumer reads, purging it, deleting it on teardown).
+    #[must_use]
+    pub fn jetstream(&self) -> jetstream::Context {
+        jetstream::new(self.client())
+    }
+
+    pub(crate) fn connection(&self) -> &Arc<NatsConnection> {
+        &self.connection
     }
 
     /// Opens a subscription described by `opts`. Selects Core or `JetStream` based on whether
@@ -117,11 +229,13 @@ impl NatsBroker {
     ///
     /// # Errors
     ///
-    /// Returns [`NatsError::NotConnected`] when the broker has not connected,
-    /// [`NatsError::InvalidOptions`] when `opts` mixes Core and `JetStream` fields incompatibly,
-    /// [`NatsError::Subscribe`] when the broker rejects a Core subscription, or
+    /// Returns [`NatsError::InvalidOptions`] when `opts` mixes Core and `JetStream` fields
+    /// incompatibly, [`NatsError::Subscribe`] when the broker rejects a Core subscription, or
     /// [`NatsError::JetStream`] when the `JetStream` stream or consumer cannot be resolved.
-    pub async fn subscribe(&self, opts: SubscribeOptions) -> Result<NatsSubscriber, NatsError> {
+    pub async fn subscribe_with(
+        &self,
+        opts: SubscribeOptions,
+    ) -> Result<NatsSubscriber, NatsError> {
         opts.validate()?;
         if opts.is_jetstream() {
             self.subscribe_jetstream(opts).await
@@ -131,7 +245,7 @@ impl NatsBroker {
     }
 
     async fn subscribe_core(&self, opts: SubscribeOptions) -> Result<NatsSubscriber, NatsError> {
-        let client = self.connected()?;
+        let client = self.connection.live_client(opts.subject())?;
         let subject = opts.subject().to_owned();
         let inner = if let Some(queue) = opts.queue_group_ref() {
             client
@@ -144,6 +258,14 @@ impl NatsBroker {
                 .await
                 .map_err(|err| NatsError::Subscribe(Box::new(err)))?
         };
+        // Core `SUB` is written without waiting for the server, so without this round trip a
+        // producer on another connection can publish into a subscription the server has not
+        // registered yet and the message is simply lost. Startup pays one flush per subscription;
+        // the JetStream path needs none, its consumer creation is already a request/reply.
+        client
+            .flush()
+            .await
+            .map_err(|err| NatsError::Subscribe(Box::new(err)))?;
         Ok(NatsSubscriber::from_core(subject, inner))
     }
 
@@ -151,7 +273,8 @@ impl NatsBroker {
         &self,
         opts: SubscribeOptions,
     ) -> Result<NatsSubscriber, NatsError> {
-        let ctx = async_nats::jetstream::new(self.connected()?);
+        let client = self.connection.live_client(opts.subject())?.clone();
+        let ctx = jetstream::new(client);
         let stream_name = opts
             .stream_ref()
             .expect("validated jetstream option")
@@ -187,103 +310,86 @@ impl NatsBroker {
             opts.pull_expires_or_default(),
         ))
     }
-
-    /// Returns a publisher bound to this broker.
-    ///
-    /// It may be created before [`Broker::connect`] (for example inside the `with_broker` builder);
-    /// it resolves the shared connection when it first publishes.
-    #[must_use]
-    pub fn publisher(&self) -> NatsPublisher {
-        NatsPublisher::new(Arc::clone(&self.client))
-    }
-
-    /// Closes the underlying NATS connection. A no-op if the broker never connected.
-    pub async fn shutdown_client(&self) {
-        if let Some(client) = self.client.get() {
-            let _ = client.drain().await;
-        }
-    }
 }
 
-impl Broker for NatsBroker {
+impl ConnectedBroker for ConnectedNatsBroker {
     type Error = NatsError;
+    type Closed = ClosedNatsBroker;
 
-    async fn connect(&self) -> Result<(), Self::Error> {
-        self.client
-            .get_or_try_init(|| async {
-                let addrs = self.addrs.as_deref().ok_or(NatsError::NotConnected)?;
-                async_nats::connect(addrs)
-                    .await
-                    .map_err(|err| NatsError::Connect(Box::new(err)))
-            })
-            .await?;
-        Ok(())
-    }
-
-    async fn shutdown(&self) -> Result<(), Self::Error> {
-        self.shutdown_client().await;
-        Ok(())
+    async fn shutdown(self) -> Result<Self::Closed, Self::Error> {
+        // Marked closed before draining: a publisher aliasing the connection must not slip a
+        // message into a connection that is already going away.
+        self.connection.closed.store(true, Ordering::Release);
+        let client = self.connection.client();
+        let stats = client.statistics();
+        client
+            .drain()
+            .await
+            .map_err(|err| NatsError::Shutdown(Box::new(err)))?;
+        Ok(ClosedNatsBroker {
+            messages_sent: stats.out_messages.load(Ordering::Relaxed),
+            messages_received: stats.in_messages.load(Ordering::Relaxed),
+            connects: stats.connects.load(Ordering::Relaxed),
+        })
     }
 }
 
-// By-name subscription capability: the runtime's default `Name` source resolves through this for
-// the common Core-subject case. The explicit `NatsBroker::` path on the inherent `subscribe`
-// disambiguates it from this trait method (inherent methods win, but spell it out for clarity).
-#[allow(clippy::use_self)]
-impl Subscribe for NatsBroker {
+// By-subject subscription capability: the runtime's default `Name` source resolves through this
+// for the common Core-subject case.
+impl Subscribe for ConnectedNatsBroker {
     type Subscriber = NatsSubscriber;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
-        NatsBroker::subscribe(self, SubscribeOptions::new(name)).await
+        self.subscribe_with(SubscribeOptions::new(name)).await
     }
 }
 
-/// `DescribeServer` reports the address of the NATS server this broker is connected to.
+impl DefaultPublish for ConnectedNatsBroker {
+    type Policy = NatsPublish;
+}
+
+/// The terminal witness returned by shutting down a [`ConnectedNatsBroker`].
 ///
-/// Only meaningful after [`Broker::connect`]; on an unconnected broker the spec falls back to the
-/// configured address string (or an empty host if none was provided and a pre-connected client was
-/// passed in).
-impl DescribeServer for NatsBroker {
-    fn describe_server(&self) -> ServerSpec {
-        // Prefer live server_info once connected; fall back to the configured address.
-        if let Some(client) = self.client.get() {
-            let info = client.server_info();
-            return ServerSpec::new(format!("{}:{}", info.host, info.port), "nats");
-        }
-        let host = self
-            .addrs
-            .as_deref()
-            .unwrap_or("")
-            .trim_start_matches("nats://")
-            .trim_start_matches("tls://")
-            .to_owned();
-        ServerSpec::new(host, "nats")
+/// It has no publish or subscribe surface; it carries the drained connection's counters as plain
+/// data, for a shutdown log line or a teardown assertion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClosedNatsBroker {
+    messages_sent: u64,
+    messages_received: u64,
+    connects: u64,
+}
+
+impl ClosedNatsBroker {
+    /// How many messages the connection published over its lifetime.
+    #[must_use]
+    pub const fn messages_sent(&self) -> u64 {
+        self.messages_sent
+    }
+
+    /// How many messages the connection received over its lifetime.
+    #[must_use]
+    pub const fn messages_received(&self) -> u64 {
+        self.messages_received
+    }
+
+    /// How many times the connection was established, counting reconnects.
+    #[must_use]
+    pub const fn connects(&self) -> u64 {
+        self.connects
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use ruststream::{OutgoingMessage, Publisher};
-
     use super::*;
 
-    // `new` records the address without connecting, so operations needing the connection fail
-    // cleanly until `Broker::connect` runs. No server required.
-    #[tokio::test]
-    async fn new_does_not_connect() {
+    // `new` records the address without connecting: no server is needed to build the broker or to
+    // describe it, which is what lets it slot into the synchronous app builder.
+    #[test]
+    fn new_performs_no_io_and_describes_the_configured_address() {
         let broker = NatsBroker::new("nats://127.0.0.1:4222");
-
-        let publish_err = broker
-            .publisher()
-            .publish(OutgoingMessage::new("orders", b"{}".as_slice()))
-            .await
-            .unwrap_err();
-        assert!(matches!(publish_err, NatsError::NotConnected));
-
-        let subscribe_err = broker
-            .subscribe(SubscribeOptions::new("orders"))
-            .await
-            .unwrap_err();
-        assert!(matches!(subscribe_err, NatsError::NotConnected));
+        let spec = broker.describe_server();
+        assert_eq!(spec.protocol, "nats");
+        assert_eq!(spec.host.as_deref(), Some("127.0.0.1:4222"));
     }
 }

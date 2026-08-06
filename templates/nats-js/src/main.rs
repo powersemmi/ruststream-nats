@@ -24,7 +24,6 @@ use ruststream_nats::NatsBroker;
 fn app() -> impl App {
     RustStream::new(AppInfo::new("{{project-name}}", "0.1.0"))
         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
-            let router = routes::orders(b.broker());
-            b.include_router(router);
+            b.include_router(routes::orders());
         })
 }

@@ -9,7 +9,7 @@
   <a href="https://crates.io/crates/ruststream-nats"><img src="https://img.shields.io/crates/v/ruststream-nats.svg" alt="crates.io"></a>
   <a href="https://crates.io/crates/ruststream-nats"><img src="https://img.shields.io/crates/dr/ruststream-nats" alt="Recent downloads"></a>
   <a href="https://docs.rs/ruststream-nats"><img src="https://img.shields.io/docsrs/ruststream-nats" alt="docs.rs"></a>
-  <img src="https://img.shields.io/badge/MSRV-1.85-blue.svg" alt="MSRV 1.85">
+  <img src="https://img.shields.io/badge/MSRV-1.88-blue.svg" alt="MSRV 1.88">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License">
   <a href="https://t.me/ruststream_community"><img src="https://img.shields.io/badge/-Telegram-blue?logo=telegram&label=News" alt="Telegram news channel"></a>
   <a href="https://t.me/ruststream_communuty_ru_chat"><img src="https://img.shields.io/badge/-Telegram-blue?logo=telegram&label=RU" alt="Telegram RU chat"></a>
@@ -26,21 +26,21 @@
 ## Features
 
 - **Core NATS and JetStream.** Subscribe by subject, or describe a durable JetStream consumer with the `SubscribeOptions` builder (stream, durable name, queue group, filter subject, ack wait, max ack pending, deliver policy).
-- **Lazy startup contract.** `NatsBroker::new(url)` is synchronous and does no I/O; the runtime connects once at startup, so the broker composes with `#[ruststream::app]`. An existing connection plugs in via `NatsBroker::from_client`.
-- **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively; Core NATS reports `AckError::Unsupported` instead of pretending.
-- **Request/reply.** `NatsPublisher` implements the `RequestReply` capability over native NATS request semantics.
-- **In-process test broker.** The `testing` feature ships `NatsTestBroker`, a handler-stub transport that reproduces Core routing (no server, no JetStream simulation), implements `ruststream::testing::TestableBroker`, and passes the framework's conformance suite in process.
+- **A typed lifecycle.** `NatsBroker::new(url)` is synchronous and does no I/O, so the broker composes with `#[ruststream::app]`; the runtime dials once at startup through the consuming `connect`, which yields the `ConnectedNatsBroker` that carries the whole subscribe and publish surface. `shutdown` consumes that in turn, so a publish or subscribe after shutdown does not compile. Client tuning (credentials, TLS) rides `NatsBroker::with_options`; an already-connected client plugs in via `ConnectedNatsBroker::from_client`.
+- **Publishing split by transport.** `NatsPublish` pairs into the Core NATS publisher (fire-and-forget, plus `RequestReply`); `JetStreamPublish` pairs into the JetStream publisher, which awaits the stream's acknowledgement and can declare stream expectations.
+- **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively, delayed redelivery included: a handler's `HandlerResult::retry_after(delay)` becomes JetStream's own delayed negative acknowledgement, so the server holds the message and redelivers it with its stream sequence and delivery count intact - no re-publish, no copy. Core NATS has no acknowledgement at all and reports `AckError::Unsupported` instead of pretending.
+- **In-process test broker.** The `testing` feature ships `NatsTestBroker`, a handler-stub transport that follows the same ladder and reproduces Core routing (no server, no JetStream simulation), implements `ruststream::testing::TestableBroker`, and passes the framework's conformance suite in process.
 
 ## Install
 
 ```toml
 [dependencies]
-ruststream = { version = "0.5", features = ["macros", "json"] }
-ruststream-nats = "0.5"
+ruststream = { version = "0.6", features = ["macros", "json"] }
+ruststream-nats = "0.6"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-nats = { version = "0.5", features = ["testing"] }
+ruststream-nats = { version = "0.6", features = ["testing"] }
 ```
 
 ## Scaffold
@@ -96,16 +96,38 @@ b.include_on(
 async fn handle(order: &Order) -> HandlerResult { /* ... */ }
 ```
 
-## Test it
+## Publish
 
-The `testing` feature runs handlers against an in-process NATS stand-in - no server, same routing. Inject a message as an external producer would with `TestableBroker::inject`, then assert on what a handler published with the free `expect_published`:
+A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport:
 
 ```rust
-use ruststream::OutgoingMessage;
+use ruststream_nats::{JetStreamPublish, NatsPublish};
+
+// Core NATS: fire-and-forget, and the RequestReply capability.
+b.after_startup(NatsPublish, async move |publisher| { /* publish / request */ });
+
+// JetStream: each publish waits for the stream's acknowledgement, and the policy states
+// what the stream must look like for the message to be accepted.
+b.after_startup(
+    JetStreamPublish::default().expect_stream("ORDERS"),
+    async move |publisher| {
+        let ack = publisher.publish_ack(msg).await?;
+        println!("stored in {} at sequence {}", ack.stream, ack.sequence);
+        Ok(())
+    },
+);
+```
+
+## Test it
+
+The `testing` feature runs handlers against an in-process NATS stand-in - no server, same routing, same ladder. Inject a message as an external producer would with `TestableBroker::inject`, then assert on what a handler published with the free `expect_published`:
+
+```rust
+use ruststream::{Broker, OutgoingMessage};
 use ruststream::testing::{TestableBroker, expect_published};
 use ruststream_nats::testing::NatsTestBroker;
 
-let broker = NatsTestBroker::new();
+let broker = NatsTestBroker::new().connect().await?;
 broker.inject(OutgoingMessage::new("orders.created", br#"{"id":1}"#));
 let confirmations =
     expect_published(&broker, "confirmations", 1, std::time::Duration::from_secs(1)).await;
@@ -126,7 +148,7 @@ ruststream-nats/
 └── Cargo.toml                  workspace
 ```
 
-The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.5.2, <0.6.0"`).
+The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.6.0, <0.7.0"`).
 
 ## Documentation
 

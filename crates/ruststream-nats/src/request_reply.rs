@@ -20,7 +20,7 @@ impl RequestReply for NatsPublisher {
         msg: OutgoingMessage<'_>,
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
-        let client = self.client_clone()?;
+        let client = self.client_for(msg.name())?;
         let subject = msg.name().to_owned();
         let payload = Bytes::copy_from_slice(msg.payload());
         let headers_owned = headers_to_nats(msg.headers());

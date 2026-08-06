@@ -11,12 +11,12 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use ruststream::{
-    BatchSubscriber, Broker, DescribeServer, Headers, IncomingMessage, OutgoingMessage,
-    Partitioned, Publisher, RequestReply, Subscriber, testing::expect_published,
+    BatchSubscriber, Broker, ConnectedBroker, DescribeServer, Headers, IncomingMessage,
+    OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, testing::expect_published,
 };
 use ruststream_nats::{
     NatsError, PARTITION_KEY_HEADER, SubscribeOptions,
-    testing::{NatsTestBroker, NatsTestMessage},
+    testing::{ConnectedNatsTestBroker, NatsTestBroker, NatsTestMessage, NatsTestPublish},
 };
 
 use std::sync::Arc;
@@ -28,6 +28,12 @@ use ruststream::testing::TestApp;
 use serde::{Deserialize, Serialize};
 
 const WAIT: Duration = Duration::from_secs(1);
+
+/// The in-process ladder, run for every test: synchronous construction then the consuming
+/// `connect`, exactly like the real broker.
+async fn connected() -> ConnectedNatsTestBroker {
+    NatsTestBroker::new().connect().await.expect("connect")
+}
 
 async fn next_payload<S>(stream: &mut S) -> Vec<u8>
 where
@@ -45,14 +51,13 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pub_sub_round_trip_through_broker_traits() {
-    let broker = NatsTestBroker::new();
-    broker.connect().await.expect("connect");
+    let broker = connected().await;
 
     let mut subscriber = broker
-        .subscribe(SubscribeOptions::new("orders.created"))
+        .subscribe_with(SubscribeOptions::new("orders.created"))
         .await
         .expect("subscribe");
-    let publisher = broker.publisher();
+    let publisher = broker.publisher(NatsTestPublish);
 
     publisher
         .publish(OutgoingMessage::new("orders.created", b"o1"))
@@ -69,8 +74,8 @@ async fn pub_sub_round_trip_through_broker_traits() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publisher_validates_subjects() {
-    let broker = NatsTestBroker::new();
-    let publisher = broker.publisher();
+    let broker = connected().await;
+    let publisher = broker.publisher(NatsTestPublish);
     let err = publisher
         .publish(OutgoingMessage::new("orders.*", b"x"))
         .await
@@ -82,18 +87,38 @@ async fn publisher_validates_subjects() {
     );
 }
 
+// A publisher paired before the shutdown aliases the transport and outlives it, so it must report
+// the closed connection rather than route into a dead router - the same contract the real broker
+// honours.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publisher_errors_after_shutdown() {
+    let broker = connected().await;
+    let publisher = broker.publisher(NatsTestPublish);
+
+    broker.shutdown().await.expect("shutdown");
+
+    let err = publisher
+        .publish(OutgoingMessage::new("orders.created", b"too late"))
+        .await
+        .expect_err("publishing through a closed transport must fail");
+    assert!(
+        matches!(&err, NatsError::Closed { subject } if subject == "orders.created"),
+        "the error must name the subject it could not reach, got: {err}",
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wildcard_subscription_receives_matching_subjects() {
-    let broker = NatsTestBroker::new();
+    let broker = connected().await;
     let mut star_sub = broker
-        .subscribe(SubscribeOptions::new("orders.*"))
+        .subscribe_with(SubscribeOptions::new("orders.*"))
         .await
         .expect("subscribe *");
     let mut tail_sub = broker
-        .subscribe(SubscribeOptions::new(">"))
+        .subscribe_with(SubscribeOptions::new(">"))
         .await
         .expect("subscribe >");
-    let publisher = broker.publisher();
+    let publisher = broker.publisher(NatsTestPublish);
 
     publisher
         .publish(OutgoingMessage::new("orders.created", b"a"))
@@ -125,12 +150,12 @@ async fn wildcard_subscription_receives_matching_subjects() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nack_requeue_redelivers_to_same_subscriber() {
-    let broker = NatsTestBroker::new();
+    let broker = connected().await;
     let mut subscriber = broker
-        .subscribe(SubscribeOptions::new("orders"))
+        .subscribe_with(SubscribeOptions::new("orders"))
         .await
         .expect("subscribe");
-    let publisher = broker.publisher();
+    let publisher = broker.publisher(NatsTestPublish);
 
     publisher
         .publish(OutgoingMessage::new("orders", b"once"))
@@ -156,12 +181,12 @@ async fn nack_requeue_redelivers_to_same_subscriber() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_reply_round_trip() {
-    let broker = NatsTestBroker::new();
+    let broker = connected().await;
     let mut responder = broker
-        .subscribe(SubscribeOptions::new("echo"))
+        .subscribe_with(SubscribeOptions::new("echo"))
         .await
         .expect("subscribe echo");
-    let responder_publisher = broker.publisher();
+    let responder_publisher = broker.publisher(NatsTestPublish);
 
     // Background responder: read one request and publish to its reply-to subject.
     let responder_task = tokio::spawn(async move {
@@ -182,7 +207,7 @@ async fn request_reply_round_trip() {
         responder_publisher.publish(reply).await.expect("reply");
     });
 
-    let publisher = broker.publisher();
+    let publisher = broker.publisher(NatsTestPublish);
     let reply = publisher
         .request(
             OutgoingMessage::new("echo", b"hello"),
@@ -197,8 +222,8 @@ async fn request_reply_round_trip() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_times_out_when_no_responder() {
-    let broker = NatsTestBroker::new();
-    let publisher = broker.publisher();
+    let broker = connected().await;
+    let publisher = broker.publisher(NatsTestPublish);
     let err = publisher
         .request(
             OutgoingMessage::new("echo.absent", b"hi"),
@@ -211,12 +236,12 @@ async fn request_times_out_when_no_responder() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn headers_are_propagated_to_subscribers() {
-    let broker = NatsTestBroker::new();
+    let broker = connected().await;
     let mut subscriber = broker
-        .subscribe(SubscribeOptions::new("orders"))
+        .subscribe_with(SubscribeOptions::new("orders"))
         .await
         .expect("subscribe");
-    let publisher = broker.publisher();
+    let publisher = broker.publisher(NatsTestPublish);
 
     let mut headers = Headers::new();
     headers.insert("content-type", "application/json");
@@ -237,8 +262,8 @@ async fn headers_are_propagated_to_subscribers() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn broker_observes_published_log() {
-    let broker = NatsTestBroker::new();
-    let publisher = broker.publisher();
+    let broker = connected().await;
+    let publisher = broker.publisher(NatsTestPublish);
     publisher
         .publish(OutgoingMessage::new("events", b"first"))
         .await
@@ -260,12 +285,12 @@ async fn broker_observes_published_log() {
 // per call) allow re-entry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stream_can_be_reentered() {
-    let broker = NatsTestBroker::new();
+    let broker = connected().await;
     let mut subscriber = broker
-        .subscribe(SubscribeOptions::new("orders"))
+        .subscribe_with(SubscribeOptions::new("orders"))
         .await
         .expect("subscribe");
-    let publisher = broker.publisher();
+    let publisher = broker.publisher(NatsTestPublish);
 
     publisher
         .publish(OutgoingMessage::new("orders", b"one"))
@@ -288,19 +313,18 @@ async fn stream_can_be_reentered() {
 
 #[tokio::test]
 async fn describe_server_returns_nats_protocol() {
-    let broker = NatsTestBroker::new();
-    // The testing broker does not connect to a server, but describe_server should still return
-    // a spec with "nats" as the protocol and no host (in-process).
-    let spec = broker.describe_server();
+    // The in-process broker has no server, so it describes itself as in-process over the "nats"
+    // protocol; the spec is read from the unconnected form, before any I/O would happen.
+    let spec = NatsTestBroker::new().describe_server();
     assert_eq!(spec.protocol, "nats");
     assert_eq!(spec.host, None);
 }
 
 #[tokio::test]
 async fn partition_key_header_is_surfaced() {
-    let broker = NatsTestBroker::new();
+    let broker = connected().await;
     let mut sub = broker
-        .subscribe(SubscribeOptions::new("events"))
+        .subscribe_with(SubscribeOptions::new("events"))
         .await
         .expect("subscribe");
 
@@ -308,7 +332,7 @@ async fn partition_key_header_is_surfaced() {
     headers.insert(PARTITION_KEY_HEADER, "tenant-a");
 
     broker
-        .publisher()
+        .publisher(NatsTestPublish)
         .publish(OutgoingMessage::new("events", b"payload").with_headers(headers))
         .await
         .expect("publish");
@@ -325,17 +349,18 @@ async fn partition_key_header_is_surfaced() {
         Some(b"tenant-a".as_slice())
     );
     msg.ack().await.ok();
+    drop(stream);
     broker.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
 async fn batch_subscriber_yields_non_empty_batches() {
-    let broker = NatsTestBroker::new();
-    let publisher = broker.publisher();
+    let broker = connected().await;
+    let publisher = broker.publisher(NatsTestPublish);
 
     // Open the subscription before publishing so messages are buffered.
     let mut sub = broker
-        .subscribe(SubscribeOptions::new("batch"))
+        .subscribe_with(SubscribeOptions::new("batch"))
         .await
         .expect("subscribe");
 
@@ -346,31 +371,33 @@ async fn batch_subscriber_yields_non_empty_batches() {
             .expect("publish");
     }
 
-    let mut batches = Box::pin(sub.batches());
-    let batch = tokio::time::timeout(WAIT, batches.next())
-        .await
-        .expect("batch within timeout")
-        .expect("stream has next")
-        .expect("ok batch");
+    {
+        let mut batches = Box::pin(sub.batches());
+        let batch = tokio::time::timeout(WAIT, batches.next())
+            .await
+            .expect("batch within timeout")
+            .expect("stream has next")
+            .expect("ok batch");
 
-    assert!(!batch.is_empty(), "batch must contain at least one message");
-    // Ack each message in the batch.
-    for msg in batch {
-        msg.ack().await.ok();
+        assert!(!batch.is_empty(), "batch must contain at least one message");
+        for msg in batch {
+            msg.ack().await.ok();
+        }
     }
+    drop(sub);
     broker.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
 async fn partition_key_absent_yields_none() {
-    let broker = NatsTestBroker::new();
+    let broker = connected().await;
     let mut sub = broker
-        .subscribe(SubscribeOptions::new("events.bare"))
+        .subscribe_with(SubscribeOptions::new("events.bare"))
         .await
         .expect("subscribe");
 
     broker
-        .publisher()
+        .publisher(NatsTestPublish)
         .publish(OutgoingMessage::new("events.bare", b"payload"))
         .await
         .expect("publish");
@@ -384,15 +411,16 @@ async fn partition_key_absent_yields_none() {
 
     assert_eq!(Partitioned::partition_key(&msg), None);
     msg.ack().await.ok();
+    drop(stream);
     broker.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
 async fn batch_drains_in_publish_order() {
-    let broker = NatsTestBroker::new();
-    let publisher = broker.publisher();
+    let broker = connected().await;
+    let publisher = broker.publisher(NatsTestPublish);
     let mut sub = broker
-        .subscribe(SubscribeOptions::new("batch.order"))
+        .subscribe_with(SubscribeOptions::new("batch.order"))
         .await
         .expect("subscribe");
 
@@ -404,18 +432,21 @@ async fn batch_drains_in_publish_order() {
             .expect("publish");
     }
 
-    let mut batches = Box::pin(sub.batches());
-    let batch = tokio::time::timeout(WAIT, batches.next())
-        .await
-        .expect("batch within timeout")
-        .expect("stream has next")
-        .expect("ok batch");
+    {
+        let mut batches = Box::pin(sub.batches());
+        let batch = tokio::time::timeout(WAIT, batches.next())
+            .await
+            .expect("batch within timeout")
+            .expect("stream has next")
+            .expect("ok batch");
 
-    assert!(batch.len() <= usize::from(count));
-    for (i, msg) in batch.into_iter().enumerate() {
-        assert_eq!(msg.payload(), &[u8::try_from(i).expect("count fits u8")]);
-        msg.ack().await.ok();
+        assert!(batch.len() <= usize::from(count));
+        for (i, msg) in batch.into_iter().enumerate() {
+            assert_eq!(msg.payload(), &[u8::try_from(i).expect("count fits u8")]);
+            msg.ack().await.ok();
+        }
     }
+    drop(sub);
     broker.shutdown().await.expect("shutdown");
 }
 
@@ -423,10 +454,10 @@ async fn batch_drains_in_publish_order() {
 // must keep working.
 #[tokio::test]
 async fn batches_can_be_reentered() {
-    let broker = NatsTestBroker::new();
-    let publisher = broker.publisher();
+    let broker = connected().await;
+    let publisher = broker.publisher(NatsTestPublish);
     let mut sub = broker
-        .subscribe(SubscribeOptions::new("batch.reenter"))
+        .subscribe_with(SubscribeOptions::new("batch.reenter"))
         .await
         .expect("subscribe");
 
@@ -454,19 +485,22 @@ async fn batches_can_be_reentered() {
         .publish(OutgoingMessage::new("batch.reenter", b"two"))
         .await
         .expect("publish");
-    let mut batches = Box::pin(sub.batches());
-    let batch = tokio::time::timeout(WAIT, batches.next())
-        .await
-        .expect("batch within timeout")
-        .expect("stream has next")
-        .expect("ok batch");
-    assert_eq!(
-        batch.first().map(|m| m.payload().to_vec()),
-        Some(b"two".to_vec()),
-    );
-    for msg in batch {
-        msg.ack().await.ok();
+    {
+        let mut batches = Box::pin(sub.batches());
+        let batch = tokio::time::timeout(WAIT, batches.next())
+            .await
+            .expect("batch within timeout")
+            .expect("stream has next")
+            .expect("ok batch");
+        assert_eq!(
+            batch.first().map(|m| m.payload().to_vec()),
+            Some(b"two".to_vec()),
+        );
+        for msg in batch {
+            msg.ack().await.ok();
+        }
     }
+    drop(sub);
     broker.shutdown().await.expect("shutdown");
 }
 
@@ -477,6 +511,14 @@ struct Order {
 
 #[subscriber("orders")]
 async fn ack_order(order: &Order) -> HandlerResult {
+    let _ = order;
+    HandlerResult::Ack
+}
+
+// A JetStream-configured source resolves against the in-process broker too, so a handler bound to
+// a durable consumer is still unit-testable; only the subject pattern drives routing here.
+#[subscriber(SubscribeOptions::new("orders.durable").jetstream("ORDERS").durable("worker"))]
+async fn durable_order(order: &Order) -> HandlerResult {
     let _ = order;
     HandlerResult::Ack
 }
@@ -497,13 +539,14 @@ async fn retry_then_ack(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> H
     }
 }
 
-// The harness installs its coordinator into `NatsTestBroker`, so `publish` must drive the in-process
-// reaction to quiescence (every `enqueued` balanced by a `consumed`) before returning.
+// The harness installs its coordinator into the connected test broker, so `publish` must drive the
+// in-process reaction to quiescence (every `enqueued` balanced by a `consumed`) before returning.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_app_drives_nats_test_broker_to_quiescence() {
     let app =
         RustStream::new(AppInfo::new("svc", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
             b.include(ack_order);
+            b.include(durable_order);
         });
     let tb = TestApp::start(app).await.expect("start");
 
@@ -516,6 +559,17 @@ async fn test_app_drives_nats_test_broker_to_quiescence() {
         .subscriber("orders")
         .assert_called_once()
         .with(&Order { id: 1 })
+        .settled(HandlerResult::Ack);
+
+    tb.broker::<NatsTestBroker>()
+        .publish("orders.durable", &Order { id: 2 })
+        .await
+        .expect("publish must reach the JetStream-configured subscription");
+
+    tb.broker::<NatsTestBroker>()
+        .subscriber("orders.durable")
+        .assert_called_once()
+        .with(&Order { id: 2 })
         .settled(HandlerResult::Ack);
 
     tb.shutdown().await.expect("shutdown");

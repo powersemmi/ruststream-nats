@@ -2,6 +2,9 @@
 //! NATS server. Every test builds a complete application (lifespan hooks, handlers, dispatch)
 //! the way a framework user would; nothing drives the broker traits by hand.
 //!
+//! The app owns its broker (the ladder consumes it), so the test side of each scenario - seeding
+//! traffic, provisioning streams - rides a second connection standing in for the outside world.
+//!
 //! These tests are skipped unless `NATS_TEST_URL` is set. To run them locally:
 //!
 //! ```bash
@@ -16,19 +19,24 @@
 //! run, so leftovers are inert.
 
 use std::convert::Infallible;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
+use async_nats::jetstream::Context as JetStreamContext;
+use async_nats::jetstream::stream::Config as StreamConfig;
 use futures::StreamExt;
 use ruststream::runtime::{
-    AppInfo, Context, HandlerMetadata, HandlerResult, RustStream, RustStreamError,
+    AppInfo, Context, HandlerMetadata, HandlerResult, Out, RustStream, RustStreamError,
 };
 use ruststream::{
-    Broker, DescribeServer, Headers, IncomingMessage, OutgoingMessage, Partitioned, Publisher,
-    RequestReply, Subscriber, conformance::harness,
+    Broker, ConnectedBroker, DescribeServer, Headers, IncomingMessage, OutgoingMessage,
+    Partitioned, Publisher, RequestReply, Subscriber, subscriber,
 };
-use ruststream_nats::{NatsBroker, NatsError, NatsMessage, PARTITION_KEY_HEADER, SubscribeOptions};
+use ruststream_nats::{
+    ConnectedNatsBroker, NatsBroker, NatsError, NatsMessage, NatsPublish, NatsPublisher,
+    PARTITION_KEY_HEADER, SubscribeOptions,
+};
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -40,12 +48,13 @@ fn nats_url() -> Option<String> {
     std::env::var("NATS_TEST_URL").ok()
 }
 
-/// Connects to the test server; `None` skips the test when `NATS_TEST_URL` is unset or the
-/// server is unreachable.
-async fn connect_or_skip() -> Option<NatsBroker> {
+/// A second connection standing in for the outside world: the test seeds traffic through it and
+/// provisions the `JetStream` streams the app's consumers read. `None` skips the test when
+/// `NATS_TEST_URL` is unset or the server is unreachable.
+async fn outside_or_skip() -> Option<ConnectedNatsBroker> {
     let url = nats_url()?;
-    match NatsBroker::connect(url.as_str()).await {
-        Ok(broker) => Some(broker),
+    match NatsBroker::new(url.as_str()).connect().await {
+        Ok(connected) => Some(connected),
         Err(err) => {
             eprintln!("could not reach NATS at {url}: {err}; skipping");
             None
@@ -66,26 +75,6 @@ fn unique_subject(prefix: &str) -> String {
 
 fn unique_stream(prefix: &str) -> String {
     format!("RS_IT_{prefix}_{}", unique_suffix())
-}
-
-/// Creates the `JetStream` stream a test consumer attaches to. Runs inside `on_startup`, before
-/// the app connects and opens subscriptions; `Broker::connect` is idempotent, so the app's own
-/// connect becomes a no-op on the shared client.
-async fn provision_stream(
-    broker: &NatsBroker,
-    stream: &str,
-    subject: &str,
-) -> Result<(), NatsError> {
-    Broker::connect(broker).await?;
-    async_nats::jetstream::new(broker.client())
-        .create_stream(async_nats::jetstream::stream::Config {
-            name: stream.to_owned(),
-            subjects: vec![subject.to_owned()],
-            ..Default::default()
-        })
-        .await
-        .map_err(|err| NatsError::JetStream(Box::new(err)))?;
-    Ok(())
 }
 
 struct RunningApp {
@@ -131,34 +120,18 @@ async fn recv_one<T>(rx: &mut mpsc::Receiver<T>) -> T {
         .expect("handler channel closed")
 }
 
-// Drives the broker-agnostic lazy-lifecycle conformance check: build with the synchronous
-// `NatsBroker::new`, connect, subscribe through `SubscribeOptions`, publish, ack, shut down.
-#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn lazy_lifecycle_conformance() {
-    let Some(url) = nats_url() else {
-        return;
-    };
-    harness::lifecycle(
-        || NatsBroker::new(url.clone()),
-        |name| SubscribeOptions::new(name),
-        |broker| broker.publisher(),
-    )
-    .await;
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_delivers_core_messages_to_handler() {
-    let Some(url) = nats_url() else {
+    let Some(outside) = outside_or_skip().await else {
         return;
     };
     let subject = unique_subject("pubsub");
-    let broker = NatsBroker::new(url);
 
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(8);
     let handler_subject = subject.clone();
-    let app =
-        RustStream::new(AppInfo::new("it-pubsub", "0.0.0")).with_broker(broker.clone(), move |b| {
+    let app = RustStream::new(AppInfo::new("it-pubsub", "0.0.0")).with_broker(
+        NatsBroker::new(nats_url().expect("url")),
+        move |b| {
             b.subscribe(
                 SubscribeOptions::new(handler_subject),
                 move |msg: &NatsMessage, _ctx: &mut Context| {
@@ -171,40 +144,40 @@ async fn app_delivers_core_messages_to_handler() {
                 },
                 HandlerMetadata::raw("pubsub"),
             );
-        });
+        },
+    );
     let running = start_app(app).await;
+    let publisher = outside.publisher(NatsPublish);
 
-    broker
-        .publisher()
+    publisher
         .publish(OutgoingMessage::new(subject.as_str(), b"hello"))
         .await
         .expect("publish failed");
     assert_eq!(recv_one(&mut rx).await, b"hello");
 
-    broker
-        .publisher()
+    publisher
         .publish(OutgoingMessage::new(subject.as_str(), b"again"))
         .await
         .expect("publish failed");
     assert_eq!(recv_one(&mut rx).await, b"again");
 
     running.stop().await;
+    outside.shutdown().await.expect("outside connection closes");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_surfaces_headers_and_partition_key_in_handler() {
     type Snapshot = (Option<String>, Option<String>, Option<Vec<u8>>);
 
-    let Some(url) = nats_url() else {
+    let Some(outside) = outside_or_skip().await else {
         return;
     };
     let subject = unique_subject("headers");
-    let broker = NatsBroker::new(url);
 
     let (tx, mut rx) = mpsc::channel::<Snapshot>(8);
     let handler_subject = subject.clone();
     let app = RustStream::new(AppInfo::new("it-headers", "0.0.0")).with_broker(
-        broker.clone(),
+        NatsBroker::new(nats_url().expect("url")),
         move |b| {
             b.subscribe(
                 SubscribeOptions::new(handler_subject),
@@ -225,7 +198,7 @@ async fn app_surfaces_headers_and_partition_key_in_handler() {
         },
     );
     let running = start_app(app).await;
-    let publisher = broker.publisher();
+    let publisher = outside.publisher(NatsPublish);
 
     let mut headers = Headers::new();
     headers.insert("Content-Type", "application/json");
@@ -251,19 +224,19 @@ async fn app_surfaces_headers_and_partition_key_in_handler() {
     assert_eq!(recv_one(&mut rx).await, (None, None, None));
 
     running.stop().await;
+    outside.shutdown().await.expect("outside connection closes");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_jetstream_durable_consumer_delivers_and_acks() {
-    let Some(url) = nats_url() else {
+    let Some(outside) = outside_or_skip().await else {
         return;
     };
     let subject = unique_subject("js");
     let stream = unique_stream("JS");
-    let broker = NatsBroker::new(url);
 
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(8);
-    let app = jetstream_app("it-js", &broker, &stream, &subject, {
+    let app = jetstream_app("it-js", &outside, &stream, &subject, {
         let subject = subject.clone();
         let stream = stream.clone();
         move |b| {
@@ -286,29 +259,29 @@ async fn app_jetstream_durable_consumer_delivers_and_acks() {
     });
     let running = start_app(app).await;
 
-    broker
-        .publisher()
+    outside
+        .publisher(NatsPublish)
         .publish(OutgoingMessage::new(subject.as_str(), b"event-1"))
         .await
         .expect("publish failed");
     assert_eq!(recv_one(&mut rx).await, b"event-1");
 
     running.stop().await;
+    outside.shutdown().await.expect("outside connection closes");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_jetstream_retry_outcome_redelivers() {
-    let Some(url) = nats_url() else {
+    let Some(outside) = outside_or_skip().await else {
         return;
     };
     let subject = unique_subject("retry");
     let stream = unique_stream("RETRY");
-    let broker = NatsBroker::new(url);
 
     let attempts = Arc::new(AtomicUsize::new(0));
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(8);
     let handler_attempts = Arc::clone(&attempts);
-    let app = jetstream_app("it-retry", &broker, &stream, &subject, {
+    let app = jetstream_app("it-retry", &outside, &stream, &subject, {
         let subject = subject.clone();
         let stream = stream.clone();
         move |b| {
@@ -336,8 +309,8 @@ async fn app_jetstream_retry_outcome_redelivers() {
     });
     let running = start_app(app).await;
 
-    broker
-        .publisher()
+    outside
+        .publisher(NatsPublish)
         .publish(OutgoingMessage::new(subject.as_str(), b"retry-me"))
         .await
         .expect("publish failed");
@@ -353,113 +326,207 @@ async fn app_jetstream_retry_outcome_redelivers() {
     );
 
     running.stop().await;
+    outside.shutdown().await.expect("outside connection closes");
+}
+
+/// How long the delayed-retry handler asks `JetStream` to hold the message.
+const RETRY_DELAY: Duration = Duration::from_secs(1);
+
+// `retry_after` on JetStream must ride the protocol's own delayed negative acknowledgement rather
+// than the runtime's deferred re-publish fallback. The two are told apart by the clock: the
+// fallback (which this scope does not even configure a publisher for) requeues immediately, while
+// the native `-NAK {"delay"}` holds the message server-side. The measurement spans handler entry to
+// handler entry, so it also contains the nack round trip and can only overshoot the delay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app_jetstream_retry_after_is_delayed_natively() {
+    let Some(outside) = outside_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("delay");
+    let stream = unique_stream("DELAY");
+
+    let (tx, mut rx) = mpsc::channel::<Duration>(8);
+    // Written once, by the first delivery; the redelivery reads it to measure the gap.
+    let first_seen: Arc<OnceLock<Instant>> = Arc::new(OnceLock::new());
+    let handler_seen = Arc::clone(&first_seen);
+    let app = jetstream_app("it-delay", &outside, &stream, &subject, {
+        let subject = subject.clone();
+        let stream = stream.clone();
+        move |b| {
+            b.subscribe(
+                SubscribeOptions::new(subject.clone())
+                    .jetstream(stream)
+                    .filter_subject(subject),
+                move |_msg: &NatsMessage, _ctx: &mut Context| {
+                    let seen = Arc::clone(&handler_seen);
+                    let tx = tx.clone();
+                    async move {
+                        match seen.get() {
+                            None => {
+                                let _ = seen.set(Instant::now());
+                                HandlerResult::retry_after(RETRY_DELAY)
+                            }
+                            Some(first) => {
+                                tx.send(first.elapsed()).await.ok();
+                                HandlerResult::Ack
+                            }
+                        }
+                    }
+                },
+                HandlerMetadata::raw("delay"),
+            );
+        }
+    });
+    let running = start_app(app).await;
+
+    outside
+        .publisher(NatsPublish)
+        .publish(OutgoingMessage::new(subject.as_str(), b"not-yet"))
+        .await
+        .expect("publish failed");
+
+    let elapsed = timeout(RETRY_DELAY * 8, rx.recv())
+        .await
+        .expect("timed out waiting for the delayed redelivery")
+        .expect("handler channel closed");
+    assert!(
+        elapsed >= RETRY_DELAY,
+        "the redelivery came back after {elapsed:?}, before the {RETRY_DELAY:?} the handler asked \
+         for; a native delayed NAK holds the message server-side",
+    );
+
+    running.stop().await;
+    outside.shutdown().await.expect("outside connection closes");
+}
+
+/// Answers on the inbox the requester named, through a publisher the runtime paired off the app's
+/// own connected broker.
+///
+/// The `Out` form mounts on the definition's own source, so the subject is a literal here; the
+/// tail wildcard still gives each run its own request subject under it.
+#[subscriber("ruststream.it.reqrep.>", raw)]
+async fn respond(
+    payload: &[u8],
+    ctx: &mut Context<'_>,
+    Out(out): Out<NatsPublisher>,
+) -> HandlerResult {
+    assert_eq!(payload, b"ping");
+    let Some(reply_to) = ctx.headers().reply_to().map(str::to_owned) else {
+        return HandlerResult::drop();
+    };
+    if out
+        .publish(OutgoingMessage::new(reply_to.as_str(), b"pong"))
+        .await
+        .is_err()
+    {
+        return HandlerResult::retry();
+    }
+    HandlerResult::Ack
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_handler_responds_to_request_reply() {
-    let Some(url) = nats_url() else {
+    let Some(outside) = outside_or_skip().await else {
         return;
     };
     let subject = unique_subject("reqrep");
-    let broker = NatsBroker::new(url);
 
-    let responder = broker.publisher();
-    let handler_subject = subject.clone();
-    let app =
-        RustStream::new(AppInfo::new("it-reqrep", "0.0.0")).with_broker(broker.clone(), move |b| {
-            b.subscribe(
-                SubscribeOptions::new(handler_subject),
-                move |msg: &NatsMessage, _ctx: &mut Context| {
-                    assert_eq!(msg.payload(), b"ping");
-                    let reply_to = msg.headers().reply_to().map(str::to_owned);
-                    let responder = responder.clone();
-                    async move {
-                        let inbox = reply_to.expect("request must carry a reply inbox");
-                        responder
-                            .publish(OutgoingMessage::new(inbox.as_str(), b"pong"))
-                            .await
-                            .expect("reply publish failed");
-                        HandlerResult::Ack
-                    }
-                },
-                HandlerMetadata::raw("reqrep"),
-            );
-        });
+    let app = RustStream::new(AppInfo::new("it-reqrep", "0.0.0")).with_broker(
+        NatsBroker::new(nats_url().expect("url")),
+        |b| {
+            b.include(respond).publisher(NatsPublish);
+        },
+    );
     let running = start_app(app).await;
 
-    let reply = broker
-        .publisher()
+    let reply = outside
+        .publisher(NatsPublish)
         .request(OutgoingMessage::new(subject.as_str(), b"ping"), WAIT)
         .await
         .expect("request failed");
     assert_eq!(reply.payload(), b"pong");
 
     running.stop().await;
+    outside.shutdown().await.expect("outside connection closes");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_describe_server_reports_live_address() {
+async fn describe_server_reports_configured_and_live_addresses() {
     let Some(url) = nats_url() else {
         return;
     };
-    let subject = unique_subject("describe");
-    let broker = NatsBroker::new(url);
+    let broker = NatsBroker::new(url.clone());
 
-    let handler_subject = subject.clone();
-    let app = RustStream::new(AppInfo::new("it-describe", "0.0.0")).with_broker(
-        broker.clone(),
-        move |b| {
-            b.subscribe(
-                SubscribeOptions::new(handler_subject),
-                |_msg: &NatsMessage, _ctx: &mut Context| async { HandlerResult::Ack },
-                HandlerMetadata::raw("describe"),
-            );
-        },
-    );
-    let running = start_app(app).await;
+    // Before connecting, the AsyncAPI server entry is the configured address: no I/O needed.
+    let configured = broker.describe_server();
+    assert_eq!(configured.protocol, "nats");
+    assert!(configured.host.as_deref().is_some_and(|h| !h.is_empty()));
 
-    // The held clone shares the connected client, so the spec reflects live server info.
-    let spec = broker.describe_server();
-    assert_eq!(spec.protocol, "nats");
+    let connected = broker.connect().await.expect("connect failed");
+    let live = connected.server_spec();
+    assert_eq!(live.protocol, "nats");
     assert!(
-        spec.host.as_deref().is_some_and(|host| !host.is_empty()),
-        "host must be present and non-empty after connect"
+        live.host.as_deref().is_some_and(|host| !host.is_empty()),
+        "the connected form must report the host the server announced",
     );
 
-    running.stop().await;
+    connected.shutdown().await.expect("shutdown failed");
+}
+
+// A publisher paired before the shutdown aliases the connection and outlives it, so it must
+// report the closed connection rather than silently succeed against it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publisher_errors_after_shutdown() {
+    let Some(connected) = outside_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("closed");
+    let publisher = connected.publisher(NatsPublish);
+
+    connected.shutdown().await.expect("shutdown failed");
+
+    let err = publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"too late"))
+        .await
+        .expect_err("publishing through a closed connection must fail");
+    assert!(
+        matches!(&err, NatsError::Closed { subject: reported } if reported == &subject),
+        "the error must name the subject it could not reach, got: {err}",
+    );
 }
 
 /// Builds an app whose lifespan owns one `JetStream` stream: created in `on_startup` (before the
-/// app connects and subscribes), best-effort deleted in `on_shutdown` (brokers still connected).
+/// app connects and subscribes), best-effort deleted in `on_shutdown`. Both hooks run against the
+/// outside connection, so the stream exists before the app's consumer opens.
 fn jetstream_app(
     name: &str,
-    broker: &NatsBroker,
+    outside: &ConnectedNatsBroker,
     stream: &str,
     subject: &str,
     build: impl FnOnce(&mut ruststream::runtime::BrokerScope<NatsBroker>),
 ) -> RustStream {
-    let provision_broker = broker.clone();
+    let provision: JetStreamContext = outside.jetstream();
     let provision_stream_name = stream.to_owned();
     let provision_subject = subject.to_owned();
-    let cleanup_broker = broker.clone();
+    let cleanup = outside.jetstream();
     let cleanup_stream_name = stream.to_owned();
     RustStream::new(AppInfo::new(name, "0.0.0"))
         .on_startup(move |state| async move {
-            provision_stream(
-                &provision_broker,
-                &provision_stream_name,
-                &provision_subject,
-            )
-            .await?;
+            provision
+                .create_stream(StreamConfig {
+                    name: provision_stream_name,
+                    subjects: vec![provision_subject],
+                    ..Default::default()
+                })
+                .await
+                .map_err(|err| NatsError::JetStream(Box::new(err)))?;
             Ok::<_, NatsError>(state)
         })
         .on_shutdown(move |_state| async move {
-            let _ = async_nats::jetstream::new(cleanup_broker.client())
-                .delete_stream(cleanup_stream_name)
-                .await;
+            let _ = cleanup.delete_stream(cleanup_stream_name).await;
             Ok::<_, Infallible>(())
         })
-        .with_broker(broker.clone(), build)
+        .with_broker(NatsBroker::new(nats_url().expect("url")), build)
 }
 
 // Regression: 0.2 took the inner subscription out of an Option in `stream()` and panicked on
@@ -467,16 +534,16 @@ fn jetstream_app(
 // `stream()` per call).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn core_stream_can_be_reentered() {
-    let Some(broker) = connect_or_skip().await else {
+    let Some(connected) = outside_or_skip().await else {
         return;
     };
     let subject = unique_subject("reenter");
 
-    let mut subscriber = broker
-        .subscribe(SubscribeOptions::new(subject.clone()))
+    let mut subscriber = connected
+        .subscribe_with(SubscribeOptions::new(subject.clone()))
         .await
         .expect("subscribe failed");
-    let publisher = broker.publisher();
+    let publisher = connected.publisher(NatsPublish);
 
     publisher
         .publish(OutgoingMessage::new(subject.as_str(), b"one"))
@@ -496,26 +563,30 @@ async fn core_stream_can_be_reentered() {
         .publish(OutgoingMessage::new(subject.as_str(), b"two"))
         .await
         .expect("publish failed");
-    let mut stream = std::pin::pin!(subscriber.stream());
-    let msg = timeout(WAIT, stream.next())
-        .await
-        .expect("timed out")
-        .expect("stream ended")
-        .expect("stream error");
-    assert_eq!(msg.payload(), b"two");
-    broker.shutdown_client().await;
+    {
+        let mut stream = std::pin::pin!(subscriber.stream());
+        let msg = timeout(WAIT, stream.next())
+            .await
+            .expect("timed out")
+            .expect("stream ended")
+            .expect("stream error");
+        assert_eq!(msg.payload(), b"two");
+    }
+
+    drop(subscriber);
+    connected.shutdown().await.expect("shutdown failed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn jetstream_stream_can_be_reentered() {
-    let Some(broker) = connect_or_skip().await else {
+    let Some(connected) = outside_or_skip().await else {
         return;
     };
     let subject = unique_subject("jsreenter");
-    let stream_name = format!("RS_TEST_RE_{}", unique_suffix());
+    let stream_name = unique_stream("RE");
 
-    let ctx = async_nats::jetstream::new(broker.client());
-    ctx.create_stream(async_nats::jetstream::stream::Config {
+    let ctx = connected.jetstream();
+    ctx.create_stream(StreamConfig {
         name: stream_name.clone(),
         subjects: vec![subject.clone()],
         ..Default::default()
@@ -523,14 +594,14 @@ async fn jetstream_stream_can_be_reentered() {
     .await
     .expect("create_stream failed");
 
-    let publisher = broker.publisher();
+    let publisher = connected.publisher(NatsPublish);
     publisher
         .publish(OutgoingMessage::new(subject.as_str(), b"event-1"))
         .await
         .expect("publish failed");
 
-    let mut consumer = broker
-        .subscribe(
+    let mut consumer = connected
+        .subscribe_with(
             SubscribeOptions::new(subject.clone())
                 .jetstream(stream_name.clone())
                 .filter_subject(subject.clone()),
@@ -553,15 +624,18 @@ async fn jetstream_stream_can_be_reentered() {
         .publish(OutgoingMessage::new(subject.as_str(), b"event-2"))
         .await
         .expect("publish failed");
-    let mut stream_iter = std::pin::pin!(consumer.stream());
-    let msg = timeout(WAIT, stream_iter.next())
-        .await
-        .expect("timed out")
-        .expect("stream ended")
-        .expect("stream error");
-    assert_eq!(msg.payload(), b"event-2");
-    msg.ack().await.expect("ack failed");
+    {
+        let mut stream_iter = std::pin::pin!(consumer.stream());
+        let msg = timeout(WAIT, stream_iter.next())
+            .await
+            .expect("timed out")
+            .expect("stream ended")
+            .expect("stream error");
+        assert_eq!(msg.payload(), b"event-2");
+        msg.ack().await.expect("ack failed");
+    }
 
     let _ = ctx.delete_stream(&stream_name).await;
-    broker.shutdown_client().await;
+    drop(consumer);
+    connected.shutdown().await.expect("shutdown failed");
 }

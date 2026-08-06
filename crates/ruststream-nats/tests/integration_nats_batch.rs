@@ -1,19 +1,20 @@
 //! `JetStream` batch semantics of [`ruststream::BatchSubscriber`] against a real NATS server.
 //!
-//! Temporary trait-level coverage: the runtime has no batch dispatch yet
-//! (powersemmi/ruststream#21), and the in-memory testing broker deliberately does not simulate
-//! `JetStream` pull semantics, so driving `batches()` by hand against a live server is the only
-//! way to test the fetch loop. Once #21 lands, rewrite these as app-level tests in
-//! `integration_nats.rs` and delete this file.
+//! The runtime has no batch dispatch for `JetStream` pull consumers, and the in-memory testing
+//! broker deliberately does not simulate `JetStream` pull semantics, so driving `batches()`
+//! directly against a live server is what covers the fetch loop.
 //!
 //! Skipped unless `NATS_TEST_URL` is set (see `integration_nats.rs` for how to run).
 
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
+use async_nats::jetstream::stream::Config as StreamConfig;
 use futures::StreamExt;
-use ruststream::{BatchSubscriber, IncomingMessage, OutgoingMessage, Publisher};
-use ruststream_nats::{NatsBroker, SubscribeOptions};
+use ruststream::{
+    BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher,
+};
+use ruststream_nats::{ConnectedNatsBroker, NatsBroker, NatsPublish, SubscribeOptions};
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(2);
@@ -26,7 +27,7 @@ fn unique_suffix() -> u128 {
 }
 
 struct JetStreamFixture {
-    broker: NatsBroker,
+    connected: ConnectedNatsBroker,
     subject: String,
     stream: String,
 }
@@ -35,8 +36,8 @@ struct JetStreamFixture {
 /// `NATS_TEST_URL` is unset or the server is unreachable.
 async fn jetstream_fixture(prefix: &str) -> Option<JetStreamFixture> {
     let url = std::env::var("NATS_TEST_URL").ok()?;
-    let broker = match NatsBroker::connect(url.as_str()).await {
-        Ok(broker) => broker,
+    let connected = match NatsBroker::new(url.as_str()).connect().await {
+        Ok(connected) => connected,
         Err(err) => {
             eprintln!("could not reach NATS at {url}: {err}; skipping");
             return None;
@@ -45,8 +46,9 @@ async fn jetstream_fixture(prefix: &str) -> Option<JetStreamFixture> {
     let suffix = unique_suffix();
     let subject = format!("ruststream.it.batch.{prefix}.{suffix}");
     let stream = format!("RS_IT_BATCH_{}_{suffix}", prefix.to_uppercase());
-    async_nats::jetstream::new(broker.client())
-        .create_stream(async_nats::jetstream::stream::Config {
+    connected
+        .jetstream()
+        .create_stream(StreamConfig {
             name: stream.clone(),
             subjects: vec![subject.clone()],
             ..Default::default()
@@ -54,18 +56,24 @@ async fn jetstream_fixture(prefix: &str) -> Option<JetStreamFixture> {
         .await
         .expect("create_stream failed");
     Some(JetStreamFixture {
-        broker,
+        connected,
         subject,
         stream,
     })
 }
 
 impl JetStreamFixture {
+    fn consumer_options(&self, batch: usize, expires: Duration) -> SubscribeOptions {
+        SubscribeOptions::new(self.subject.clone())
+            .jetstream(self.stream.clone())
+            .filter_subject(self.subject.clone())
+            .pull_batch(NonZeroUsize::new(batch).expect("batch cap is non-zero"))
+            .pull_expires(expires)
+    }
+
     async fn teardown(self) {
-        let _ = async_nats::jetstream::new(self.broker.client())
-            .delete_stream(&self.stream)
-            .await;
-        self.broker.shutdown_client().await;
+        let _ = self.connected.jetstream().delete_stream(&self.stream).await;
+        self.connected.shutdown().await.expect("shutdown failed");
     }
 }
 
@@ -75,7 +83,7 @@ async fn pull_batch_caps_batch_size() {
         return;
     };
 
-    let publisher = fx.broker.publisher();
+    let publisher = fx.connected.publisher(NatsPublish);
     let total = 7u8;
     for i in 0..total {
         publisher
@@ -85,39 +93,36 @@ async fn pull_batch_caps_batch_size() {
     }
 
     let mut consumer = fx
-        .broker
-        .subscribe(
-            SubscribeOptions::new(fx.subject.clone())
-                .jetstream(fx.stream.clone())
-                .filter_subject(fx.subject.clone())
-                .pull_batch(NonZeroUsize::new(3).unwrap())
-                .pull_expires(Duration::from_millis(300)),
-        )
+        .connected
+        .subscribe_with(fx.consumer_options(3, Duration::from_millis(300)))
         .await
         .expect("consumer create failed");
 
-    let mut batches = std::pin::pin!(consumer.batches());
     let mut received = Vec::new();
-    while received.len() < usize::from(total) {
-        let batch = timeout(WAIT, batches.next())
-            .await
-            .expect("timed out waiting for batch")
-            .expect("stream ended")
-            .expect("batch error");
-        assert!(
-            batch.len() <= 3,
-            "batch of {} exceeds the pull_batch cap of 3",
-            batch.len()
-        );
-        for msg in batch {
-            received.push(msg.payload().to_vec());
-            msg.ack().await.expect("ack failed");
+    {
+        let mut batches = std::pin::pin!(consumer.batches());
+        while received.len() < usize::from(total) {
+            let batch = timeout(WAIT, batches.next())
+                .await
+                .expect("timed out waiting for batch")
+                .expect("stream ended")
+                .expect("batch error");
+            assert!(
+                batch.len() <= 3,
+                "batch of {} exceeds the pull_batch cap of 3",
+                batch.len()
+            );
+            for msg in batch {
+                received.push(msg.payload().to_vec());
+                msg.ack().await.expect("ack failed");
+            }
         }
     }
 
     let expected: Vec<Vec<u8>> = (0..total).map(|i| vec![i]).collect();
     assert_eq!(received, expected, "messages must arrive in publish order");
 
+    drop(consumer);
     fx.teardown().await;
 }
 
@@ -130,18 +135,12 @@ async fn batches_skip_empty_fetches() {
     };
 
     let mut consumer = fx
-        .broker
-        .subscribe(
-            SubscribeOptions::new(fx.subject.clone())
-                .jetstream(fx.stream.clone())
-                .filter_subject(fx.subject.clone())
-                .pull_batch(NonZeroUsize::new(10).unwrap())
-                .pull_expires(Duration::from_millis(150)),
-        )
+        .connected
+        .subscribe_with(fx.consumer_options(10, Duration::from_millis(150)))
         .await
         .expect("consumer create failed");
 
-    let publisher = fx.broker.publisher();
+    let publisher = fx.connected.publisher(NatsPublish);
     let subject = fx.subject.clone();
     let publish_task = tokio::spawn(async move {
         // Longer than pull_expires, so the first fetch comes back empty and is retried.
@@ -152,20 +151,23 @@ async fn batches_skip_empty_fetches() {
             .expect("publish failed");
     });
 
-    let mut batches = std::pin::pin!(consumer.batches());
-    let batch = timeout(WAIT, batches.next())
-        .await
-        .expect("timed out waiting for batch")
-        .expect("stream ended")
-        .expect("batch error");
-    publish_task.await.expect("publish task failed");
+    {
+        let mut batches = std::pin::pin!(consumer.batches());
+        let batch = timeout(WAIT, batches.next())
+            .await
+            .expect("timed out waiting for batch")
+            .expect("stream ended")
+            .expect("batch error");
+        publish_task.await.expect("publish task failed");
 
-    assert_eq!(batch.len(), 1, "only the late message must be delivered");
-    for msg in batch {
-        assert_eq!(msg.payload(), b"late");
-        msg.ack().await.expect("ack failed");
+        assert_eq!(batch.len(), 1, "only the late message must be delivered");
+        for msg in batch {
+            assert_eq!(msg.payload(), b"late");
+            msg.ack().await.expect("ack failed");
+        }
     }
 
+    drop(consumer);
     fx.teardown().await;
 }
 
@@ -177,21 +179,15 @@ async fn batches_can_be_reentered() {
         return;
     };
 
-    let publisher = fx.broker.publisher();
+    let publisher = fx.connected.publisher(NatsPublish);
     publisher
         .publish(OutgoingMessage::new(fx.subject.as_str(), b"one"))
         .await
         .expect("publish failed");
 
     let mut consumer = fx
-        .broker
-        .subscribe(
-            SubscribeOptions::new(fx.subject.clone())
-                .jetstream(fx.stream.clone())
-                .filter_subject(fx.subject.clone())
-                .pull_batch(NonZeroUsize::new(10).unwrap())
-                .pull_expires(Duration::from_millis(300)),
-        )
+        .connected
+        .subscribe_with(fx.consumer_options(10, Duration::from_millis(300)))
         .await
         .expect("consumer create failed");
 
@@ -213,17 +209,20 @@ async fn batches_can_be_reentered() {
         .publish(OutgoingMessage::new(fx.subject.as_str(), b"two"))
         .await
         .expect("publish failed");
-    let mut batches = std::pin::pin!(consumer.batches());
-    let batch = timeout(WAIT, batches.next())
-        .await
-        .expect("timed out")
-        .expect("stream ended")
-        .expect("batch error");
-    assert_eq!(batch.len(), 1);
-    for msg in batch {
-        assert_eq!(msg.payload(), b"two");
-        msg.ack().await.expect("ack failed");
+    {
+        let mut batches = std::pin::pin!(consumer.batches());
+        let batch = timeout(WAIT, batches.next())
+            .await
+            .expect("timed out")
+            .expect("stream ended")
+            .expect("batch error");
+        assert_eq!(batch.len(), 1);
+        for msg in batch {
+            assert_eq!(msg.payload(), b"two");
+            msg.ack().await.expect("ack failed");
+        }
     }
 
+    drop(consumer);
     fx.teardown().await;
 }

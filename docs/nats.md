@@ -127,6 +127,21 @@ The responder end works the same way in-process and against a real server: an in
 carries its reply inbox in the well-known `reply-to` header, so a handler reads
 `ctx.headers().reply_to()` and publishes the answer to that subject through an injected publisher.
 
+## Capabilities
+
+Which of the framework's optional capability traits this broker implements natively:
+
+| Capability | Native | Notes |
+| --- | --- | --- |
+| `Subscribe` | yes | Subscribes by subject; `SubscribeOptions` describes a JetStream consumer instead. |
+| `BatchSubscriber` | yes | JetStream batches on the wire: one item is one pull `fetch` of up to `pull_batch` messages, bounded by `pull_expires`. Core NATS has no wire-level batching, so a batch is whatever the client has already buffered. |
+| `TransactionalPublisher` | no | Neither Core NATS nor JetStream has a multi-message transaction; a JetStream publish is acknowledged one message at a time. |
+| `OwnedTransactions` | no | Same reason: there is no transaction to own. |
+| `RequestReply` | yes | `NatsPublisher` publishes with a native reply inbox and resolves with the reply. See [Request-reply](#request-reply). |
+| `Partitioned` | yes | NATS has no native partition, so the key travels in the `nats-partition-key` header and feeds the runtime's `workers(n, by_key)` lanes. The sender sets it. |
+| `Seekable` + `Positioned` | no | `deliver_policy` chooses where a newly created JetStream consumer starts; a live subscription is not repositioned. |
+| `DescribeServer` | yes | Reports the configured address, which is what the AsyncAPI document records. |
+
 ## Testing
 
 The `testing` feature ships `NatsTestBroker`: an in-process broker with real NATS subject matching

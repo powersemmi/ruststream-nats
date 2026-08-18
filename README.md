@@ -80,18 +80,11 @@ fn app() -> impl App {
 
 ## JetStream
 
-Bind the same handler to a durable JetStream consumer by overriding its source - either at the mount site or directly in the decorator:
+Bind the same handler to a durable JetStream consumer by describing its source in the decorator - the macro follows the builder chain, so the definition carries the source and the mount stays a plain `b.include(handle)`:
 
 ```rust
 use ruststream_nats::SubscribeOptions;
 
-// at the mount site
-b.include_on(
-    SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-worker"),
-    handle,
-);
-
-// or in the decorator
 #[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-worker"))]
 async fn handle(order: &Order) -> HandlerResult { /* ... */ }
 ```

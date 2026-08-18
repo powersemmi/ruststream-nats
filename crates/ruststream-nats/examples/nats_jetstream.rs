@@ -1,16 +1,18 @@
 //! A `JetStream` durable consumer, plus a `JetStream` publisher that awaits the stream's ack.
 //!
-//! A `#[subscriber("subject")]` handler carries a by-name source. To bind it to `JetStream` we
-//! override that source with [`SubscribeOptions`] via [`include_on`], naming the stream and a
-//! durable consumer so progress survives restarts. The handler's [`HandlerResult::Ack`] acks the
-//! message back to `JetStream`; returning [`HandlerResult::Nack`] schedules redelivery.
+//! A `#[subscriber("subject")]` handler carries a by-name source. To bind it to `JetStream`,
+//! describe the source in the attribute itself with [`SubscribeOptions`], naming the stream and a
+//! durable consumer so progress survives restarts: the macro follows the builder chain, so the
+//! definition carries its own source and mounts with a plain `include`. The handler's
+//! [`HandlerResult::Ack`] acks the message back to `JetStream`; returning [`HandlerResult::Nack`]
+//! schedules redelivery.
 //!
 //! The seed publish rides [`JetStreamPublish`]: unlike the Core policy it waits for the stream's
 //! acknowledgement, so a message the stream refuses (unknown stream, violated expectation) is an
 //! error rather than a silent drop.
 //!
-//! `include_on` is the source-override form; the codec resolves the same way as for `include`
-//! (the default, or a scope codec set with `with_broker_codec`).
+//! The codec resolves the same way as for a by-name handler (the default, or a scope codec set
+//! with `with_broker_codec`).
 //! `NatsBroker::new` is synchronous, so this fits `#[ruststream::app]`; the runtime connects the
 //! broker at startup and then opens the consumer. Create the stream once, then run:
 //!
@@ -24,8 +26,6 @@
 //! ```text
 //! nats pub orders.created '{"id":1}'
 //! ```
-//!
-//! [`include_on`]: ruststream::runtime::BrokerScope::include_on
 
 use std::io;
 
@@ -40,36 +40,22 @@ struct Order {
     id: u64,
 }
 
-#[subscriber("orders.created")]
+// --8<-- [start:handler]
+#[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-worker"))]
 async fn handle(order: &Order) -> HandlerResult {
     println!("got order {}", order.id);
     HandlerResult::Ack
 }
-
-// The descriptor can also sit directly in the decorator: the macro follows the builder chain, so
-// this handler mounts with a plain `include` and no separate source argument.
-// --8<-- [start:decorator]
-#[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-audit"))]
-async fn audit(order: &Order) -> HandlerResult {
-    println!("audited order {}", order.id);
-    HandlerResult::Ack
-}
-// --8<-- [end:decorator]
+// --8<-- [end:handler]
 
 #[ruststream::app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
-            // --8<-- [start:include_on]
-            b.include_on(
-                SubscribeOptions::new("orders.*")
-                    .jetstream("ORDERS")
-                    .durable("orders-worker"),
-                handle,
-            );
-            // --8<-- [end:include_on]
-            b.include(audit);
+            // --8<-- [start:mount]
+            b.include(handle);
+            // --8<-- [end:mount]
 
             // --8<-- [start:publish]
             b.after_startup(

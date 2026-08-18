@@ -48,20 +48,19 @@ Wire it onto the broker; the `with_broker` / `include` part is identical to the 
 
 ## JetStream durable consumer
 
-To consume from JetStream instead, override the handler's by-name source with `SubscribeOptions`,
-naming the stream and a durable consumer so progress survives restarts. The handler's
-`HandlerResult::Ack` acks back to JetStream. `include_on` is the source-override form; the codec
-resolves the same way as for `include`.
+To consume from JetStream instead, describe the source in the `#[subscriber(..)]` attribute with
+`SubscribeOptions`, naming the stream and a durable consumer so progress survives restarts. The
+macro follows the builder chain, so the definition carries its own source. The handler's
+`HandlerResult::Ack` acks back to JetStream. This is what the `nats-js` CLI scaffold generates.
 
 ```rust
---8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:include_on"
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:handler"
 ```
 
-The `SubscribeOptions` builder also sits directly in the `#[subscriber(..)]` decorator (the macro
-follows the chain), which is what the `nats-js` CLI scaffold generates:
+The mount site names no source, and the codec resolves the same way as for a by-name handler:
 
 ```rust
---8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:decorator"
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:mount"
 ```
 
 Beyond `jetstream` and `durable`, the builder carries `queue_group` (Core NATS load balancing),

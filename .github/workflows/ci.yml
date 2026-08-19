@@ -105,7 +105,7 @@ jobs:
           workspaces: ruststream-nats
 
       - name: Install cargo-generate
-        uses: taiki-e/install-action@v2.85.6
+        uses: taiki-e/install-action@v2.85.8
         with:
           tool: cargo-generate
 
@@ -209,7 +209,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2.85.6
+        uses: taiki-e/install-action@v2.85.8
         with:
           tool: cargo-deny
 

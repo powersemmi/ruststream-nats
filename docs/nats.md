@@ -90,7 +90,10 @@ with the broker at startup. Naming a policy picks the transport:
 - `NatsPublish` pairs into `NatsPublisher`: plain Core NATS publishing, fire-and-forget, plus the
   `RequestReply` capability. It is also the broker's default publish policy, so a
   `#[subscriber(.., publish("dest"))]` handler mounted without an explicit publisher replies
-  through it.
+  through it. The prelude exports it a second time as `Publish`, the name every broker's prelude
+  gives its default, so a mount site written against one transport reads the same on another. The
+  alias is a publish policy, not the framework's `runtime::Publish` builder a handler drives with
+  `message(..)`.
 - `JetStreamPublish` pairs into `JetStreamPublisher`: every publish waits for the stream's
   acknowledgement, so a message the stream refuses is an error rather than a silent drop.
   `publish_ack` hands back the acknowledgement itself (the stream, the sequence, whether the
@@ -141,8 +144,9 @@ use ruststream_nats::prelude::*;
 Any NATS responder answers it: another service, or `nats reply questions 'pong'` from the CLI. The
 runnable program is
 [`examples/nats_request_reply.rs`](https://github.com/powersemmi/ruststream-nats/blob/main/crates/ruststream-nats/examples/nats_request_reply.rs) -
-it sends the request from the scope's `after_startup` hook, where the `NatsPublish` policy is
-paired with the connected broker.
+it sends the request from the scope's `after_startup` hook, where the plain policy is paired with
+the connected broker. The example names it `Publish`, the alias the prelude gives `NatsPublish` so
+a mount site reads the same on every broker.
 
 The responder end works the same way in-process and against a real server: an incoming request
 carries its reply inbox in the well-known `reply-to` header, so a handler reads

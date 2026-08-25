@@ -93,11 +93,11 @@ async fn handle(order: &Order) -> HandlerResult { /* ... */ }
 
 ## Publish
 
-A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport:
+A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport. The prelude also exports the plain policy as `Publish`, the name every broker's prelude gives its default, so a mount site reads the same whichever transport it is written against:
 
 ```rust
-// Core NATS: fire-and-forget, and the RequestReply capability.
-b.after_startup(NatsPublish, async move |publisher| { /* publish / request */ });
+// Core NATS: fire-and-forget, and the RequestReply capability. `Publish` is `NatsPublish` here.
+b.after_startup(Publish, async move |publisher| { /* publish / request */ });
 
 // JetStream: each publish waits for the stream's acknowledgement, and the policy states
 // what the stream must look like for the message to be accepted.

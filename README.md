@@ -55,9 +55,7 @@ cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nat
 ## Write a service
 
 ```rust
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_nats::NatsBroker;
+use ruststream_nats::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -78,13 +76,15 @@ fn app() -> impl App {
 }
 ```
 
+`ruststream_nats::prelude` is the one glob a service file imports: it carries this crate's broker,
+subscription and publishing types on top of the framework prelude, so the sections below add no
+import lines of their own.
+
 ## JetStream
 
 Bind the same handler to a durable JetStream consumer by describing its source in the decorator - the macro follows the builder chain, so the definition carries the source and the mount stays a plain `b.include(handle)`:
 
 ```rust
-use ruststream_nats::SubscribeOptions;
-
 #[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-worker"))]
 async fn handle(order: &Order) -> HandlerResult { /* ... */ }
 ```
@@ -94,8 +94,6 @@ async fn handle(order: &Order) -> HandlerResult { /* ... */ }
 A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport:
 
 ```rust
-use ruststream_nats::{JetStreamPublish, NatsPublish};
-
 // Core NATS: fire-and-forget, and the RequestReply capability.
 b.after_startup(NatsPublish, async move |publisher| { /* publish / request */ });
 

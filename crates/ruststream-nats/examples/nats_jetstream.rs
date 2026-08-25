@@ -29,10 +29,10 @@
 
 use std::io;
 
+// The seed publish assembles its own message, so `OutgoingMessage` comes on its own line: the
+// prelude covers the service surface, not the layer below it.
 use ruststream::OutgoingMessage;
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_nats::{JetStreamPublish, NatsBroker, SubscribeOptions};
+use ruststream_nats::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

@@ -16,9 +16,10 @@
 use std::io;
 use std::time::Duration;
 
-use ruststream::runtime::{App, AppInfo, RustStream};
-use ruststream::{IncomingMessage, OutgoingMessage, RequestReply};
-use ruststream_nats::{NatsBroker, NatsPublish};
+// The request assembles its own message and asks for a capability the service surface does not
+// carry, so those two stay explicit; the prelude covers the rest.
+use ruststream::{OutgoingMessage, RequestReply};
+use ruststream_nats::prelude::*;
 
 #[ruststream::app]
 fn app() -> impl App {

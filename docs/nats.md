@@ -132,7 +132,8 @@ with a timeout error when nothing answers in time:
 ```rust
 use std::time::Duration;
 
-use ruststream::{IncomingMessage, OutgoingMessage, RequestReply};
+use ruststream::{OutgoingMessage, RequestReply};
+use ruststream_nats::prelude::*;
 
 --8<-- "crates/ruststream-nats/examples/nats_request_reply.rs:request"
 ```

@@ -90,10 +90,7 @@ with the broker at startup. Naming a policy picks the transport:
 - `NatsPublish` pairs into `NatsPublisher`: plain Core NATS publishing, fire-and-forget, plus the
   `RequestReply` capability. It is also the broker's default publish policy, so a
   `#[subscriber(.., publish("dest"))]` handler mounted without an explicit publisher replies
-  through it. The prelude exports it a second time as `Publish`, the name every broker's prelude
-  gives its default, so a mount site written against one transport reads the same on another. The
-  alias is a publish policy, not the framework's `runtime::Publish` builder a handler drives with
-  `message(..)`.
+  through it. The prelude also exports it as `Publish`.
 - `JetStreamPublish` pairs into `JetStreamPublisher`: every publish waits for the stream's
   acknowledgement, so a message the stream refuses is an error rather than a silent drop.
   `publish_ack` hands back the acknowledgement itself (the stream, the sequence, whether the
@@ -107,24 +104,19 @@ with the broker at startup. Naming a policy picks the transport:
 
 ### Per-message arguments
 
-Core 0.7 put every publish behind one builder. The entry points `message(..)`, for a value, and
-`raw(..)`, for bytes, are blanket-implemented for every publisher through `PublishExt`, so a
-`NatsPublisher` kept in the application state, a `JetStreamPublisher` paired at startup and a
-publisher injected into an `Out` slot all take the same call shape, down to the same `to(..)`,
-`with_headers(..)` and `with_codec(..)` steps.
+Every publish runs through one builder: `message(..)` for a value, `raw(..)` for bytes, on any
+publisher through `PublishExt`, then `to(..)`, `with_headers(..)` and `with_codec(..)`.
 
-The builder carries the positions a message has - a body, a codec, headers, a destination - and
-nothing a particular transport invents, so a NATS-only argument attaches one step earlier, to the
-publisher: `publisher.with_argument(value).message(&order).publish()`. The step returns a small
-adapter that owns the argument and is itself a `Publisher`; its `publish` applies the argument to
-the outgoing message, stamping a header or setting a transport option, then delegates to the
-publisher it wraps. Being a publisher is what earns the adapter the whole builder, so the argument
-composes with every publish position instead of competing with one.
+A NATS-only argument attaches one step earlier, to the publisher:
 
-Which of the two an option belongs to follows from how long it holds. An adapter carries what
-changes per message; a policy carries what a publisher declares for its whole lifetime, which is
-why `JetStreamPublish` keeps the stream expectations. A deduplication id is per-message, so a
-`Nats-Msg-Id` step, once this crate offers one, takes the adapter shape.
+```rust
+publisher.with_argument(value).message(&order).publish().await?;
+```
+
+The step returns an adapter that owns the argument, applies it to the outgoing message and
+delegates. Because the adapter is itself a `Publisher`, the builder follows unchanged. Options that
+hold for a publisher's whole lifetime, such as the `JetStreamPublish` stream expectations, stay on
+the policy instead.
 
 ## Request-reply
 
@@ -144,9 +136,8 @@ use ruststream_nats::prelude::*;
 Any NATS responder answers it: another service, or `nats reply questions 'pong'` from the CLI. The
 runnable program is
 [`examples/nats_request_reply.rs`](https://github.com/powersemmi/ruststream-nats/blob/main/crates/ruststream-nats/examples/nats_request_reply.rs) -
-it sends the request from the scope's `after_startup` hook, where the plain policy is paired with
-the connected broker. The example names it `Publish`, the alias the prelude gives `NatsPublish` so
-a mount site reads the same on every broker.
+it sends the request from the scope's `after_startup` hook, where the `Publish` policy is paired
+with the connected broker.
 
 The responder end works the same way in-process and against a real server: an incoming request
 carries its reply inbox in the well-known `reply-to` header, so a handler reads

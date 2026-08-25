@@ -76,11 +76,9 @@ fn app() -> impl App {
 }
 ```
 
-`ruststream_nats::prelude` is the one glob a service file imports: it carries this crate's broker,
-subscription and publishing types on top of the framework prelude, so the sections below add no
-import lines of their own. It also re-exports `RequestReply`, the framework capability a service
-writes against NATS itself, which makes the glob a manifest of what the transport can do: a bound
-this broker cannot satisfy fails on the missing name rather than deeper in.
+`ruststream_nats::prelude` is the one glob a service file imports: this crate's broker,
+subscription and publishing types plus the `RequestReply` capability, on top of the framework
+prelude. The sections below add no import lines of their own.
 
 ## JetStream
 
@@ -93,7 +91,7 @@ async fn handle(order: &Order) -> HandlerResult { /* ... */ }
 
 ## Publish
 
-A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport. The prelude also exports the plain policy as `Publish`, the name every broker's prelude gives its default, so a mount site reads the same whichever transport it is written against:
+A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport. The prelude exports the plain policy as `Publish`:
 
 ```rust
 // Core NATS: fire-and-forget, and the RequestReply capability. `Publish` is `NatsPublish` here.

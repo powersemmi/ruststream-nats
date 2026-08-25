@@ -1,9 +1,8 @@
 //! Request-reply over Core NATS: the Core publisher implements the `RequestReply` capability.
 //!
 //! `request` publishes with a reply inbox and resolves with the reply message, bounded by the
-//! caller's timeout. The request runs from the scope's `after_startup` hook: the `Publish` policy
-//! (the prelude's concept name for this broker's plain `NatsPublish`) is paired with the connected
-//! broker there, so the publisher exists only once the connection does.
+//! caller's timeout. The request runs from the scope's `after_startup` hook, where the `Publish`
+//! policy is paired with the connected broker.
 //!
 //! Start a responder first (any NATS service; here the `nats` CLI), then run the example - after
 //! startup it sends one request and prints the reply:
@@ -16,8 +15,6 @@
 use std::io;
 use std::time::Duration;
 
-// The request assembles its own message, so `OutgoingMessage` comes on its own line; the
-// `RequestReply` capability it calls through arrives with the prelude, because this broker has it.
 use ruststream::OutgoingMessage;
 use ruststream_nats::prelude::*;
 

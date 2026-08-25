@@ -20,23 +20,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, msrv]
+        # The floor, what users build with, and the early warning. Releases in between add
+        # nothing: what fails on a later one fails on the floor too.
+        toolchain: [stable, beta, msrv]
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          path: ruststream-nats
-
-      - uses: actions/checkout@v7
-        with:
-          repository: powersemmi/ruststream
-          persist-credentials: false
-          path: ruststream
 
       # The MSRV leg follows `rust-version` in Cargo.toml, so an MSRV bump is a one-line change.
+      # RUSTUP_TOOLCHAIN goes to the environment as well as to the install action: installing a
+      # toolchain does not select it, and `rust-toolchain.toml` outranks the rustup default the
+      # action sets, while the variable outranks the file.
       - name: Resolve toolchain
         id: toolchain
-        working-directory: ruststream-nats
         env:
           TOOLCHAIN: ${{ matrix.toolchain }}
         run: |
@@ -45,6 +42,7 @@ jobs:
             test -n "$TOOLCHAIN"
           fi
           echo "toolchain=$TOOLCHAIN" >> "$GITHUB_OUTPUT"
+          echo "RUSTUP_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -54,30 +52,121 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ruststream-nats
 
       - name: cargo fmt
         if: matrix.toolchain == 'stable'
-        working-directory: ruststream-nats
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
         if: matrix.toolchain == 'stable'
-        working-directory: ruststream-nats
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # Advisory, not a gate: surfaces a lint added by the next clippy release six weeks
+      # before it turns the build red.
+      - name: cargo clippy (beta, advisory)
+        if: matrix.toolchain == 'beta'
+        continue-on-error: true
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: cargo check (no default features)
-        working-directory: ruststream-nats
         run: cargo check --workspace --no-default-features
 
       - name: cargo check (all features)
-        working-directory: ruststream-nats
         run: cargo check --workspace --all-targets --all-features
 
+      # --no-fail-fast: a failing target must not hide failures in the targets behind it;
+      # the log then lists every red test, not just the first binary's.
       - name: cargo test (handler-stub only, no live broker)
-        working-directory: ruststream-nats
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --all-features --no-fail-fast
+
+      # The crate-root missing_docs deny covers item docs; this gate catches what rustc
+      # cannot: broken intra-doc links and redundant targets only rustdoc resolves.
+      - name: cargo doc
+        if: matrix.toolchain == 'stable'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps
+
+  features:
+    name: Each feature alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@v2.85.8
+        with:
+          tool: cargo-hack
+
+      # --no-dev-deps: a dev-dependency in scope masks a missing feature gate in the library.
+      # It also rewrites the manifests in place, which is why the lock file is not asserted here.
+      - name: cargo hack check (each feature)
+        run: cargo hack check --workspace --each-feature --no-dev-deps
+
+  minimal-versions:
+    name: Minimal versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nightly (resolver only)
+        uses: dtolnay/rust-toolchain@nightly
+
+      # The floor, for the build step below. Read from the manifest so an MSRV bump stays the
+      # one-line change it is in the matrix above.
+      - name: Resolve the floor toolchain
+        id: floor
+        run: |
+          FLOOR="$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)"
+          test -n "$FLOOR"
+          echo "toolchain=$FLOOR" >> "$GITHUB_OUTPUT"
+
+      - name: Install the floor toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.floor.outputs.toolchain }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # The full flag rather than -Z direct-minimal-versions: the narrow one leaves the assembled
+      # graph unverified, and that is what a user builds. It costs the pinning list below.
+      - name: Resolve minimal versions
+        run: cargo +nightly update -Z minimal-versions
+
+      # Both bounds are too loose in `ruststream`'s own manifest, which declares `tokio = "1"` and
+      # `tracing = "0.1"` while its runtime needs more: `watch::Sender: Clone` arrived in tokio
+      # 1.37, and the event macros reject the form it uses before tracing 0.1.24. The core's own
+      # minimal-versions run does not see it, because its all-features graph pulls both floors up
+      # through optional dependencies this crate does not enable. Drop each pin when the core
+      # tightens the bound.
+      - name: Pin dependencies whose declared bounds are too loose
+        run: |
+          cargo update -p tokio --precise 1.37.0
+          cargo update -p tracing --precise 0.1.24
+
+      # Minimum dependencies on the minimum compiler: the worst case a user can assemble.
+      # Resolution above needs nightly, so only this step drops to the floor. --locked holds the
+      # resolution the two steps above produced, which a re-resolve would otherwise undo.
+      - name: Build and test against minimal versions
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.floor.outputs.toolchain }}
+        run: |
+          cargo check --locked --workspace --all-targets --all-features
+          cargo test --locked --workspace --all-features --no-fail-fast
 
   templates:
     name: Templates (render + compile)
@@ -88,8 +177,10 @@ jobs:
           persist-credentials: false
           path: ruststream-nats
 
-      # The rendered scaffolds pin `ruststream` and `ruststream-nats` by version; until 0.5 is
-      # published the sibling checkout supplies the unpublished crate through the injected patch.
+      # The scaffolds pin both crates by version, and the patch injected below redirects each to a
+      # checkout. The pins still have to name the line this branch is on: a requirement the patched
+      # crate does not satisfy is dropped as unused, and the render then resolves the published
+      # pair instead and stops checking this branch at all.
       - uses: actions/checkout@v7
         with:
           repository: powersemmi/ruststream
@@ -110,9 +201,8 @@ jobs:
           tool: cargo-generate
 
       # Template-contract drift check: render each scaffold and compile it, so a broker API change
-      # that breaks a template fails here, not a user's first `cargo build`. The rendered projects
-      # pin both crates by version; until 0.5 is published, patch each to the sibling checkout so the
-      # scaffold builds against the local crates.
+      # that breaks a template fails here, not a user's first `cargo build`. No --locked: a fresh
+      # scaffold has no lock file, which is the situation a user starts from.
       - name: Render and check templates
         working-directory: ruststream-nats
         env:
@@ -138,13 +228,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          path: ruststream-nats
-
-      - uses: actions/checkout@v7
-        with:
-          repository: powersemmi/ruststream
-          persist-credentials: false
-          path: ruststream
 
       - name: Start NATS with JetStream
         run: |
@@ -164,11 +247,8 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ruststream-nats
 
       - name: Run NATS integration tests
-        working-directory: ruststream-nats
         env:
           NATS_TEST_URL: nats://127.0.0.1:4222
         run: >-
@@ -178,7 +258,6 @@ jobs:
           -- --test-threads=1
 
       - name: Run NATS conformance suite
-        working-directory: ruststream-nats
         env:
           NATS_TEST_URL: nats://127.0.0.1:4222
         run: cargo test -p ruststream-nats --features testing --test conformance_nats -- --test-threads=1
@@ -194,16 +273,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          path: ruststream-nats
-
-      # cargo-deny resolves the whole dependency graph, so the cross-repo `ruststream`
-      # path dependency must be present. Mirror the rust job's sibling layout and run the
-      # tool natively (the Docker action only mounts this workspace, not the sibling).
-      - uses: actions/checkout@v7
-        with:
-          repository: powersemmi/ruststream
-          persist-credentials: false
-          path: ruststream
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -217,7 +286,6 @@ jobs:
       # versions, and registry sources, per the checked-in deny.toml. Not path-
       # gated: advisories arrive over time, not only with manifest changes.
       - name: cargo deny
-        working-directory: ruststream-nats
         run: cargo deny check
 
       # No cache: there is no uv.lock anymore (uvx resolves the tools on the fly).
@@ -225,9 +293,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: codespell
-        working-directory: ruststream-nats
         run: uvx codespell
 
       - name: zizmor
-        working-directory: ruststream-nats
         run: uvx zizmor .github/workflows

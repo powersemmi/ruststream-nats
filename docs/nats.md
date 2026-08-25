@@ -125,14 +125,14 @@ why `JetStreamPublish` keeps the stream expectations. A deduplication id is per-
 
 ## Request-reply
 
-NATS supports request-reply natively, so `NatsPublisher` implements the `RequestReply` capability:
-`request(msg, timeout)` publishes with a reply inbox and resolves with the reply message, or fails
-with a timeout error when nothing answers in time:
+NATS supports request-reply natively, so `NatsPublisher` implements the `RequestReply` capability,
+and the crate's prelude re-exports it: `request(msg, timeout)` publishes with a reply inbox and
+resolves with the reply message, or fails with a timeout error when nothing answers in time:
 
 ```rust
 use std::time::Duration;
 
-use ruststream::{OutgoingMessage, RequestReply};
+use ruststream::OutgoingMessage;
 use ruststream_nats::prelude::*;
 
 --8<-- "crates/ruststream-nats/examples/nats_request_reply.rs:request"

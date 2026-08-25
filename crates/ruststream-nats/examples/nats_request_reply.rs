@@ -16,9 +16,9 @@
 use std::io;
 use std::time::Duration;
 
-// The request assembles its own message and asks for a capability the service surface does not
-// carry, so those two stay explicit; the prelude covers the rest.
-use ruststream::{OutgoingMessage, RequestReply};
+// The request assembles its own message, so `OutgoingMessage` comes on its own line; the
+// `RequestReply` capability it calls through arrives with the prelude, because this broker has it.
+use ruststream::OutgoingMessage;
 use ruststream_nats::prelude::*;
 
 #[ruststream::app]

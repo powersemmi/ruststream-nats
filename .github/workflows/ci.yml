@@ -147,20 +147,13 @@ jobs:
       - name: Resolve minimal versions
         run: cargo +nightly update -Z minimal-versions
 
-      # Both bounds are too loose in `ruststream`'s own manifest, which declares `tokio = "1"` and
-      # `tracing = "0.1"` while its runtime needs more: `watch::Sender: Clone` arrived in tokio
-      # 1.37, and the event macros reject the form it uses before tracing 0.1.24. The core's own
-      # minimal-versions run does not see it, because its all-features graph pulls both floors up
-      # through optional dependencies this crate does not enable. Drop each pin when the core
-      # tightens the bound.
-      - name: Pin dependencies whose declared bounds are too loose
-        run: |
-          cargo update -p tokio --precise 1.37.0
-          cargo update -p tracing --precise 0.1.24
-
+      # No pinning step: every manifest in the graph declares a floor its code actually compiles
+      # against. Add one here, naming the manifest at fault, if a dependency ever understates its
+      # own bound.
+      #
       # Minimum dependencies on the minimum compiler: the worst case a user can assemble.
       # Resolution above needs nightly, so only this step drops to the floor. --locked holds the
-      # resolution the two steps above produced, which a re-resolve would otherwise undo.
+      # resolution that step produced, which a re-resolve would otherwise undo.
       - name: Build and test against minimal versions
         env:
           RUSTUP_TOOLCHAIN: ${{ steps.floor.outputs.toolchain }}

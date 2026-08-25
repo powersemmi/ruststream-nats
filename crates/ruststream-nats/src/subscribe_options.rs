@@ -141,6 +141,15 @@ impl SubscribeOptions {
         &self.subject
     }
 
+    /// Takes the subject pattern out, dropping the rest of the options.
+    ///
+    /// Only the in-process broker needs this: it routes on the subject alone, while the real
+    /// broker carries the whole options value into the client call.
+    #[cfg(feature = "testing")]
+    pub(crate) fn into_subject(self) -> String {
+        self.subject
+    }
+
     /// True when [`Self::jetstream`] has been set.
     #[must_use]
     pub const fn is_jetstream(&self) -> bool {

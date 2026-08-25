@@ -5,9 +5,7 @@
 //! consumer (the `SubscribeOptions` builder sits right in the decorator) and replies on
 //! `confirmations`; `on_cancel` handles `cancellations` by plain name with no reply.
 
-use ruststream::runtime::HandlerResult;
-use ruststream::subscriber;
-use ruststream_nats::SubscribeOptions;
+use ruststream_nats::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

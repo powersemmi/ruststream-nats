@@ -4,8 +4,7 @@
 //! definition that `routes` collects into a `Router`. `confirm` consumes `orders` and replies on
 //! `confirmations`; `on_cancel` handles `cancellations` with no reply.
 
-use ruststream::runtime::HandlerResult;
-use ruststream::subscriber;
+use ruststream_nats::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

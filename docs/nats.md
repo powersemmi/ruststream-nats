@@ -102,6 +102,27 @@ with the broker at startup. Naming a policy picks the transport:
 --8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:publish"
 ```
 
+### Per-message arguments
+
+Core 0.7 put every publish behind one builder. The entry points `message(..)`, for a value, and
+`raw(..)`, for bytes, are blanket-implemented for every publisher through `PublishExt`, so a
+`NatsPublisher` kept in the application state, a `JetStreamPublisher` paired at startup and a
+publisher injected into an `Out` slot all take the same call shape, down to the same `to(..)`,
+`with_headers(..)` and `with_codec(..)` steps.
+
+The builder carries the positions a message has - a body, a codec, headers, a destination - and
+nothing a particular transport invents, so a NATS-only argument attaches one step earlier, to the
+publisher: `publisher.with_argument(value).message(&order).publish()`. The step returns a small
+adapter that owns the argument and is itself a `Publisher`; its `publish` applies the argument to
+the outgoing message, stamping a header or setting a transport option, then delegates to the
+publisher it wraps. Being a publisher is what earns the adapter the whole builder, so the argument
+composes with every publish position instead of competing with one.
+
+Which of the two an option belongs to follows from how long it holds. An adapter carries what
+changes per message; a policy carries what a publisher declares for its whole lifetime, which is
+why `JetStreamPublish` keeps the stream expectations. A deduplication id is per-message, so a
+`Nats-Msg-Id` step, once this crate offers one, takes the adapter shape.
+
 ## Request-reply
 
 NATS supports request-reply natively, so `NatsPublisher` implements the `RequestReply` capability:

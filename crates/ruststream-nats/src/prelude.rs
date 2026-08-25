@@ -5,12 +5,15 @@
 //! on top of the whole core prelude. One import then serves a service file: the application
 //! object, the handler surface and the attribute macros arrive with it.
 //!
-//! The capability re-exports make the glob a manifest of what this transport can do. A handler
-//! that bounds a slot with [`RequestReply`](ruststream::RequestReply) compiles here because NATS
-//! correlates replies natively; on a broker whose prelude does not carry that name, the bound does
-//! not even resolve, so the mismatch reads as the missing capability it is. Globbing two broker
-//! preludes stays safe for the same reason it is useful: each re-exports the same core trait, and
-//! the compiler accepts a name that resolves to one item however many paths reach it.
+//! The capability re-exports make the glob a manifest of what this transport can do, and they
+//! carry the ones a service writes for itself: a trait it names in a bound, and a trait whose
+//! method it calls on a value the runtime hands it, which needs the trait in scope just the same.
+//! A handler that bounds a slot with [`RequestReply`](ruststream::RequestReply) compiles here
+//! because NATS correlates replies natively; on a broker whose prelude does not carry that name,
+//! the bound does not even resolve, so the mismatch reads as the missing capability it is.
+//! Globbing two broker preludes stays safe for the same reason it is useful: each re-exports the
+//! same core trait, and the compiler accepts a name that resolves to one item however many paths
+//! reach it.
 //!
 //! # Examples
 //!
@@ -28,15 +31,21 @@
 // is named by the crate path the glob comes from, so the core prelude rides along rather than
 // asking a service file for a second import that says nothing new.
 pub use ruststream::prelude::*;
-// Exactly the capabilities this crate implements, and no others: batching on the subscriber, the
-// AsyncAPI server description on the broker, a partition key on a delivery, and native
-// request-reply on the Core publisher. NATS could serve a replayable-log capability from
+// The capabilities this crate implements on the forms a service holds: native request-reply on
+// the Core publisher, named in a bound, and the partition key of a delivery, whose method a
+// handler calls on the message it is handed. NATS could serve a replayable-log capability from
 // JetStream, but this crate implements none of that family, so the glob does not offer it.
-pub use ruststream::{BatchSubscriber, DescribeServer, Partitioned, RequestReply};
+pub use ruststream::{Partitioned, RequestReply};
 
 pub use crate::{JetStreamPublish, NatsBroker, NatsPublish, SubscribeOptions};
 
-// Three groups stay out.
+// What stays out, though this crate implements it.
+//
+// `BatchSubscriber`: subscriber-side, consumed by the runtime's plumbing. A service declares the
+// batch form of a handler and never names the trait.
+//
+// `DescribeServer`: contract machinery, read by the runtime and the AsyncAPI generator rather
+// than written by a service.
 //
 // The `testing` module: broker-author tooling behind a feature, not the surface a service is
 // written against, so it is imported where it is used and says by that import what it is.

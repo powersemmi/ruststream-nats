@@ -35,12 +35,12 @@
 
 ```toml
 [dependencies]
-ruststream = { version = "0.6", features = ["macros", "json"] }
-ruststream-nats = "0.6"
+ruststream = { version = "0.7", features = ["macros", "json"] }
+ruststream-nats = "0.7"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-nats = { version = "0.6", features = ["testing"] }
+ruststream-nats = { version = "0.7", features = ["testing"] }
 ```
 
 ## Scaffold

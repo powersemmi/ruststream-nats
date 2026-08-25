@@ -6,8 +6,8 @@ subscribers, routing, codecs, middleware), see the
 [RustStream documentation](https://powersemmi.github.io/ruststream/).
 
 ```toml
-ruststream = { version = "0.6", features = ["macros"] }
-ruststream-nats = "0.6"
+ruststream = { version = "0.7", features = ["macros"] }
+ruststream-nats = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 

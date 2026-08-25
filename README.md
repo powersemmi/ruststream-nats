@@ -78,10 +78,9 @@ fn app() -> impl App {
 
 `ruststream_nats::prelude` is the one glob a service file imports: it carries this crate's broker,
 subscription and publishing types on top of the framework prelude, so the sections below add no
-import lines of their own. It also re-exports the framework capabilities a service writes against
-NATS itself - a trait named in a bound, or one whose method a handler calls on a value it is
-handed - which makes the glob a manifest of what the transport can do: a bound this broker cannot
-satisfy fails on the missing name rather than deeper in.
+import lines of their own. It also re-exports `RequestReply`, the framework capability a service
+writes against NATS itself, which makes the glob a manifest of what the transport can do: a bound
+this broker cannot satisfy fails on the missing name rather than deeper in.
 
 ## JetStream
 

@@ -15,6 +15,9 @@
 //! same core trait, and the compiler accepts a name that resolves to one item however many paths
 //! reach it.
 //!
+//! A capability whose method the core already surfaces elsewhere is the one exception, and it is
+//! listed below: two paths to the same method name are what the compiler will not resolve.
+//!
 //! # Examples
 //!
 //! ```
@@ -31,15 +34,18 @@
 // is named by the crate path the glob comes from, so the core prelude rides along rather than
 // asking a service file for a second import that says nothing new.
 pub use ruststream::prelude::*;
-// The capabilities this crate implements on the forms a service holds: native request-reply on
-// the Core publisher, named in a bound, and the partition key of a delivery, whose method a
-// handler calls on the message it is handed. NATS could serve a replayable-log capability from
-// JetStream, but this crate implements none of that family, so the glob does not offer it.
-pub use ruststream::{Partitioned, RequestReply};
+// The capability this crate implements on a form a service holds: native request-reply on the
+// Core publisher, named in a bound. NATS could serve a replayable-log capability from JetStream,
+// but this crate implements none of that family, so the glob does not offer it.
+pub use ruststream::RequestReply;
 
 pub use crate::{JetStreamPublish, NatsBroker, NatsPublish, SubscribeOptions};
 
 // What stays out, though this crate implements it.
+//
+// `Partitioned`: implemented here, but the core surfaces `partition_key` through
+// `IncomingMessage`'s defaulted method - re-exporting the trait would make the natural call
+// ambiguous (E0034).
 //
 // `BatchSubscriber`: subscriber-side, consumed by the runtime's plumbing. A service declares the
 // batch form of a handler and never names the trait.

@@ -205,6 +205,11 @@ jobs:
           for tpl in nats nats-js; do
             name="smoke-$tpl"
             cargo generate --path "templates/$tpl" --name "$name" --destination "$RUNNER_TEMP" --vcs none
+            # The scaffold manifests are checked in as `Cargo.toml.liquid` so that cargo's
+            # git-source package discovery never parses their placeholder name. Assert that
+            # cargo-generate did drop the suffix, otherwise the append below would quietly write a
+            # manifest of its own.
+            test -f "$RUNNER_TEMP/$name/Cargo.toml"
             {
               echo ""
               echo "[patch.crates-io]"

@@ -34,8 +34,8 @@ use ruststream::{
     Partitioned, Publisher, RequestReply, Subscriber, subscriber,
 };
 use ruststream_nats::{
-    ConnectedNatsBroker, NatsBroker, NatsError, NatsMessage, NatsPublish, NatsPublisher,
-    PARTITION_KEY_HEADER, SubscribeOptions,
+    ConnectedNatsBroker, NatsBroker, NatsError, NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
+    SubscribeOptions,
 };
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
@@ -408,7 +408,7 @@ async fn app_jetstream_retry_after_is_delayed_natively() {
 async fn respond(
     payload: &[u8],
     ctx: &mut Context<'_>,
-    Out(out): Out<NatsPublisher>,
+    Out(out): Out<impl Publisher>,
 ) -> HandlerResult {
     assert_eq!(payload, b"ping");
     let Some(reply_to) = ctx.headers().reply_to().map(str::to_owned) else {

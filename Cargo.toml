@@ -7,7 +7,7 @@ members = ["crates/ruststream-nats"]
 exclude = ["templates"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -17,7 +17,7 @@ authors = ["RustStream contributors"]
 [workspace.dependencies]
 ruststream-nats = { path = "crates/ruststream-nats" }
 
-ruststream = { version = ">=0.6.0, <0.7.0", default-features = false }
+ruststream = { version = ">=0.7.0, <0.8.0", default-features = false }
 
 async-nats = "0.50"
 bytes = "1"

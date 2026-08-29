@@ -11,11 +11,11 @@
 //! unaffected. Opting in means changing the handler's context type to [`JetStreamContext`].
 //!
 //! These fields are genuinely native: they come from the `JetStream` `$JS.ACK` reply subject, not
-//! from the payload or the message [`Headers`](ruststream::Headers), so they are not reachable any
-//! other way. Core (non-JetStream) NATS deliveries carry no such metadata - their only native datum
-//! is the reply inbox, already surfaced as the `reply-to` header - so Core handlers should keep the
-//! default `()` context. A handler bound to [`JetStreamContext`] still works on a Core subscription;
-//! every key just reads `None` there.
+//! from the payload or the message [`HeaderMap`](ruststream::HeaderMap), so they are not reachable
+//! any other way. Core (non-JetStream) NATS deliveries carry no such metadata - their only native
+//! datum is the reply inbox, already surfaced as the `reply-to` header - so Core handlers should
+//! keep the default `()` context. A handler bound to [`JetStreamContext`] still works on a Core
+//! subscription; every key just reads `None` there.
 //!
 //! # Examples
 //!

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use ruststream::{
-    BatchSubscriber, Broker, ConnectedBroker, DescribeServer, Headers, IncomingMessage,
+    BatchSubscriber, Broker, ConnectedBroker, DescribeServer, HeaderMap, IncomingMessage,
     OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, testing::expect_published,
 };
 use ruststream_nats::{
@@ -243,7 +243,7 @@ async fn headers_are_propagated_to_subscribers() {
         .expect("subscribe");
     let publisher = broker.publisher(NatsTestPublish);
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/json");
     headers.insert("correlation-id", "abc-1");
     let outgoing = OutgoingMessage::new("orders", b"{}").with_headers(headers);
@@ -328,7 +328,7 @@ async fn partition_key_header_is_surfaced() {
         .await
         .expect("subscribe");
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert(PARTITION_KEY_HEADER, "tenant-a");
 
     broker

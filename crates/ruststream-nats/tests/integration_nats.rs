@@ -30,7 +30,7 @@ use ruststream::runtime::{
     AppInfo, Context, HandlerMetadata, HandlerResult, Out, RustStream, RustStreamError,
 };
 use ruststream::{
-    Broker, ConnectedBroker, DescribeServer, Headers, IncomingMessage, OutgoingMessage,
+    Broker, ConnectedBroker, DescribeServer, HeaderMap, IncomingMessage, OutgoingMessage,
     Partitioned, Publisher, RequestReply, Subscriber, subscriber,
 };
 use ruststream_nats::{
@@ -200,7 +200,7 @@ async fn app_surfaces_headers_and_partition_key_in_handler() {
     let running = start_app(app).await;
     let publisher = outside.publisher(NatsPublish);
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert("Content-Type", "application/json");
     headers.insert("X-Trace-Id", "abc-123");
     headers.insert(PARTITION_KEY_HEADER, "tenant-abc");

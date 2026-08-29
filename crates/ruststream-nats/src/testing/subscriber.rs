@@ -5,6 +5,7 @@
 //! [`router::SubjectRouter`], so handlers stop receiving messages as soon as their task
 //! finishes.
 
+use std::future::{Future, ready};
 use std::sync::{Arc, OnceLock};
 
 use futures::Stream;
@@ -175,12 +176,12 @@ impl IncomingMessage for NatsTestMessage {
             .map_or_else(|| EMPTY.get_or_init(HeaderMap::new), |d| &d.headers)
     }
 
-    async fn ack(mut self) -> Result<(), AckError> {
+    fn ack(mut self) -> impl Future<Output = Result<(), AckError>> {
         self.delivery.take();
-        Ok(())
+        ready(Ok(()))
     }
 
-    async fn nack(mut self, requeue: bool) -> Result<(), AckError> {
+    fn nack(mut self, requeue: bool) -> impl Future<Output = Result<(), AckError>> {
         let delivery = self
             .delivery
             .take()
@@ -195,7 +196,7 @@ impl IncomingMessage for NatsTestMessage {
                 coordinator.enqueued();
             }
         }
-        Ok(())
+        ready(Ok(()))
     }
 }
 

@@ -76,9 +76,14 @@ fn app() -> impl App {
 }
 ```
 
-`ruststream_nats::prelude` is the one glob a service file imports: this crate's broker,
-subscription and publishing types plus the `RequestReply` capability, on top of the framework
-prelude. The sections below add no import lines of their own.
+Two vocabularies, one per file. A **handler file** names capabilities and imports
+`ruststream::prelude::*`: it bounds an injected publisher with the trait it needs
+(`Out<impl Publisher>`, `Out<impl RequestReply>`) and never says which broker fills it. A **routes
+file** names policies and imports `ruststream_nats::prelude::*`, which re-exports the framework
+prelude and adds this crate's broker, subscription descriptor and publish policies under uniform
+mount-site names - `Publish` is whatever plain publishing is on this transport. A single-file
+service like the one above is both, so it takes the broker prelude. The sections below add no
+import lines of their own.
 
 ## JetStream
 
@@ -91,11 +96,11 @@ async fn handle(order: &Order) -> HandlerOutcome { /* ... */ }
 
 ## Publish
 
-A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport:
+A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport. The prelude carries the plain one as `Publish` (`NatsPublish` at the crate root):
 
 ```rust
 // Core NATS: fire-and-forget, and the RequestReply capability.
-b.after_startup(NatsPublish, async move |publisher| { /* publish / request */ });
+b.after_startup(Publish, async move |publisher| { /* publish / request */ });
 
 // JetStream: each publish waits for the stream's acknowledgement, and the policy states
 // what the stream must look like for the message to be accepted.

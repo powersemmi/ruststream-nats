@@ -4,6 +4,10 @@
 //! definition that `routes` collects into a `Router`. `confirm` binds to a durable JetStream
 //! consumer (the `SubscribeOptions` builder sits right in the decorator) and replies on
 //! `confirmations`; `on_cancel` handles `cancellations` by plain name with no reply.
+//!
+//! The decorator names a NATS subscription, so this file imports the broker prelude rather than
+//! the core one; a handler file with no broker vocabulary in it (the `nats` scaffold's) needs only
+//! `ruststream::prelude`.
 
 use ruststream_nats::prelude::*;
 use schemars::JsonSchema;

@@ -3,8 +3,11 @@
 //! The first parameter is the decoded payload; the macro turns each function into a mountable
 //! definition that `routes` collects into a `Router`. `confirm` consumes `orders` and replies on
 //! `confirmations`; `on_cancel` handles `cancellations` with no reply.
+//!
+//! Nothing here names NATS: a handler names capabilities, so the core prelude is the whole import.
+//! Which broker fills them is `routes`' business.
 
-use ruststream_nats::prelude::*;
+use ruststream::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -1,7 +1,8 @@
 //! Wiring: collect the `orders` handlers into one `Router`, mounted by `main` via `include_router`.
 //!
 //! Keeping registration in its own module lets the handlers stay broker-agnostic - the router binds
-//! to a concrete broker only when `main` mounts it.
+//! to a concrete broker only when `main` mounts it. This is the file that names the broker, so it
+//! is the one that imports the broker prelude; `orders` names capabilities and imports the core's.
 
 use ruststream::runtime::RouterDef;
 use ruststream_nats::prelude::*;
@@ -10,13 +11,13 @@ use crate::orders;
 
 /// Builds the orders router: a publishing handler (replies to `confirmations`) plus a plain one.
 ///
-/// `confirm` needs a publisher for its reply: `TypedPublisher::new(NatsPublish)` pairs the plain
+/// `confirm` needs a publisher for its reply: `TypedPublisher::new(Publish)` pairs the plain
 /// publish policy with the default codec, which is reused to decode the order. The runtime pairs
 /// the policy with the broker at startup. `on_cancel` has no reply, so its `include` registers on
 /// its own; a registration that takes an attachment commits through `.publisher(..)`, or
 /// `.build()` for the broker's default policy.
 pub fn orders() -> impl RouterDef<NatsBroker> {
-    let confirmations = TypedPublisher::new(NatsPublish);
+    let confirmations = TypedPublisher::new(Publish);
 
     Router::new()
         .include(orders::confirm)

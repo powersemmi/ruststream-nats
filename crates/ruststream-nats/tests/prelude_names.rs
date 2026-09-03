@@ -1,26 +1,36 @@
-//! The crate prelude must not shadow a core name.
+//! The two vocabularies the preludes keep apart.
 //!
-//! It globs the core prelude and then re-exports this crate's own items. An explicit re-export
-//! beats a glob silently, so a name this crate spells the same as a core one takes the core's
-//! meaning away from every service that writes the glob - and the failure surfaces in the user's
-//! file, not here. Each probe below asks for a core name through this crate's prelude in the
-//! position the core gives it.
+//! A handler body imports the core prelude and names capability traits; a routes file imports this
+//! one and names policies. This prelude therefore has to deliver both halves: the core's trait
+//! vocabulary unchanged through its glob, and the crate's policies under the uniform mount-site
+//! names. Each probe below asks for one name in the position its vocabulary gives it, so a
+//! re-export that shifted a name would fail here rather than in a user's file.
 
 use ruststream_nats::prelude::*;
 
-/// `Publish` is the core's slot capability trait: what a manual body bounds an injections-arena
-/// entry with. This crate's plain publish policy is `NatsPublish`, and naming it `Publish` here
-/// would turn this bound into `E0404: expected trait, found struct`.
-fn _publish_is_the_core_trait<T: Publish>() {}
+/// The routes-side name: `Publish` is this broker's plain publish policy, a value a mount site
+/// attaches. Uniform across brokers, which is what lets a routes file read the same whichever
+/// transport it was written against.
+fn _publish_is_this_brokers_policy() {
+    // Both positions have to be the policy: a name that resolved to a trait would fail in the
+    // type position, and a name that resolved to anything else would fail in the value position.
+    let _: Publish = Publish;
+}
 
-/// `Publisher` is the core's broker-side publish trait, the bound a `#[subscriber]` handler writes
-/// on an injected slot (`Out<impl Publisher>`).
-fn _publisher_is_the_core_trait<T: Publisher>() {}
+/// `JetStreamPublish` keeps its own name: `JetStream` is the concept, not this broker's word for
+/// one.
+fn _jetstream_publish_is_a_policy_too() {
+    let _: JetStreamPublish = JetStreamPublish::default();
+}
+
+/// The body-side name: `Publisher` is the core's publish capability, the bound a `#[subscriber]`
+/// handler writes on an injected slot (`Out<impl Publisher>`). It must survive this glob.
+fn _publisher_is_the_core_capability<T: Publisher>() {}
+
+/// `RequestReply` is the capability this prelude deliberately carries beside the core's: a handler
+/// bounding a slot with it compiles here because NATS correlates replies natively.
+fn _request_reply_is_the_core_capability<T: RequestReply>() {}
 
 /// `PublishPolicy` is the core's declaration half of a publisher; this crate's policies implement
 /// it rather than replacing the name.
 fn _publish_policy_is_the_core_trait<T: PublishPolicy<C>, C: ruststream::ConnectedBroker>() {}
-
-/// `RequestReply` is the capability this crate's prelude deliberately carries; it must arrive as
-/// the core trait, not as a name of this crate's own.
-fn _request_reply_is_the_core_trait<T: RequestReply>() {}

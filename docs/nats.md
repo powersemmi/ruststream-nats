@@ -11,6 +11,17 @@ ruststream-nats = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
+## Which glob a file writes
+
+Two vocabularies, one per file. A **handler file** names capabilities: it imports
+`ruststream::prelude::*` and bounds an injected publisher with the trait it needs
+(`Out<impl Publisher>`, `Out<impl RequestReply>`), so the body says what it does with the slot and
+never which broker fills it - the same handler then mounts on a real server and on the in-process
+test broker unchanged. A **routes file** names policies: it imports `ruststream_nats::prelude::*`,
+which re-exports the framework prelude and adds this crate's broker, its subscription descriptor
+and its publish policies under uniform mount-site names (`Publish` is plain publishing on whatever
+transport the file mounts). A single-file service is both, so it takes the broker prelude.
+
 ## The lifecycle
 
 The broker is a ladder of consuming transitions, so each state is a distinct type:
@@ -96,7 +107,8 @@ with the broker at startup. Naming a policy picks the transport:
 - `NatsPublish` pairs into `NatsPublisher`: plain Core NATS publishing, fire-and-forget, plus the
   `RequestReply` capability. It is also the broker's default publish policy, so a
   `#[subscriber(.., publish("dest"))]` handler mounted without an explicit publisher replies
-  through it.
+  through it. The crate prelude carries it under the uniform mount-site name `Publish`, so a
+  routes file reads the same whichever transport it was written against.
 - `JetStreamPublish` pairs into `JetStreamPublisher`: every publish waits for the stream's
   acknowledgement, so a message the stream refuses is an error rather than a silent drop.
   `publish_ack` hands back the acknowledgement itself (the stream, the sequence, whether the
@@ -145,8 +157,8 @@ use ruststream_nats::prelude::*;
 Any NATS responder answers it: another service, or `nats reply questions 'pong'` from the CLI. The
 runnable program is
 [`examples/nats_request_reply.rs`](https://github.com/powersemmi/ruststream-nats/blob/main/crates/ruststream-nats/examples/nats_request_reply.rs) -
-it sends the request from the scope's `after_startup` hook, where the `NatsPublish` policy is
-paired with the connected broker.
+it sends the request from the scope's `after_startup` hook, a mount site, so it names the `Publish`
+policy the crate prelude carries and the runtime pairs it with the connected broker.
 
 The responder end works the same way in-process and against a real server: an incoming request
 carries its reply inbox in the well-known `reply-to` header, so a handler reads

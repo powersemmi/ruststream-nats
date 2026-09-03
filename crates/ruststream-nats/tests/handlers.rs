@@ -22,7 +22,7 @@ use ruststream_nats::PARTITION_KEY_HEADER;
 use ruststream_nats::context::keys::{Delivered, StreamSequence};
 use ruststream_nats::prelude::*;
 // The handlers below bound their slot with the core capability, not a broker type, so the same
-// bodies mount on the production broker with `NatsPublish` and here on its in-process transport.
+// bodies mount on the production broker under `Publish` and here under the transport's own policy.
 use ruststream_nats::testing::{NatsTestBroker, NatsTestPublish};
 use serde::{Deserialize, Serialize};
 

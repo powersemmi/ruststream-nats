@@ -51,7 +51,7 @@ Wire it onto the broker; the `with_broker` / `include` part is identical to the 
 To consume from JetStream instead, describe the source in the `#[subscriber(..)]` attribute with
 `SubscribeOptions`, naming the stream and a durable consumer so progress survives restarts. The
 macro follows the builder chain, so the definition carries its own source. The handler's
-`HandlerResult::Ack` acks back to JetStream. This is what the `nats-js` CLI scaffold generates.
+`HandlerOutcome::ack()` acks back to JetStream. This is what the `nats-js` CLI scaffold generates.
 
 ```rust
 --8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:handler"
@@ -68,14 +68,20 @@ Beyond `jetstream` and `durable`, the builder carries `queue_group` (Core NATS l
 settings `pull_batch` / `pull_expires`. Incompatible combinations (for example `queue_group`
 together with `jetstream`) are rejected with an error before any I/O.
 
+The descriptor is a subscription source as it stands, so the macro-free path takes it directly:
+`subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS"), body)` builds the same definition
+the decorator does, and the same settings chain and `include` mount it. See
+[Subscribers](https://powersemmi.github.io/ruststream/latest/guides/subscribers/) in the framework
+docs for the body contract on that path.
+
 ### Acknowledgement and delayed retry
 
-A JetStream delivery settles natively: `HandlerResult::Ack` acks it, `HandlerResult::retry()` sends
-a negative acknowledgement, and `HandlerResult::drop()` terminates it. Delayed retry is native too:
-`HandlerResult::retry_after(delay)` carries the delay in the negative acknowledgement itself, so the
-server holds the message for that long and then redelivers it on the same consumer - with its stream
-sequence and its delivery count intact, since nothing is re-published and no copy is made. The
-runtime's broker-agnostic deferred re-publish is not involved.
+A JetStream delivery settles natively: `HandlerOutcome::ack()` acks it, `HandlerOutcome::retry()`
+sends a negative acknowledgement, and `HandlerOutcome::drop()` terminates it. Delayed retry is
+native too: `HandlerOutcome::retry_after(delay)` carries the delay in the negative acknowledgement
+itself, so the server holds the message for that long and then redelivers it on the same consumer -
+with its stream sequence and its delivery count intact, since nothing is re-published and no copy is
+made. The runtime's broker-agnostic deferred re-publish is not involved.
 
 Core NATS has no acknowledgement concept at all. A core delivery reports `AckError::Unsupported`
 rather than silently succeeding, and declines the native delay, so a `retry_after` there falls back
@@ -90,7 +96,7 @@ with the broker at startup. Naming a policy picks the transport:
 - `NatsPublish` pairs into `NatsPublisher`: plain Core NATS publishing, fire-and-forget, plus the
   `RequestReply` capability. It is also the broker's default publish policy, so a
   `#[subscriber(.., publish("dest"))]` handler mounted without an explicit publisher replies
-  through it. The prelude also exports it as `Publish`.
+  through it.
 - `JetStreamPublish` pairs into `JetStreamPublisher`: every publish waits for the stream's
   acknowledgement, so a message the stream refuses is an error rather than a silent drop.
   `publish_ack` hands back the acknowledgement itself (the stream, the sequence, whether the
@@ -104,11 +110,14 @@ with the broker at startup. Naming a policy picks the transport:
 
 ### Per-message arguments
 
-Every publish runs through one builder: `message(..)` for a value, `raw(..)` for bytes, on any
-publisher through `PublishExt`, then `to(..)`, `with_headers(..)` and `with_codec(..)`.
+Every publish runs through one builder: `message(..)` on any publisher through `PublishExt`, then
+`to(..)`, `with_headers(..)` and `with_codec(..)`. Bytes take the same entry as anything else - a
+`#[derive(Outgoing, Serialized)]` newtype names what they are and carries them through untouched by
+a codec.
 
 A NATS-only argument attaches one step earlier, to the publisher:
 
+<!-- inline-rust: the shape a per-message NATS argument arrives in; the crate surfaces none yet, so there is no compiled example to embed -->
 ```rust
 publisher.with_argument(value).message(&order).publish().await?;
 ```
@@ -136,8 +145,8 @@ use ruststream_nats::prelude::*;
 Any NATS responder answers it: another service, or `nats reply questions 'pong'` from the CLI. The
 runnable program is
 [`examples/nats_request_reply.rs`](https://github.com/powersemmi/ruststream-nats/blob/main/crates/ruststream-nats/examples/nats_request_reply.rs) -
-it sends the request from the scope's `after_startup` hook, where the `Publish` policy is paired
-with the connected broker.
+it sends the request from the scope's `after_startup` hook, where the `NatsPublish` policy is
+paired with the connected broker.
 
 The responder end works the same way in-process and against a real server: an incoming request
 carries its reply inbox in the well-known `reply-to` header, so a handler reads

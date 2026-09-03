@@ -8,6 +8,7 @@ use std::time::Duration;
 
 pub use async_nats::jetstream::consumer::DeliverPolicy;
 use ruststream::SubscriptionSource;
+use ruststream::runtime::IntoSource;
 
 use crate::{ConnectedNatsBroker, error::NatsError, subscriber::NatsSubscriber};
 
@@ -241,6 +242,27 @@ impl SubscribeOptions {
             ));
         }
         Ok(())
+    }
+}
+
+/// The descriptor is already a source, so the manual constructor takes it as it stands:
+/// `subscriber(SubscribeOptions::new("orders").jetstream("ORDERS"), body)` names the same
+/// subscription the `#[subscriber(..)]` attribute does.
+///
+/// # Examples
+///
+/// ```
+/// use ruststream::runtime::IntoSource;
+/// use ruststream_nats::SubscribeOptions;
+///
+/// let source = SubscribeOptions::new("orders.*").into_source();
+/// assert_eq!(source.subject(), "orders.*");
+/// ```
+impl IntoSource for SubscribeOptions {
+    type Source = Self;
+
+    fn into_source(self) -> Self {
+        self
     }
 }
 

@@ -22,7 +22,7 @@ use ruststream_nats::{
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ruststream::runtime::{AppInfo, HandlerResult, RustStream};
+use ruststream::runtime::{AppInfo, HandlerOutcome, RustStream};
 use ruststream::subscriber;
 use ruststream::testing::TestApp;
 use serde::{Deserialize, Serialize};
@@ -510,17 +510,17 @@ struct Order {
 }
 
 #[subscriber("orders")]
-async fn ack_order(order: &Order) -> HandlerResult {
+async fn ack_order(order: &Order) -> HandlerOutcome {
     let _ = order;
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 // A JetStream-configured source resolves against the in-process broker too, so a handler bound to
 // a durable consumer is still unit-testable; only the subject pattern drives routing here.
 #[subscriber(SubscribeOptions::new("orders.durable").jetstream("ORDERS").durable("worker"))]
-async fn durable_order(order: &Order) -> HandlerResult {
+async fn durable_order(order: &Order) -> HandlerOutcome {
     let _ = order;
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 /// Counts how many times the retry handler ran, wired as typed app state.
@@ -528,14 +528,14 @@ async fn durable_order(order: &Order) -> HandlerResult {
 struct Attempts(Arc<AtomicUsize>);
 
 #[subscriber("retry")]
-async fn retry_then_ack(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> HandlerResult {
+async fn retry_then_ack(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> HandlerOutcome {
     let _ = order;
     // Requeue once, then ack: exercises `nack(requeue = true)` -> `enqueued` re-count balanced
     // against the delivery's `Drop` -> `consumed` decrement.
     if ctx.state().0.fetch_add(1, Ordering::SeqCst) == 0 {
-        HandlerResult::retry()
+        HandlerOutcome::retry()
     } else {
-        HandlerResult::Ack
+        HandlerOutcome::ack()
     }
 }
 
@@ -559,7 +559,7 @@ async fn test_app_drives_nats_test_broker_to_quiescence() {
         .subscriber("orders")
         .assert_called_once()
         .with(&Order { id: 1 })
-        .settled(HandlerResult::Ack);
+        .settled(HandlerOutcome::ack());
 
     tb.broker::<NatsTestBroker>()
         .publish("orders.durable", &Order { id: 2 })
@@ -570,7 +570,7 @@ async fn test_app_drives_nats_test_broker_to_quiescence() {
         .subscriber("orders.durable")
         .assert_called_once()
         .with(&Order { id: 2 })
-        .settled(HandlerResult::Ack);
+        .settled(HandlerOutcome::ack());
 
     tb.shutdown().await.expect("shutdown");
 }
@@ -594,7 +594,7 @@ async fn test_app_requeue_stays_balanced() {
     tb.broker::<NatsTestBroker>()
         .subscriber("retry")
         .assert_called(2)
-        .settled(HandlerResult::Ack);
+        .settled(HandlerOutcome::ack());
 
     tb.shutdown().await.expect("shutdown");
 }

@@ -27,15 +27,14 @@ use async_nats::jetstream::Context as JetStreamContext;
 use async_nats::jetstream::stream::Config as StreamConfig;
 use futures::StreamExt;
 use ruststream::runtime::{
-    AppInfo, Context, HandlerMetadata, HandlerResult, Out, RustStream, RustStreamError,
+    AppInfo, Context, Handle, HandlerOutcome, Out, RustStream, RustStreamError, subscriber,
 };
 use ruststream::{
-    Broker, ConnectedBroker, DescribeServer, HeaderMap, IncomingMessage, OutgoingMessage,
-    Partitioned, Publisher, RequestReply, Subscriber, subscriber,
+    Broker, ConnectedBroker, DescribeServer, Deserialized, HeaderMap, IncomingMessage, Outgoing,
+    OutgoingMessage, Partitioned, Publisher, RequestReply, Serialized, Subscriber, subscriber,
 };
 use ruststream_nats::{
-    ConnectedNatsBroker, NatsBroker, NatsError, NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
-    SubscribeOptions,
+    ConnectedNatsBroker, NatsBroker, NatsError, NatsPublish, PARTITION_KEY_HEADER, SubscribeOptions,
 };
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
@@ -120,6 +119,99 @@ async fn recv_one<T>(rx: &mut mpsc::Receiver<T>) -> T {
         .expect("handler channel closed")
 }
 
+/// The delivery's bytes, borrowed out of the payload. These tests assert on what travelled the
+/// wire, so the input carries itself and no codec takes part.
+#[derive(Deserialized)]
+struct Frame<'a>(&'a [u8]);
+
+/// Hands every delivery's payload to the test.
+struct Forward(mpsc::Sender<Vec<u8>>);
+
+impl<'p> Handle<Frame<'p>> for Forward {
+    async fn handle(
+        &self,
+        frame: &Frame<'p>,
+        _outs: &(),
+        _ctx: &mut Context<'_>,
+    ) -> Result<(), HandlerOutcome> {
+        self.0.send(frame.0.to_vec()).await.ok();
+        Ok(())
+    }
+}
+
+/// The headers a delivery reached the handler with: content type, a producer-set trace id, and
+/// the well-known partition-key header.
+type Snapshot = (Option<String>, Option<String>, Option<Vec<u8>>);
+
+/// Hands the test what the dispatch path exposed to the handler.
+struct SnapshotHeaders(mpsc::Sender<Snapshot>);
+
+impl<'p> Handle<Frame<'p>> for SnapshotHeaders {
+    async fn handle(
+        &self,
+        _frame: &Frame<'p>,
+        _outs: &(),
+        ctx: &mut Context<'_>,
+    ) -> Result<(), HandlerOutcome> {
+        let headers = ctx.headers();
+        let snapshot = (
+            headers.content_type().map(str::to_owned),
+            headers.get_str("x-trace-id").map(str::to_owned),
+            headers.get(PARTITION_KEY_HEADER).map(<[u8]>::to_vec),
+        );
+        self.0.send(snapshot).await.ok();
+        Ok(())
+    }
+}
+
+/// Asks for a redelivery once, then forwards the payload the redelivery carried.
+struct RetryOnce {
+    attempts: Arc<AtomicUsize>,
+    tx: mpsc::Sender<Vec<u8>>,
+}
+
+impl<'p> Handle<Frame<'p>> for RetryOnce {
+    async fn handle(
+        &self,
+        frame: &Frame<'p>,
+        _outs: &(),
+        _ctx: &mut Context<'_>,
+    ) -> Result<(), HandlerOutcome> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            // Dispatch turns this into nack(requeue) -> JetStream NAK.
+            return Err(HandlerOutcome::retry());
+        }
+        self.tx.send(frame.0.to_vec()).await.ok();
+        Ok(())
+    }
+}
+
+/// Asks for a delayed redelivery once, then reports how long the redelivery actually took.
+struct DelayOnce {
+    first_seen: Arc<OnceLock<Instant>>,
+    tx: mpsc::Sender<Duration>,
+}
+
+impl<'p> Handle<Frame<'p>> for DelayOnce {
+    async fn handle(
+        &self,
+        _frame: &Frame<'p>,
+        _outs: &(),
+        _ctx: &mut Context<'_>,
+    ) -> Result<(), HandlerOutcome> {
+        match self.first_seen.get() {
+            None => {
+                let _ = self.first_seen.set(Instant::now());
+                Err(HandlerOutcome::retry_after(RETRY_DELAY))
+            }
+            Some(first) => {
+                self.tx.send(first.elapsed()).await.ok();
+                Ok(())
+            }
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_delivers_core_messages_to_handler() {
     let Some(outside) = outside_or_skip().await else {
@@ -132,18 +224,7 @@ async fn app_delivers_core_messages_to_handler() {
     let app = RustStream::new(AppInfo::new("it-pubsub", "0.0.0")).with_broker(
         NatsBroker::new(nats_url().expect("url")),
         move |b| {
-            b.subscribe(
-                SubscribeOptions::new(handler_subject),
-                move |msg: &NatsMessage, _ctx: &mut Context| {
-                    let payload = msg.payload().to_vec();
-                    let tx = tx.clone();
-                    async move {
-                        tx.send(payload).await.ok();
-                        HandlerResult::Ack
-                    }
-                },
-                HandlerMetadata::raw("pubsub"),
-            );
+            b.include(subscriber(SubscribeOptions::new(handler_subject), Forward(tx)).build());
         },
     );
     let running = start_app(app).await;
@@ -166,9 +247,7 @@ async fn app_delivers_core_messages_to_handler() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_surfaces_headers_and_partition_key_in_handler() {
-    type Snapshot = (Option<String>, Option<String>, Option<Vec<u8>>);
-
+async fn app_surfaces_headers_in_handler() {
     let Some(outside) = outside_or_skip().await else {
         return;
     };
@@ -179,21 +258,8 @@ async fn app_surfaces_headers_and_partition_key_in_handler() {
     let app = RustStream::new(AppInfo::new("it-headers", "0.0.0")).with_broker(
         NatsBroker::new(nats_url().expect("url")),
         move |b| {
-            b.subscribe(
-                SubscribeOptions::new(handler_subject),
-                move |msg: &NatsMessage, _ctx: &mut Context| {
-                    let snapshot = (
-                        msg.headers().content_type().map(str::to_owned),
-                        msg.headers().get_str("x-trace-id").map(str::to_owned),
-                        Partitioned::partition_key(msg).map(<[u8]>::to_vec),
-                    );
-                    let tx = tx.clone();
-                    async move {
-                        tx.send(snapshot).await.ok();
-                        HandlerResult::Ack
-                    }
-                },
-                HandlerMetadata::raw("headers"),
+            b.include(
+                subscriber(SubscribeOptions::new(handler_subject), SnapshotHeaders(tx)).build(),
             );
         },
     );
@@ -227,6 +293,55 @@ async fn app_surfaces_headers_and_partition_key_in_handler() {
     outside.shutdown().await.expect("outside connection closes");
 }
 
+// `Partitioned` feeds the runtime's keyed worker lanes off the delivery itself, which no handler
+// ever holds, so it is checked where it lives: on a message taken straight off the wire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delivery_reports_partition_key_from_its_header() {
+    let Some(connected) = outside_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("partition");
+
+    let mut subscriber = connected
+        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .await
+        .expect("subscribe failed");
+    let publisher = connected.publisher(NatsPublish);
+
+    let mut headers = HeaderMap::new();
+    headers.insert(PARTITION_KEY_HEADER, "tenant-abc");
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"keyed").with_headers(headers))
+        .await
+        .expect("publish failed");
+    publisher
+        .publish(OutgoingMessage::new(subject.as_str(), b"bare"))
+        .await
+        .expect("publish failed");
+
+    {
+        let mut stream = std::pin::pin!(subscriber.stream());
+        let keyed = timeout(WAIT, stream.next())
+            .await
+            .expect("timed out")
+            .expect("stream ended")
+            .expect("stream error");
+        assert_eq!(
+            Partitioned::partition_key(&keyed),
+            Some(b"tenant-abc".as_slice()),
+        );
+        let bare = timeout(WAIT, stream.next())
+            .await
+            .expect("timed out")
+            .expect("stream ended")
+            .expect("stream error");
+        assert_eq!(Partitioned::partition_key(&bare), None);
+    }
+
+    drop(subscriber);
+    connected.shutdown().await.expect("shutdown failed");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn app_jetstream_durable_consumer_delivers_and_acks() {
     let Some(outside) = outside_or_skip().await else {
@@ -240,20 +355,15 @@ async fn app_jetstream_durable_consumer_delivers_and_acks() {
         let subject = subject.clone();
         let stream = stream.clone();
         move |b| {
-            b.subscribe(
-                SubscribeOptions::new(subject.clone())
-                    .jetstream(stream)
-                    .durable("it-js-worker")
-                    .filter_subject(subject),
-                move |msg: &NatsMessage, _ctx: &mut Context| {
-                    let payload = msg.payload().to_vec();
-                    let tx = tx.clone();
-                    async move {
-                        tx.send(payload).await.ok();
-                        HandlerResult::Ack
-                    }
-                },
-                HandlerMetadata::raw("js"),
+            b.include(
+                subscriber(
+                    SubscribeOptions::new(subject.clone())
+                        .jetstream(stream)
+                        .durable("it-js-worker")
+                        .filter_subject(subject),
+                    Forward(tx),
+                )
+                .build(),
             );
         }
     });
@@ -285,25 +395,17 @@ async fn app_jetstream_retry_outcome_redelivers() {
         let subject = subject.clone();
         let stream = stream.clone();
         move |b| {
-            b.subscribe(
-                SubscribeOptions::new(subject.clone())
-                    .jetstream(stream)
-                    .filter_subject(subject),
-                move |msg: &NatsMessage, _ctx: &mut Context| {
-                    let attempt = handler_attempts.fetch_add(1, Ordering::SeqCst);
-                    let payload = msg.payload().to_vec();
-                    let tx = tx.clone();
-                    async move {
-                        if attempt == 0 {
-                            // Dispatch turns this into nack(requeue) -> JetStream NAK.
-                            HandlerResult::retry()
-                        } else {
-                            tx.send(payload).await.ok();
-                            HandlerResult::Ack
-                        }
-                    }
-                },
-                HandlerMetadata::raw("retry"),
+            b.include(
+                subscriber(
+                    SubscribeOptions::new(subject.clone())
+                        .jetstream(stream)
+                        .filter_subject(subject),
+                    RetryOnce {
+                        attempts: handler_attempts,
+                        tx,
+                    },
+                )
+                .build(),
             );
         }
     });
@@ -353,27 +455,17 @@ async fn app_jetstream_retry_after_is_delayed_natively() {
         let subject = subject.clone();
         let stream = stream.clone();
         move |b| {
-            b.subscribe(
-                SubscribeOptions::new(subject.clone())
-                    .jetstream(stream)
-                    .filter_subject(subject),
-                move |_msg: &NatsMessage, _ctx: &mut Context| {
-                    let seen = Arc::clone(&handler_seen);
-                    let tx = tx.clone();
-                    async move {
-                        match seen.get() {
-                            None => {
-                                let _ = seen.set(Instant::now());
-                                HandlerResult::retry_after(RETRY_DELAY)
-                            }
-                            Some(first) => {
-                                tx.send(first.elapsed()).await.ok();
-                                HandlerResult::Ack
-                            }
-                        }
-                    }
-                },
-                HandlerMetadata::raw("delay"),
+            b.include(
+                subscriber(
+                    SubscribeOptions::new(subject.clone())
+                        .jetstream(stream)
+                        .filter_subject(subject),
+                    DelayOnce {
+                        first_seen: handler_seen,
+                        tx,
+                    },
+                )
+                .build(),
             );
         }
     });
@@ -399,29 +491,36 @@ async fn app_jetstream_retry_after_is_delayed_natively() {
     outside.shutdown().await.expect("outside connection closes");
 }
 
+/// The reply is opaque bytes, so it says so on the type and no codec runs on it; the inbox it goes
+/// to is known only per request, which is what `to(..)` names.
+#[derive(Outgoing, Serialized)]
+struct Pong(Vec<u8>);
+
 /// Answers on the inbox the requester named, through a publisher the runtime paired off the app's
 /// own connected broker.
 ///
 /// The `Out` form mounts on the definition's own source, so the subject is a literal here; the
 /// tail wildcard still gives each run its own request subject under it.
-#[subscriber("ruststream.it.reqrep.>", raw)]
+#[subscriber("ruststream.it.reqrep.>")]
 async fn respond(
-    payload: &[u8],
+    request: &Frame<'_>,
     ctx: &mut Context<'_>,
     Out(out): Out<impl Publisher>,
-) -> HandlerResult {
-    assert_eq!(payload, b"ping");
+) -> HandlerOutcome {
+    assert_eq!(request.0, b"ping");
     let Some(reply_to) = ctx.headers().reply_to().map(str::to_owned) else {
-        return HandlerResult::drop();
+        return HandlerOutcome::drop();
     };
     if out
-        .publish(OutgoingMessage::new(reply_to.as_str(), b"pong"))
+        .message(&Pong(b"pong".to_vec()))
+        .to(reply_to)
+        .publish()
         .await
         .is_err()
     {
-        return HandlerResult::retry();
+        return HandlerOutcome::retry();
     }
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

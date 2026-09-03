@@ -4,8 +4,8 @@
 //! describe the source in the attribute itself with [`SubscribeOptions`], naming the stream and a
 //! durable consumer so progress survives restarts: the macro follows the builder chain, so the
 //! definition carries its own source and mounts with a plain `include`. The handler's
-//! [`HandlerResult::Ack`] acks the message back to `JetStream`; returning [`HandlerResult::Nack`]
-//! schedules redelivery.
+//! `HandlerOutcome::ack()` acks the message back to `JetStream`; returning
+//! `HandlerOutcome::retry()` schedules redelivery.
 //!
 //! The seed publish rides [`JetStreamPublish`]: unlike the Core policy it waits for the stream's
 //! acknowledgement, so a message the stream refuses (unknown stream, violated expectation) is an
@@ -40,9 +40,9 @@ struct Order {
 
 // --8<-- [start:handler]
 #[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-worker"))]
-async fn handle(order: &Order) -> HandlerResult {
+async fn handle(order: &Order) -> HandlerOutcome {
     println!("got order {}", order.id);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 // --8<-- [end:handler]
 

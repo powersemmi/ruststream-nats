@@ -2,13 +2,14 @@
 //!
 //! A handler reads native `JetStream` delivery metadata - the stream and consumer names, the stream
 //! and consumer sequence numbers, the server-side redelivery count, and the pending count - by
-//! declaring [`JetStreamContext`] as its per-delivery context and reading fields with the
-//! compile-time [`keys`]. The runtime builds the context once per delivery via
-//! [`BuildContext`]; resolving a key is a direct field read, with no
-//! hashing, boxing, or downcasting.
+//! binding a compile-time key from [`keys`] as a `Ctx<K>` parameter. The key names the context it
+//! reads, so nothing else in the signature changes. A handler that already takes a
+//! `&mut Context<'_, JetStreamContext>` reads the same keys with `ctx.context(KEY)` instead. The
+//! runtime builds the context once per delivery via [`BuildContext`]; resolving a key is a direct
+//! field read, with no hashing, boxing, or downcasting.
 //!
 //! This is purely additive: the default context is `()` (no fields), so existing handlers are
-//! unaffected. Opting in means changing the handler's context type to [`JetStreamContext`].
+//! unaffected. Opting in means naming one of these keys.
 //!
 //! These fields are genuinely native: they come from the `JetStream` `$JS.ACK` reply subject, not
 //! from the payload or the message [`HeaderMap`](ruststream::HeaderMap), so they are not reachable
@@ -20,23 +21,30 @@
 //! # Examples
 //!
 //! ```
-//! use ruststream::IncomingMessage;
-//! use ruststream::runtime::{Context, HandlerResult};
-//! use ruststream_nats::context::{JetStreamContext, keys};
+//! use ruststream_nats::context::keys::{Delivered, StreamSequence};
+//! use ruststream_nats::prelude::*;
+//! use serde::Deserialize;
 //!
-//! async fn handle<M: IncomingMessage>(
-//!     _msg: &M,
-//!     ctx: &mut Context<'_, JetStreamContext>,
-//! ) -> HandlerResult {
+//! #[derive(Deserialize)]
+//! struct Order {
+//!     id: u64,
+//! }
+//!
+//! #[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("worker"))]
+//! async fn handle(
+//!     order: &Order,
+//!     Ctx(sequence): Ctx<StreamSequence>,
+//!     Ctx(delivered): Ctx<Delivered>,
+//! ) -> HandlerOutcome {
 //!     // `None` on a core delivery; the stream sequence on a JetStream one.
-//!     if let Some(seq) = ctx.context(keys::STREAM_SEQUENCE) {
-//!         println!("stream sequence {seq}");
+//!     if let Some(sequence) = sequence {
+//!         println!("order {} sits at stream sequence {sequence}", order.id);
 //!     }
 //!     // The server-side delivery count distinguishes a first delivery from a redelivery.
-//!     if ctx.context(keys::DELIVERED).is_some_and(|n| n > 1) {
+//!     if delivered.is_some_and(|n| n > 1) {
 //!         println!("redelivery");
 //!     }
-//!     HandlerResult::Ack
+//!     HandlerOutcome::ack()
 //! }
 //! ```
 

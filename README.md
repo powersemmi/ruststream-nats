@@ -111,20 +111,28 @@ b.after_startup(
 
 ## Test it
 
-The `testing` feature runs handlers against an in-process NATS stand-in - no server, same routing, same ladder. Inject a message as an external producer would with `TestableBroker::inject`, then assert on what a handler published with the free `expect_published`:
+The `testing` feature runs your real handlers against an in-process NATS stand-in - no server, same routing, same ladder - through the framework's `TestApp` harness. Publishing drives the whole reaction to a standstill, and the harness reports what the handler received, what it published and how the delivery settled, so a test needs no channels or counters of its own:
 
 ```rust
-use ruststream::{Broker, OutgoingMessage};
-use ruststream::testing::{TestableBroker, expect_published};
+use ruststream::testing::TestApp;
+use ruststream_nats::prelude::*;
 use ruststream_nats::testing::NatsTestBroker;
 
-let broker = NatsTestBroker::new().connect().await?;
-broker.inject(OutgoingMessage::new("orders.created", br#"{"id":1}"#));
-let confirmations =
-    expect_published(&broker, "confirmations", 1, std::time::Duration::from_secs(1)).await;
+let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+    .with_broker(NatsTestBroker::new(), |b| b.include(handle));
+let tb = TestApp::start(app).await?;
+
+tb.message(&Order { id: 1 }).to("orders.created").publish().await?;
+tb.broker::<NatsTestBroker>()
+    .subscriber("orders.created")
+    .assert_called_once()
+    .with(&Order { id: 1 })
+    .settled(HandlerOutcome::ack());
 ```
 
-JetStream-specific behaviour (durable resume, redelivery timing) is covered by the env-gated integration suite instead: `just test-brokers` spins up `nats:2-alpine` with JetStream and runs the live tests plus the framework conformance suite against it.
+Delayed redelivery is in reach too: a handler's `retry_after(delay)` becomes a delayed negative acknowledgement here as it does on a server, and `tb.advance(delay)` fires it under a paused clock instead of waiting.
+
+JetStream-specific behaviour (durable consumers, the wire's own acknowledgement, redelivery timing) is covered by the env-gated integration suite instead: `just test-brokers` spins up `nats:2-alpine` with JetStream and runs the live tests plus the framework conformance suite against it.
 
 ## Layout
 

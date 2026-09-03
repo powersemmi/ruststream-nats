@@ -172,13 +172,24 @@ Which of the framework's optional capability traits this broker implements nativ
 The `testing` feature ships `NatsTestBroker`: an in-process broker with real NATS subject matching
 (`*` and `>` wildcards), header propagation, and request-reply - no `nats-server`, no docker. It
 follows the same ladder as the real broker, and its connected form implements
-`ruststream::testing::TestableBroker`, so the same broker drives the `TestApp` harness and the
-conformance suite; inject traffic with `broker.inject(OutgoingMessage::new(..))` and assert on
-published output with the free `ruststream::testing::expect_published`. See
+`ruststream::testing::TestableBroker`, so it drives the `TestApp` harness: publish input through
+the same builder a service publishes through, and the harness reports what the handler received,
+what it published and how the delivery settled. See
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
-JetStream edge cases (durable resume, `ack_wait` redelivery, retention) are not simulated; test
-them against a real server, gated behind `NATS_TEST_URL`.
+Three NATS-specific things hold in process, so a handler that uses them is testable without a
+server:
+
+- A `JetStream`-configured `SubscribeOptions` source resolves here too; only the subject pattern
+  drives routing.
+- A handler that binds native `JetStream` metadata with a `ruststream_nats::context` key mounts,
+  and every key reads `None`, exactly as on a core delivery.
+- `HandlerOutcome::retry_after(delay)` becomes a delayed redelivery whose timer the harness owns,
+  so `tb.advance(delay)` fires it under a paused clock.
+
+`JetStream` semantics themselves (durable resume, `ack_wait` redelivery, retention, what the
+metadata and the server-side delay actually do) are not simulated; test them against a real server,
+gated behind `NATS_TEST_URL`.
 
 For how this broker implements the contract from the inside, read the
 [worked example](https://powersemmi.github.io/ruststream/latest/broker-authors/example-nats/) in

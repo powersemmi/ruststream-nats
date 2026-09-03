@@ -7,6 +7,7 @@
 
 use std::future::{Future, ready};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use futures::Stream;
 use std::task::Poll;
@@ -196,6 +197,43 @@ impl IncomingMessage for NatsTestMessage {
                 coordinator.enqueued();
             }
         }
+        ready(Ok(()))
+    }
+
+    /// The real broker answers `true` for a `JetStream` delivery, so the transport answers `true`
+    /// too: the runtime picks between the native delay and its own deferred re-publish on this
+    /// flag, and a transport that under-reported it would send a handler's `retry_after` down a
+    /// different path in tests than in production.
+    fn supports_nack_after(&self) -> bool {
+        true
+    }
+
+    /// Delayed redelivery: the message returns to the same subscription's queue once `delay` has
+    /// elapsed. Under the harness the timer belongs to the coordinator, so a test fires it with
+    /// [`TestApp::advance`](ruststream::testing::TestApp::advance) on a paused clock instead of
+    /// waiting out a real one. What the server does with the delay (holding the message with its
+    /// stream sequence and delivery count intact) is a `JetStream` behaviour and is asserted
+    /// against a real server.
+    fn nack_after(mut self, delay: Duration) -> impl Future<Output = Result<(), AckError>> {
+        let delivery = self
+            .delivery
+            .take()
+            .expect("NatsTestMessage ack/nack invoked twice");
+        let requeue = self.requeue.clone();
+        if let Some(coordinator) = self.coordinator.clone() {
+            let counter = coordinator.clone();
+            coordinator.schedule_redelivery(delay, move || {
+                if requeue.send(delivery).is_ok() {
+                    counter.enqueued();
+                }
+            });
+            return ready(Ok(()));
+        }
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            // The subscription may be gone by then; a dropped receiver is not an error.
+            let _ = requeue.send(delivery);
+        });
         ready(Ok(()))
     }
 }

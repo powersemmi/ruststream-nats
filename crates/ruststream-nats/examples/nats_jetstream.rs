@@ -7,6 +7,9 @@
 //! `HandlerOutcome::ack()` acks the message back to `JetStream`; returning
 //! `HandlerOutcome::retry()` schedules redelivery.
 //!
+//! The second handler takes a page (`&[Order]`) instead of one order, and its mount names the page
+//! size - which is what a `JetStream` pull request asks the server for.
+//!
 //! The seed publish rides [`JetStreamPublish`]: unlike the Core policy it waits for the stream's
 //! acknowledgement, so a message the stream refuses (unknown stream, violated expectation) is an
 //! error rather than a silent drop.
@@ -46,6 +49,16 @@ async fn handle(order: &Order) -> HandlerOutcome {
 }
 // --8<-- [end:handler]
 
+// --8<-- [start:page]
+/// A page handler runs once per page the consumer delivers, so a run of orders becomes one round
+/// trip instead of one each. Its own durable consumer keeps its progress apart from `handle`'s.
+#[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-reconciler"))]
+async fn reconcile(orders: &[Order]) -> HandlerOutcome {
+    println!("reconciling {} orders", orders.len());
+    HandlerOutcome::ack()
+}
+// --8<-- [end:page]
+
 #[ruststream::app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
@@ -54,6 +67,12 @@ fn app() -> impl App {
             // --8<-- [start:mount]
             b.include(handle);
             // --8<-- [end:mount]
+
+            // --8<-- [start:page_mount]
+            // The page size is the one number a page mount owes the broker, and on JetStream it
+            // is the pull request's batch size: at most six orders per call.
+            b.include(reconcile.batch(nonzero!(6)));
+            // --8<-- [end:page_mount]
 
             // --8<-- [start:publish]
             b.after_startup(

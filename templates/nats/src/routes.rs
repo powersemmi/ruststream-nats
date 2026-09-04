@@ -11,16 +11,15 @@ use crate::orders;
 
 /// Builds the orders router: a publishing handler (replies to `confirmations`) plus a plain one.
 ///
-/// `confirm` needs a publisher for its reply: `TypedPublisher::new(Publish)` pairs the plain
-/// publish policy with the default codec, which is reused to decode the order. The runtime pairs
-/// the policy with the broker at startup. `on_cancel` has no reply, so its `include` registers on
-/// its own; a registration that takes an attachment commits through `.publisher(..)`, or
-/// `.build()` for the broker's default policy.
+/// `confirm` needs a publisher for its reply, and the mount site is where it is named:
+/// `.publisher(Publish)` attaches the plain publish policy and `.build()` commits the
+/// registration. The reply travels the default codec unless the chain names one with `.codec(..)`;
+/// the runtime pairs the policy with the broker at startup. `on_cancel` has no reply, so its
+/// `include` registers on its own.
 pub fn orders() -> impl RouterDef<NatsBroker> {
-    let confirmations = TypedPublisher::new(Publish);
-
     Router::new()
         .include(orders::confirm)
-        .publisher(confirmations)
+        .publisher(Publish)
+        .build()
         .include(orders::on_cancel)
 }

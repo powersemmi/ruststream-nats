@@ -75,15 +75,38 @@ The mount site names no source, and the codec resolves the same way as for a by-
 ```
 
 Beyond `jetstream` and `durable`, the builder carries `queue_group` (Core NATS load balancing),
-`filter_subject`, `ack_wait`, `max_ack_pending`, `deliver_policy`, and the pull-consumer batch
-settings `pull_batch` / `pull_expires`. Incompatible combinations (for example `queue_group`
-together with `jetstream`) are rejected with an error before any I/O.
+`filter_subject`, `ack_wait`, `max_ack_pending`, `deliver_policy`, and `pull_expires` (how long one
+pull request waits before it comes back with what it has). Incompatible combinations (for example
+`queue_group` together with `jetstream`) are rejected with an error before any I/O.
 
 The descriptor is a subscription source as it stands, so the macro-free path takes it directly:
 `subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS"), body)` builds the same definition
 the decorator does, and the same settings chain and `include` mount it. See
 [Subscribers](https://powersemmi.github.io/ruststream/latest/guides/subscribers/) in the framework
 docs for the body contract on that path.
+
+### Pages
+
+A handler taking `&[T]` consumes a page:
+
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:page"
+```
+
+The mount site owes it one number, the page size:
+
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:page_mount"
+```
+
+That number is the pull request's batch size, so a JetStream page is one `fetch` of at most six
+messages, closed early by `pull_expires` when fewer arrive in time. Core NATS has no wire-level
+batch, so its pages are assembled on the client by the framework's own adapter; a partial page
+closes 10 ms after its first delivery. Nothing at the mount site says which of the two ran, and the
+page the body sees is the page the subscription delivered, never a slice of it.
+
+The size is not a subscription option: it belongs to the registration, which is why
+`SubscribeOptions` carries the timing (`pull_expires`) and not the count.
 
 ### Acknowledgement and delayed retry
 
@@ -171,7 +194,7 @@ Which of the framework's optional capability traits this broker implements nativ
 | Capability | Native | Notes |
 | --- | --- | --- |
 | `Subscribe` | yes | Subscribes by subject; `SubscribeOptions` describes a JetStream consumer instead. |
-| `BatchSubscriber` | yes | JetStream batches on the wire: one item is one pull `fetch` of up to `pull_batch` messages, bounded by `pull_expires`. Core NATS has no wire-level batching, so a batch is whatever the client has already buffered. |
+| `BatchSubscriber` | yes | The mount site's `batch(n)` is the page size. JetStream spends it on the wire: one page is one pull `fetch` of up to `n` messages, bounded by `pull_expires`. Core NATS has no wire-level batching, so its pages are assembled on the client by the framework's `Buffered` adapter. See [Pages](#pages). |
 | `TransactionalPublisher` | no | Neither Core NATS nor JetStream has a multi-message transaction; a JetStream publish is acknowledged one message at a time. |
 | `OwnedTransactions` | no | Same reason: there is no transaction to own. |
 | `RequestReply` | yes | `NatsPublisher` publishes with a native reply inbox and resolves with the reply. See [Request-reply](#request-reply). |

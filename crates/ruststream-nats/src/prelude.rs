@@ -29,8 +29,13 @@
 //! # let _ = (info, broker, Publish, JetStreamPublish::default());
 //! ```
 
-pub use ruststream::RequestReply;
 pub use ruststream::prelude::*;
+
+// The manifest layer: the capability traits this broker implements on its live values, named here
+// so the glob that carries the policies also puts their operations in scope. `RequestReply` is
+// also in the core prelude - it is named again because the manifest is this crate's statement
+// about what its publisher can do, not a hole in the core glob.
+pub use ruststream::RequestReply;
 
 // The plain policy arrives under the uniform mount-site name; `JetStreamPublish` keeps its own,
 // because JetStream is the concept rather than this broker's word for one. The prefixed originals

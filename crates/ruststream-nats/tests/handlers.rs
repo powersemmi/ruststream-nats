@@ -239,9 +239,9 @@ async fn a_jetstream_handler_reads_no_native_metadata_in_process() {
     tb.shutdown().await.expect("shutdown");
 }
 
-// ------------------------------------------------------------------- a page and its page size
+// ----------------------------------------------------------------- a batch and its batch size
 
-/// A page handler: one call per page the subscription delivers, whatever the transport built it
+/// A batch handler: one call per batch the subscription delivers, whatever the transport built it
 /// out of.
 #[subscriber("orders.bulk")]
 async fn settle_bulk(orders: &[Order]) -> HandlerOutcome {
@@ -249,12 +249,12 @@ async fn settle_bulk(orders: &[Order]) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
-// The page size is the one thing a page mount owes the broker, and the page the body is handed is
-// the page the transport built - never a slice of it. How large a page grows is a transport fact
-// (a JetStream pull request's batch size), asserted against a real server in
+// The batch size is the one thing a batch mount owes the broker, and the batch the body is handed
+// is the batch the transport built - never a slice of it. How large a batch grows is a transport
+// fact (a JetStream pull request's batch size), asserted against a real server in
 // `integration_nats_batch.rs`; what this pins is that the mount runs end to end in process.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_page_mount_names_its_size_and_the_body_is_handed_whole_pages() {
+async fn a_batch_mount_names_its_size_and_the_body_is_handed_whole_batches() {
     let tb = TestApp::start(app(|b| {
         b.include(settle_bulk.batch(nonzero!(8)));
     }))
@@ -270,11 +270,11 @@ async fn a_page_mount_names_its_size_and_the_body_is_handed_whole_pages() {
     }
 
     // A harness publish drives the reaction to a standstill before it returns, and the in-process
-    // transport ships a partial page immediately rather than holding it for a deadline, so each
-    // delivery closes a page of its own: the size caps a page, it never holds one open.
+    // transport ships a partial batch immediately rather than holding it for a deadline, so each
+    // delivery closes a batch of its own: the size caps a batch, it never holds one open.
     tb.broker::<NatsTestBroker>()
         .subscriber("orders.bulk")
-        .assert_page_sizes(&[1, 1, 1])
+        .assert_batch_sizes(&[1, 1, 1])
         .settled(HandlerOutcome::ack());
 
     tb.shutdown().await.expect("shutdown");

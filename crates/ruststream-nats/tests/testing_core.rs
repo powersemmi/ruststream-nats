@@ -416,11 +416,11 @@ async fn partition_key_absent_yields_none() {
     broker.shutdown().await.expect("shutdown");
 }
 
-// The page size is the registration's, and the transport spends it as the cap on one page: more
-// messages are buffered here than the page asks for, so a transport ignoring the size would be
+// The batch size is the registration's, and the transport spends it as the cap on one batch: more
+// messages are buffered here than the batch asks for, so a transport ignoring the size would be
 // caught by the length rather than by the timing of the drain.
 #[tokio::test]
-async fn batch_drains_in_publish_order_up_to_the_page_size() {
+async fn batch_drains_in_publish_order_up_to_the_batch_size() {
     let broker = connected().await;
     let publisher = broker.publisher(NatsTestPublish);
     let mut sub = broker
@@ -446,7 +446,7 @@ async fn batch_drains_in_publish_order_up_to_the_page_size() {
 
         assert!(
             batch.len() <= 3,
-            "a page must never carry more than the size it was opened with, got {}",
+            "a batch must never carry more than the size it was opened with, got {}",
             batch.len(),
         );
         for (i, msg) in batch.into_iter().enumerate() {

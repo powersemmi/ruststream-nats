@@ -242,8 +242,8 @@ impl IncomingMessage for NatsTestMessage {
 impl BatchSubscriber for NatsTestSubscriber {
     type Batch = Vec<NatsTestMessage>;
 
-    /// Greedy paging: a page is the first awaited delivery plus everything already buffered in
-    /// the subscription's channel, up to the `size` the registration asked for. Partial pages
+    /// Greedy batching: a batch is the first awaited delivery plus everything already buffered in
+    /// the subscription's channel, up to the `size` the registration asked for. Partial batches
     /// ship immediately, so no deadline timer is needed - an in-process transport has nothing to
     /// wait for, and a test on a paused clock would have to advance it for one.
     fn batches(

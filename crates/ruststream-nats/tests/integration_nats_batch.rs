@@ -75,10 +75,10 @@ impl JetStreamFixture {
     }
 }
 
-// The registration's page size reaches the wire: it is the pull request's batch size, so a run
-// longer than one page comes back as several capped pages rather than one long one.
+// The registration's batch size reaches the wire: it is the pull request's batch size, so a run
+// longer than one batch comes back as several capped batches rather than one long one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_page_size_caps_the_pull_batch() {
+async fn the_batch_size_caps_the_pull_batch() {
     let Some(fx) = jetstream_fixture("cap").await else {
         return;
     };
@@ -109,7 +109,7 @@ async fn the_page_size_caps_the_pull_batch() {
                 .expect("batch error");
             assert!(
                 batch.len() <= 3,
-                "page of {} exceeds the size of 3 it was opened with",
+                "batch of {} exceeds the size of 3 it was opened with",
                 batch.len()
             );
             for msg in batch {

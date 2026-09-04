@@ -14,13 +14,13 @@ use crate::{
     message::{CoreMessage, JetStreamMessage, NatsMessage},
 };
 
-/// How long a partial Core NATS page waits for further deliveries after its first one.
+/// How long a partial Core NATS batch waits for further deliveries after its first one.
 ///
-/// Core NATS has no wire-level batch, so its pages are assembled on the client and the deadline
-/// that closes a partial one is this crate's own choice (the page *size* is the registration's).
-/// The window is short enough to add no meaningful latency to a page that will not fill, and long
+/// Core NATS has no wire-level batch, so its batches are assembled on the client and the deadline
+/// that closes a partial one is this crate's own choice (the batch *size* is the registration's).
+/// The window is short enough to add no meaningful latency to a batch that will not fill, and long
 /// enough to gather a burst already in flight.
-const CORE_PAGE_MAX_WAIT: Duration = Duration::from_millis(10);
+const CORE_BATCH_MAX_WAIT: Duration = Duration::from_millis(10);
 
 enum SubscriberKind {
     // Core deliveries arrive one at a time, so the capability comes from the core adapter rather
@@ -39,7 +39,7 @@ struct JetStreamKind {
 }
 
 /// The plain Core NATS subscription: one delivery per stream item, which is what
-/// [`BufferedSubscriber`] pages on the client.
+/// [`BufferedSubscriber`] batches on the client.
 struct CoreSubscriber {
     inner: async_nats::Subscriber,
 }
@@ -91,7 +91,7 @@ impl NatsSubscriber {
         Self {
             subject,
             kind: SubscriberKind::Core(
-                BufferedSubscriber::new(CoreSubscriber { inner }).max_wait(CORE_PAGE_MAX_WAIT),
+                BufferedSubscriber::new(CoreSubscriber { inner }).max_wait(CORE_BATCH_MAX_WAIT),
             ),
         }
     }
@@ -132,7 +132,7 @@ impl Subscriber for NatsSubscriber {
         // so `stream` can be called again after the returned stream is dropped (the runtime and
         // the conformance helpers re-enter it per call).
         match &mut self.kind {
-            // Paging does not change the per-message path: the adapter forwards it untouched.
+            // Batching does not change the per-message path: the adapter forwards it untouched.
             SubscriberKind::Core(core) => Either::Left(core.stream()),
             SubscriberKind::JetStream(js) => Either::Right(
                 poll_fn(move |cx| js.inner.as_mut().poll_next(cx)).map(|item| match item {
@@ -150,15 +150,15 @@ impl Subscriber for NatsSubscriber {
 impl BatchSubscriber for NatsSubscriber {
     type Batch = Vec<NatsMessage>;
 
-    /// Returns a stream of pages of at most `size` messages.
+    /// Returns a stream of batches of at most `size` messages.
     ///
-    /// `size` is the registration's page size, and each transport spends it in its own currency.
+    /// `size` is the registration's batch size, and each transport spends it in its own currency.
     /// `JetStream` batches on the wire: one stream item is one pull `fetch` of up to `size`
     /// messages, waiting at most [`pull_expires`](crate::SubscribeOptions::pull_expires) before
-    /// delivering a partial page (an empty fetch is retried, so the stream never yields empty
-    /// pages). Core NATS has no wire-level batching, so its pages are assembled on the client by
-    /// the framework's [`BufferedSubscriber`]: a page closes at `size` deliveries or 10 ms after
-    /// its first one, whichever comes first.
+    /// delivering a partial batch (an empty fetch is retried, so the stream never yields empty
+    /// batches). Core NATS has no wire-level batching, so its batches are assembled on the client
+    /// by the framework's [`BufferedSubscriber`]: a batch closes at `size` deliveries or 10 ms
+    /// after its first one, whichever comes first.
     ///
     /// Drive a subscriber through either [`Subscriber::stream`] or `batches`, not both at once:
     /// on `JetStream` each issues its own pull requests, so deliveries would be split between

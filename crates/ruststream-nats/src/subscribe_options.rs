@@ -111,10 +111,10 @@ impl SubscribeOptions {
     }
 
     /// How long one `JetStream` fetch waits before delivering a partial (or retrying an empty)
-    /// page. Defaults to 5 seconds. Has no effect on the per-message
+    /// batch. Defaults to 5 seconds. Has no effect on the per-message
     /// [`Subscriber::stream`](ruststream::Subscriber::stream) path.
     ///
-    /// How many messages a page carries is not set here: the page size travels with the
+    /// How many messages a batch carries is not set here: the batch size travels with the
     /// registration (`b.include(handler.batch(nonzero!(6)))`) and reaches the fetch as the
     /// argument of [`BatchSubscriber::batches`](ruststream::BatchSubscriber::batches).
     ///

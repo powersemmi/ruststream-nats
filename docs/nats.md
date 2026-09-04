@@ -85,25 +85,25 @@ the decorator does, and the same settings chain and `include` mount it. See
 [Subscribers](https://powersemmi.github.io/ruststream/latest/guides/subscribers/) in the framework
 docs for the body contract on that path.
 
-### Pages
+### Batches
 
-A handler taking `&[T]` consumes a page:
-
-```rust
---8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:page"
-```
-
-The mount site owes it one number, the page size:
+A handler taking `&[T]` consumes a batch:
 
 ```rust
---8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:page_mount"
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:batch"
 ```
 
-That number is the pull request's batch size, so a JetStream page is one `fetch` of at most six
+The mount site owes it one number, the batch size:
+
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:batch_mount"
+```
+
+That number is the pull request's batch size, so a JetStream batch is one `fetch` of at most six
 messages, closed early by `pull_expires` when fewer arrive in time. Core NATS has no wire-level
-batch, so its pages are assembled on the client by the framework's own adapter; a partial page
+batch, so its batches are assembled on the client by the framework's own adapter; a partial batch
 closes 10 ms after its first delivery. Nothing at the mount site says which of the two ran, and the
-page the body sees is the page the subscription delivered, never a slice of it.
+batch the body sees is the batch the subscription delivered, never a slice of it.
 
 The size is not a subscription option: it belongs to the registration, which is why
 `SubscribeOptions` carries the timing (`pull_expires`) and not the count.
@@ -129,7 +129,7 @@ with the broker at startup. Naming a policy picks the transport:
 
 - `NatsPublish` pairs into `NatsPublisher`: plain Core NATS publishing, fire-and-forget, plus the
   `RequestReply` capability. It is also the broker's default publish policy, so a
-  `#[subscriber(.., publish("dest"))]` handler mounted without an explicit publisher replies
+  `#[subscriber(.., publish("dest"))]` handler mounted without an `.out(Reply, ..)` replies
   through it. The crate prelude carries it under the uniform mount-site name `Publish`, so a
   routes file reads the same whichever transport it was written against.
 - `JetStreamPublish` pairs into `JetStreamPublisher`: every publish waits for the stream's
@@ -138,6 +138,12 @@ with the broker at startup. Naming a policy picks the transport:
   deduplication window recognised the message). The policy also carries the stream expectations
   the server checks before accepting a publish: `expect_stream`, `expect_last_sequence`,
   `expect_last_subject_sequence`, `expect_last_message_id`.
+
+A mount site attaches a policy with one verb, `.out(marker, policy)`: `Reply` names the position a
+`publish("dest")` handler's return value leaves through, an `Out` slot's own marker names that
+slot's. The policy arrives already configured, since it is pure declaration, so
+`.out(Reply, JetStreamPublish::default().expect_stream("ORDERS"))` sends the replies of one handler
+into a named stream while the rest of the service stays on Core NATS.
 
 ```rust
 --8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:publish"
@@ -160,7 +166,8 @@ publisher.with_argument(value).message(&order).publish().await?;
 The step returns an adapter that owns the argument, applies it to the outgoing message and
 delegates. Because the adapter is itself a `Publisher`, the builder follows unchanged. Options that
 hold for a publisher's whole lifetime, such as the `JetStreamPublish` stream expectations, stay on
-the policy instead.
+the policy instead, which is why this crate adds no publisher settings of its own to the mount
+chain: the policy value already carries them into the `.out(..)` call.
 
 ## Request-reply
 
@@ -194,7 +201,7 @@ Which of the framework's optional capability traits this broker implements nativ
 | Capability | Native | Notes |
 | --- | --- | --- |
 | `Subscribe` | yes | Subscribes by subject; `SubscribeOptions` describes a JetStream consumer instead. |
-| `BatchSubscriber` | yes | The mount site's `batch(n)` is the page size. JetStream spends it on the wire: one page is one pull `fetch` of up to `n` messages, bounded by `pull_expires`. Core NATS has no wire-level batching, so its pages are assembled on the client by the framework's `Buffered` adapter. See [Pages](#pages). |
+| `BatchSubscriber` | yes | The mount site's `batch(n)` is the batch size. JetStream spends it on the wire: one batch is one pull `fetch` of up to `n` messages, bounded by `pull_expires`. Core NATS has no wire-level batching, so its batches are assembled on the client by the framework's `Buffered` adapter. See [Batches](#batches). |
 | `TransactionalPublisher` | no | Neither Core NATS nor JetStream has a multi-message transaction; a JetStream publish is acknowledged one message at a time. |
 | `OwnedTransactions` | no | Same reason: there is no transaction to own. |
 | `RequestReply` | yes | `NatsPublisher` publishes with a native reply inbox and resolves with the reply. See [Request-reply](#request-reply). |

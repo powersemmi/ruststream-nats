@@ -26,7 +26,7 @@
 ## Features
 
 - **Core NATS and JetStream.** Subscribe by subject, or describe a durable JetStream consumer with the `SubscribeOptions` builder (stream, durable name, queue group, filter subject, ack wait, max ack pending, deliver policy).
-- **Pages on either transport.** A handler taking `&[T]` names one number at the mount site, the page size (`b.include(handle.batch(nonzero!(6)))`). On JetStream it is the pull request's batch size; on Core NATS, which has no wire-level batch, the pages are assembled on the client. The mount reads the same either way.
+- **Batches on either transport.** A handler taking `&[T]` names one number at the mount site, the batch size (`b.include(handle.batch(nonzero!(6)))`). On JetStream it is the pull request's batch size; on Core NATS, which has no wire-level batch, the batches are assembled on the client. The mount reads the same either way.
 - **A typed lifecycle.** `NatsBroker::new(url)` is synchronous and does no I/O, so the broker composes with `#[ruststream::app]`; the runtime dials once at startup through the consuming `connect`, which yields the `ConnectedNatsBroker` that carries the whole subscribe and publish surface. `shutdown` consumes that in turn, so a publish or subscribe after shutdown does not compile. Client tuning (credentials, TLS) rides `NatsBroker::with_options`; an already-connected client plugs in via `ConnectedNatsBroker::from_client`.
 - **Publishing split by transport.** `NatsPublish` pairs into the Core NATS publisher (fire-and-forget, plus `RequestReply`); `JetStreamPublish` pairs into the JetStream publisher, which awaits the stream's acknowledgement and can declare stream expectations.
 - **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively, delayed redelivery included: a handler's `HandlerOutcome::retry_after(delay)` becomes JetStream's own delayed negative acknowledgement, so the server holds the message and redelivers it with its stream sequence and delivery count intact - no re-publish, no copy. Core NATS has no acknowledgement at all, so a core delivery reports `AckError::Unsupported` rather than silently succeeding.
@@ -100,6 +100,11 @@ async fn handle(order: &Order) -> HandlerOutcome { /* ... */ }
 A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport. The prelude carries the plain one as `Publish` (`NatsPublish` at the crate root):
 
 ```rust
+// One mount verb names every publish position: `Reply` for the value a `publish("dest")`
+// handler returns, an Out slot's own marker for an injected publisher. A reply left unnamed
+// takes the broker's default policy, which here is the Core NATS one.
+b.include(confirm).out(Reply, Publish).build();
+
 // Core NATS: fire-and-forget, and the RequestReply capability.
 b.after_startup(Publish, async move |publisher| { /* publish / request */ });
 

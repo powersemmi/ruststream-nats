@@ -15,15 +15,15 @@ use crate::orders;
 /// plain `on_cancel`.
 ///
 /// `confirm` needs a publisher for its reply, and the mount site is where it is named:
-/// `.publisher(Publish)` attaches the plain publish policy and `.build()` commits the
-/// registration. Replies go to a plain subject even though the subscription is a JetStream
-/// consumer; swap in `JetStreamPublish` to have each reply acknowledged by a stream. The reply
-/// travels the default codec unless the chain names one with `.codec(..)`. `on_cancel` has no
+/// `.out(Reply, Publish)` attaches the plain publish policy to the reply position and `.build()`
+/// commits the registration. Replies go to a plain subject even though the subscription is a
+/// JetStream consumer; swap in `JetStreamPublish` to have each reply acknowledged by a stream. The
+/// reply travels the default codec unless the chain names one with `.codec(..)`. `on_cancel` has no
 /// reply, so its `include` registers on its own.
 pub fn orders() -> impl RouterDef<NatsBroker> {
     Router::new()
         .include(orders::confirm)
-        .publisher(Publish)
+        .out(Reply, Publish)
         .build()
         .include(orders::on_cancel)
 }

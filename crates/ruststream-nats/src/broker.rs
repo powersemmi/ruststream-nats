@@ -306,7 +306,6 @@ impl ConnectedNatsBroker {
             stream_name,
             messages,
             consumer,
-            opts.pull_batch_or_default(),
             opts.pull_expires_or_default(),
         ))
     }

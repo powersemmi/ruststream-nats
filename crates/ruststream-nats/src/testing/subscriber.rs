@@ -6,6 +6,7 @@
 //! finishes.
 
 use std::future::{Future, ready};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -238,17 +239,18 @@ impl IncomingMessage for NatsTestMessage {
     }
 }
 
-/// Max messages drained per batch on the testing subscriber (same role as `CORE_BATCH_LIMIT` on
-/// the real subscriber: bounds one synchronous drain without blocking on more arrivals).
-const TEST_BATCH_LIMIT: usize = 256;
-
 impl BatchSubscriber for NatsTestSubscriber {
     type Batch = Vec<NatsTestMessage>;
 
-    /// Drains whatever is already buffered in the subscriber's channel (at least one, at most
-    /// 256 messages). Blocks until the first message arrives, matching the
-    /// behaviour of the real [`crate::NatsSubscriber`] Core path.
-    fn batches(&mut self) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
+    /// Greedy paging: a page is the first awaited delivery plus everything already buffered in
+    /// the subscription's channel, up to the `size` the registration asked for. Partial pages
+    /// ship immediately, so no deadline timer is needed - an in-process transport has nothing to
+    /// wait for, and a test on a paused clock would have to advance it for one.
+    fn batches(
+        &mut self,
+        size: NonZeroUsize,
+    ) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
+        let limit = size.get();
         let requeue = self.requeue.clone();
         let coordinator = self.coordinator.clone();
         futures::stream::poll_fn(move |cx| {
@@ -260,7 +262,7 @@ impl BatchSubscriber for NatsTestSubscriber {
                 }
             };
             let mut batch = vec![first];
-            while batch.len() < TEST_BATCH_LIMIT {
+            while batch.len() < limit {
                 match self.rx.poll_recv(cx) {
                     Poll::Ready(Some(d)) => {
                         batch.push(NatsTestMessage::new(

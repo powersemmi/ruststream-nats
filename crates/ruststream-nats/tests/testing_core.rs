@@ -12,7 +12,8 @@ use std::time::Duration;
 use futures::{Stream, StreamExt};
 use ruststream::{
     BatchSubscriber, Broker, ConnectedBroker, DescribeServer, HeaderMap, IncomingMessage,
-    OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, testing::expect_published,
+    OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, nonzero,
+    testing::expect_published,
 };
 use ruststream_nats::{
     NatsError, PARTITION_KEY_HEADER, SubscribeOptions,
@@ -372,7 +373,7 @@ async fn batch_subscriber_yields_non_empty_batches() {
     }
 
     {
-        let mut batches = Box::pin(sub.batches());
+        let mut batches = Box::pin(sub.batches(nonzero!(8)));
         let batch = tokio::time::timeout(WAIT, batches.next())
             .await
             .expect("batch within timeout")
@@ -415,8 +416,11 @@ async fn partition_key_absent_yields_none() {
     broker.shutdown().await.expect("shutdown");
 }
 
+// The page size is the registration's, and the transport spends it as the cap on one page: more
+// messages are buffered here than the page asks for, so a transport ignoring the size would be
+// caught by the length rather than by the timing of the drain.
 #[tokio::test]
-async fn batch_drains_in_publish_order() {
+async fn batch_drains_in_publish_order_up_to_the_page_size() {
     let broker = connected().await;
     let publisher = broker.publisher(NatsTestPublish);
     let mut sub = broker
@@ -433,14 +437,18 @@ async fn batch_drains_in_publish_order() {
     }
 
     {
-        let mut batches = Box::pin(sub.batches());
+        let mut batches = Box::pin(sub.batches(nonzero!(3)));
         let batch = tokio::time::timeout(WAIT, batches.next())
             .await
             .expect("batch within timeout")
             .expect("stream has next")
             .expect("ok batch");
 
-        assert!(batch.len() <= usize::from(count));
+        assert!(
+            batch.len() <= 3,
+            "a page must never carry more than the size it was opened with, got {}",
+            batch.len(),
+        );
         for (i, msg) in batch.into_iter().enumerate() {
             assert_eq!(msg.payload(), &[u8::try_from(i).expect("count fits u8")]);
             msg.ack().await.ok();
@@ -466,7 +474,7 @@ async fn batches_can_be_reentered() {
         .await
         .expect("publish");
     {
-        let mut batches = Box::pin(sub.batches());
+        let mut batches = Box::pin(sub.batches(nonzero!(8)));
         let batch = tokio::time::timeout(WAIT, batches.next())
             .await
             .expect("batch within timeout")
@@ -486,7 +494,7 @@ async fn batches_can_be_reentered() {
         .await
         .expect("publish");
     {
-        let mut batches = Box::pin(sub.batches());
+        let mut batches = Box::pin(sub.batches(nonzero!(8)));
         let batch = tokio::time::timeout(WAIT, batches.next())
             .await
             .expect("batch within timeout")

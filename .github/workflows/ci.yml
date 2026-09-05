@@ -170,16 +170,6 @@ jobs:
           persist-credentials: false
           path: ruststream-nats
 
-      # The scaffolds pin both crates by version, and the patch injected below redirects each to a
-      # checkout. The pins still have to name the line this branch is on: a requirement the patched
-      # crate does not satisfy is dropped as unused, and the render then resolves the published
-      # pair instead and stops checking this branch at all.
-      - uses: actions/checkout@v7
-        with:
-          repository: powersemmi/ruststream
-          persist-credentials: false
-          path: ruststream
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -196,10 +186,14 @@ jobs:
       # Template-contract drift check: render each scaffold and compile it, so a broker API change
       # that breaks a template fails here, not a user's first `cargo build`. No --locked: a fresh
       # scaffold has no lock file, which is the situation a user starts from.
+      # Only this crate is redirected to the branch. The core resolves from crates.io, exactly as it
+      # does in a user's first build, so this job also proves the scaffold's core requirement can be
+      # satisfied by a published version. The pin still has to name the line this branch is on: a
+      # requirement the patched crate does not satisfy is dropped as unused, and the render then
+      # resolves the published crate instead and stops checking this branch at all.
       - name: Render and check templates
         working-directory: ruststream-nats
         env:
-          RUSTSTREAM_PATH: ${{ github.workspace }}/ruststream
           NATS_PATH: ${{ github.workspace }}/ruststream-nats/crates/ruststream-nats
         run: |
           for tpl in nats nats-js; do
@@ -213,7 +207,6 @@ jobs:
             {
               echo ""
               echo "[patch.crates-io]"
-              echo "ruststream = { path = \"$RUSTSTREAM_PATH\" }"
               echo "ruststream-nats = { path = \"$NATS_PATH\" }"
             } >> "$RUNNER_TEMP/$name/Cargo.toml"
             cargo check --manifest-path "$RUNNER_TEMP/$name/Cargo.toml"

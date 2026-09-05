@@ -1,6 +1,7 @@
 //! Core NATS publishing: the [`NatsPublish`] policy and its live [`NatsPublisher`].
 
 use std::fmt::{Debug, Formatter};
+use std::future::{Future, ready};
 use std::sync::Arc;
 
 use async_nats::Client;
@@ -57,8 +58,11 @@ pub struct NatsPublish;
 impl PublishPolicy<ConnectedNatsBroker> for NatsPublish {
     type Live = NatsPublisher;
 
-    async fn pair(self, connected: &ConnectedNatsBroker) -> Result<Self::Live, PairError> {
-        Ok(self.bind(connected))
+    fn pair(
+        self,
+        connected: &ConnectedNatsBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(self.bind(connected)))
     }
 }
 

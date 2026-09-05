@@ -1,9 +1,9 @@
 //! Request-reply over Core NATS: the Core publisher implements the `RequestReply` capability.
 //!
 //! `request` publishes with a reply inbox and resolves with the reply message, bounded by the
-//! caller's timeout. The request runs from the scope's `after_startup` hook: the [`NatsPublish`]
-//! policy is paired with the connected broker there, so the publisher exists only once the
-//! connection does.
+//! caller's timeout. The request runs from the scope's `after_startup` hook - a mount site, so it
+//! names the `Publish` policy the crate prelude carries - and the runtime pairs it with the
+//! connected broker.
 //!
 //! Start a responder first (any NATS service; here the `nats` CLI), then run the example - after
 //! startup it sends one request and prints the reply:
@@ -16,16 +16,15 @@
 use std::io;
 use std::time::Duration;
 
-use ruststream::runtime::{App, AppInfo, RustStream};
-use ruststream::{IncomingMessage, OutgoingMessage, RequestReply};
-use ruststream_nats::{NatsBroker, NatsPublish};
+use ruststream::OutgoingMessage;
+use ruststream_nats::prelude::*;
 
 #[ruststream::app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("requester", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
-            b.after_startup(NatsPublish, async move |requester| -> io::Result<()> {
+            b.after_startup(Publish, async move |requester| -> io::Result<()> {
                 // --8<-- [start:request]
                 let reply = requester
                     .request(

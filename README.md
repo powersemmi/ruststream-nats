@@ -26,21 +26,22 @@
 ## Features
 
 - **Core NATS and JetStream.** Subscribe by subject, or describe a durable JetStream consumer with the `SubscribeOptions` builder (stream, durable name, queue group, filter subject, ack wait, max ack pending, deliver policy).
+- **Batches on either transport.** A handler taking `&[T]` names one number at the mount site, the batch size (`b.include(handle.batch(nonzero!(6)))`). On JetStream it is the pull request's batch size; on Core NATS, which has no wire-level batch, the batches are assembled on the client. The mount reads the same either way.
 - **A typed lifecycle.** `NatsBroker::new(url)` is synchronous and does no I/O, so the broker composes with `#[ruststream::app]`; the runtime dials once at startup through the consuming `connect`, which yields the `ConnectedNatsBroker` that carries the whole subscribe and publish surface. `shutdown` consumes that in turn, so a publish or subscribe after shutdown does not compile. Client tuning (credentials, TLS) rides `NatsBroker::with_options`; an already-connected client plugs in via `ConnectedNatsBroker::from_client`.
 - **Publishing split by transport.** `NatsPublish` pairs into the Core NATS publisher (fire-and-forget, plus `RequestReply`); `JetStreamPublish` pairs into the JetStream publisher, which awaits the stream's acknowledgement and can declare stream expectations.
-- **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively, delayed redelivery included: a handler's `HandlerResult::retry_after(delay)` becomes JetStream's own delayed negative acknowledgement, so the server holds the message and redelivers it with its stream sequence and delivery count intact - no re-publish, no copy. Core NATS has no acknowledgement at all, so a core delivery reports `AckError::Unsupported` rather than silently succeeding.
+- **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively, delayed redelivery included: a handler's `HandlerOutcome::retry_after(delay)` becomes JetStream's own delayed negative acknowledgement, so the server holds the message and redelivers it with its stream sequence and delivery count intact - no re-publish, no copy. Core NATS has no acknowledgement at all, so a core delivery reports `AckError::Unsupported` rather than silently succeeding.
 - **In-process test broker.** The `testing` feature ships `NatsTestBroker`, a handler-stub transport that follows the same ladder and reproduces Core routing (no server, no JetStream simulation), implements `ruststream::testing::TestableBroker`, and passes the framework's conformance suite in process.
 
 ## Install
 
 ```toml
 [dependencies]
-ruststream = { version = "0.6", features = ["macros", "json"] }
-ruststream-nats = "0.6"
+ruststream = { version = "0.7", features = ["macros", "json"] }
+ruststream-nats = "0.7"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-nats = { version = "0.6", features = ["testing"] }
+ruststream-nats = { version = "0.7", features = ["testing"] }
 ```
 
 ## Scaffold
@@ -55,9 +56,7 @@ cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nat
 ## Write a service
 
 ```rust
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_nats::NatsBroker;
+use ruststream_nats::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -66,9 +65,9 @@ struct Order {
 }
 
 #[subscriber("orders.created")]
-async fn handle(order: &Order) -> HandlerResult {
+async fn handle(order: &Order) -> HandlerOutcome {
     println!("got order {}", order.id);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 #[ruststream::app]
@@ -78,26 +77,36 @@ fn app() -> impl App {
 }
 ```
 
+Two vocabularies, one per file. A **handler file** names capabilities and imports
+`ruststream::prelude::*`: it bounds an injected publisher with the trait it needs
+(`Out<impl Publisher>`, `Out<impl RequestReply>`) and never says which broker fills it. A **routes
+file** names policies and imports `ruststream_nats::prelude::*`, which re-exports the framework
+prelude and adds this crate's broker, subscription descriptor and publish policies under uniform
+mount-site names - `Publish` is whatever plain publishing is on this transport. A single-file
+service like the one above is both, so it takes the broker prelude. The sections below add no
+import lines of their own.
+
 ## JetStream
 
 Bind the same handler to a durable JetStream consumer by describing its source in the decorator - the macro follows the builder chain, so the definition carries the source and the mount stays a plain `b.include(handle)`:
 
 ```rust
-use ruststream_nats::SubscribeOptions;
-
 #[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-worker"))]
-async fn handle(order: &Order) -> HandlerResult { /* ... */ }
+async fn handle(order: &Order) -> HandlerOutcome { /* ... */ }
 ```
 
 ## Publish
 
-A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport:
+A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport. The prelude carries the plain one as `Publish` (`NatsPublish` at the crate root):
 
 ```rust
-use ruststream_nats::{JetStreamPublish, NatsPublish};
+// One mount verb names every publish position: `Reply` for the value a `publish("dest")`
+// handler returns, an Out slot's own marker for an injected publisher. A reply left unnamed
+// takes the broker's default policy, which here is the Core NATS one.
+b.include(confirm).out(Reply, Publish).build();
 
 // Core NATS: fire-and-forget, and the RequestReply capability.
-b.after_startup(NatsPublish, async move |publisher| { /* publish / request */ });
+b.after_startup(Publish, async move |publisher| { /* publish / request */ });
 
 // JetStream: each publish waits for the stream's acknowledgement, and the policy states
 // what the stream must look like for the message to be accepted.
@@ -113,20 +122,28 @@ b.after_startup(
 
 ## Test it
 
-The `testing` feature runs handlers against an in-process NATS stand-in - no server, same routing, same ladder. Inject a message as an external producer would with `TestableBroker::inject`, then assert on what a handler published with the free `expect_published`:
+The `testing` feature runs your real handlers against an in-process NATS stand-in - no server, same routing, same ladder - through the framework's `TestApp` harness. Publishing drives the whole reaction to a standstill, and the harness reports what the handler received, what it published and how the delivery settled, so a test needs no channels or counters of its own:
 
 ```rust
-use ruststream::{Broker, OutgoingMessage};
-use ruststream::testing::{TestableBroker, expect_published};
+use ruststream::testing::TestApp;
+use ruststream_nats::prelude::*;
 use ruststream_nats::testing::NatsTestBroker;
 
-let broker = NatsTestBroker::new().connect().await?;
-broker.inject(OutgoingMessage::new("orders.created", br#"{"id":1}"#));
-let confirmations =
-    expect_published(&broker, "confirmations", 1, std::time::Duration::from_secs(1)).await;
+let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+    .with_broker(NatsTestBroker::new(), |b| b.include(handle));
+let tb = TestApp::start(app).await?;
+
+tb.message(&Order { id: 1 }).to("orders.created").publish().await?;
+tb.broker::<NatsTestBroker>()
+    .subscriber("orders.created")
+    .assert_called_once()
+    .with(&Order { id: 1 })
+    .settled(HandlerOutcome::ack());
 ```
 
-JetStream-specific behaviour (durable resume, redelivery timing) is covered by the env-gated integration suite instead: `just test-brokers` spins up `nats:2-alpine` with JetStream and runs the live tests plus the framework conformance suite against it.
+Delayed redelivery is in reach too: a handler's `retry_after(delay)` becomes a delayed negative acknowledgement here as it does on a server, and `tb.advance(delay)` fires it under a paused clock instead of waiting.
+
+JetStream-specific behaviour (durable consumers, the wire's own acknowledgement, redelivery timing) is covered by the env-gated integration suite instead: `just test-brokers` spins up `nats:2-alpine` with JetStream and runs the live tests plus the framework conformance suite against it.
 
 ## Layout
 
@@ -141,7 +158,7 @@ ruststream-nats/
 └── Cargo.toml                  workspace
 ```
 
-The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.6.0, <0.7.0"`).
+The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.7.0-rc.1, <0.8.0"`). The lower bound names the release candidate because cargo leaves pre-releases out of a range that does not mention one; the range takes the final 0.7.0 as soon as it is published.
 
 ## Documentation
 

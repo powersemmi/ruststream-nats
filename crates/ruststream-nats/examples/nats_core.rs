@@ -18,9 +18,7 @@
 //! ```
 
 // --8<-- [start:handler]
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_nats::NatsBroker;
+use ruststream_nats::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -29,9 +27,9 @@ struct Order {
 }
 
 #[subscriber("orders.created")]
-async fn handle(order: &Order) -> HandlerResult {
+async fn handle(order: &Order) -> HandlerOutcome {
     println!("got order {}", order.id);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 // --8<-- [end:handler]
 

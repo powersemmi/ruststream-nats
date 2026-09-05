@@ -6,13 +6,12 @@
 //!
 //! Skipped unless `NATS_TEST_URL` is set (see `integration_nats.rs` for how to run).
 
-use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use async_nats::jetstream::stream::Config as StreamConfig;
 use futures::StreamExt;
 use ruststream::{
-    BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher,
+    BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, nonzero,
 };
 use ruststream_nats::{ConnectedNatsBroker, NatsBroker, NatsPublish, SubscribeOptions};
 use tokio::time::timeout;
@@ -63,11 +62,10 @@ async fn jetstream_fixture(prefix: &str) -> Option<JetStreamFixture> {
 }
 
 impl JetStreamFixture {
-    fn consumer_options(&self, batch: usize, expires: Duration) -> SubscribeOptions {
+    fn consumer_options(&self, expires: Duration) -> SubscribeOptions {
         SubscribeOptions::new(self.subject.clone())
             .jetstream(self.stream.clone())
             .filter_subject(self.subject.clone())
-            .pull_batch(NonZeroUsize::new(batch).expect("batch cap is non-zero"))
             .pull_expires(expires)
     }
 
@@ -77,8 +75,10 @@ impl JetStreamFixture {
     }
 }
 
+// The registration's batch size reaches the wire: it is the pull request's batch size, so a run
+// longer than one batch comes back as several capped batches rather than one long one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pull_batch_caps_batch_size() {
+async fn the_batch_size_caps_the_pull_batch() {
     let Some(fx) = jetstream_fixture("cap").await else {
         return;
     };
@@ -94,13 +94,13 @@ async fn pull_batch_caps_batch_size() {
 
     let mut consumer = fx
         .connected
-        .subscribe_with(fx.consumer_options(3, Duration::from_millis(300)))
+        .subscribe_with(fx.consumer_options(Duration::from_millis(300)))
         .await
         .expect("consumer create failed");
 
     let mut received = Vec::new();
     {
-        let mut batches = std::pin::pin!(consumer.batches());
+        let mut batches = std::pin::pin!(consumer.batches(nonzero!(3)));
         while received.len() < usize::from(total) {
             let batch = timeout(WAIT, batches.next())
                 .await
@@ -109,7 +109,7 @@ async fn pull_batch_caps_batch_size() {
                 .expect("batch error");
             assert!(
                 batch.len() <= 3,
-                "batch of {} exceeds the pull_batch cap of 3",
+                "batch of {} exceeds the size of 3 it was opened with",
                 batch.len()
             );
             for msg in batch {
@@ -136,7 +136,7 @@ async fn batches_skip_empty_fetches() {
 
     let mut consumer = fx
         .connected
-        .subscribe_with(fx.consumer_options(10, Duration::from_millis(150)))
+        .subscribe_with(fx.consumer_options(Duration::from_millis(150)))
         .await
         .expect("consumer create failed");
 
@@ -152,7 +152,7 @@ async fn batches_skip_empty_fetches() {
     });
 
     {
-        let mut batches = std::pin::pin!(consumer.batches());
+        let mut batches = std::pin::pin!(consumer.batches(nonzero!(10)));
         let batch = timeout(WAIT, batches.next())
             .await
             .expect("timed out waiting for batch")
@@ -187,12 +187,12 @@ async fn batches_can_be_reentered() {
 
     let mut consumer = fx
         .connected
-        .subscribe_with(fx.consumer_options(10, Duration::from_millis(300)))
+        .subscribe_with(fx.consumer_options(Duration::from_millis(300)))
         .await
         .expect("consumer create failed");
 
     {
-        let mut batches = std::pin::pin!(consumer.batches());
+        let mut batches = std::pin::pin!(consumer.batches(nonzero!(10)));
         let batch = timeout(WAIT, batches.next())
             .await
             .expect("timed out")
@@ -210,7 +210,7 @@ async fn batches_can_be_reentered() {
         .await
         .expect("publish failed");
     {
-        let mut batches = std::pin::pin!(consumer.batches());
+        let mut batches = std::pin::pin!(consumer.batches(nonzero!(10)));
         let batch = timeout(WAIT, batches.next())
             .await
             .expect("timed out")

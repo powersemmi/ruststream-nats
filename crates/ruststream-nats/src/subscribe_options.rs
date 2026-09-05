@@ -3,11 +3,11 @@
 //! It is the crate's [`SubscriptionSource`]: the value a `#[subscriber(..)]` handler carries, and
 //! the value the runtime resolves once against the connected broker at startup.
 
-use std::num::NonZeroUsize;
 use std::time::Duration;
 
 pub use async_nats::jetstream::consumer::DeliverPolicy;
 use ruststream::SubscriptionSource;
+use ruststream::runtime::IntoSource;
 
 use crate::{ConnectedNatsBroker, error::NatsError, subscriber::NatsSubscriber};
 
@@ -45,7 +45,6 @@ pub struct SubscribeOptions {
     ack_wait: Option<Duration>,
     max_ack_pending: Option<i64>,
     deliver_policy: Option<DeliverPolicy>,
-    pull_batch: Option<NonZeroUsize>,
     pull_expires: Option<Duration>,
 }
 
@@ -61,7 +60,6 @@ impl SubscribeOptions {
             ack_wait: None,
             max_ack_pending: None,
             deliver_policy: None,
-            pull_batch: None,
             pull_expires: None,
         }
     }
@@ -112,21 +110,13 @@ impl SubscribeOptions {
         self
     }
 
-    /// Upper bound on messages per batch when the subscriber is driven through
-    /// [`BatchSubscriber::batches`](ruststream::BatchSubscriber::batches): one batch is one
-    /// `JetStream` fetch of up to this many messages. Defaults to 100. Has no effect on the
-    /// per-message [`Subscriber::stream`](ruststream::Subscriber::stream) path.
-    ///
-    /// The bound is [`NonZeroUsize`]: a zero-message fetch returns empty immediately, which
-    /// would spin the batch loop at full CPU without ever yielding an item.
-    pub const fn pull_batch(mut self, max_messages: NonZeroUsize) -> Self {
-        self.pull_batch = Some(max_messages);
-        self
-    }
-
     /// How long one `JetStream` fetch waits before delivering a partial (or retrying an empty)
     /// batch. Defaults to 5 seconds. Has no effect on the per-message
     /// [`Subscriber::stream`](ruststream::Subscriber::stream) path.
+    ///
+    /// How many messages a batch carries is not set here: the batch size travels with the
+    /// registration (`b.include(handler.batch(nonzero!(6)))`) and reaches the fetch as the
+    /// argument of [`BatchSubscriber::batches`](ruststream::BatchSubscriber::batches).
     ///
     /// Must be non-zero: a fetch that expires immediately turns the batch loop into a hot
     /// spin. [`validate`](Self::validate) rejects `Duration::ZERO`.
@@ -139,6 +129,15 @@ impl SubscribeOptions {
     #[must_use]
     pub fn subject(&self) -> &str {
         &self.subject
+    }
+
+    /// Takes the subject pattern out, dropping the rest of the options.
+    ///
+    /// Only the in-process broker needs this: it routes on the subject alone, while the real
+    /// broker carries the whole options value into the client call.
+    #[cfg(feature = "testing")]
+    pub(crate) fn into_subject(self) -> String {
+        self.subject
     }
 
     /// True when [`Self::jetstream`] has been set.
@@ -177,10 +176,6 @@ impl SubscribeOptions {
         self.deliver_policy.unwrap_or(DeliverPolicy::All)
     }
 
-    pub(crate) fn pull_batch_or_default(&self) -> usize {
-        self.pull_batch.map_or(100, NonZeroUsize::get)
-    }
-
     pub(crate) fn pull_expires_or_default(&self) -> Duration {
         self.pull_expires.unwrap_or(Duration::from_secs(5))
     }
@@ -193,8 +188,7 @@ impl SubscribeOptions {
     /// Returns [`NatsError::InvalidOptions`] when:
     /// * `queue_group` is set together with `jetstream` (queue groups are Core-only);
     /// * any `JetStream`-only field (`durable`, `ack_wait`, `max_ack_pending`,
-    ///   `deliver_policy`, `filter_subject`, `pull_batch`, `pull_expires`) is set without
-    ///   `jetstream`;
+    ///   `deliver_policy`, `filter_subject`, `pull_expires`) is set without `jetstream`;
     /// * `pull_expires` is zero (an immediately-expiring fetch would spin the batch loop at
     ///   full CPU without yielding anything).
     pub fn validate(&self) -> Result<(), NatsError> {
@@ -215,7 +209,6 @@ impl SubscribeOptions {
                 ("max_ack_pending", self.max_ack_pending.is_some()),
                 ("deliver_policy", self.deliver_policy.is_some()),
                 ("filter_subject", self.filter_subject.is_some()),
-                ("pull_batch", self.pull_batch.is_some()),
                 ("pull_expires", self.pull_expires.is_some()),
             ];
             if let Some((field, _)) = js_only.iter().find(|(_, set)| *set) {
@@ -232,6 +225,27 @@ impl SubscribeOptions {
             ));
         }
         Ok(())
+    }
+}
+
+/// The descriptor is already a source, so the manual constructor takes it as it stands:
+/// `subscriber(SubscribeOptions::new("orders").jetstream("ORDERS"), body)` names the same
+/// subscription the `#[subscriber(..)]` attribute does.
+///
+/// # Examples
+///
+/// ```
+/// use ruststream::runtime::IntoSource;
+/// use ruststream_nats::SubscribeOptions;
+///
+/// let source = SubscribeOptions::new("orders.*").into_source();
+/// assert_eq!(source.subject(), "orders.*");
+/// ```
+impl IntoSource for SubscribeOptions {
+    type Source = Self;
+
+    fn into_source(self) -> Self {
+        self
     }
 }
 
@@ -320,12 +334,12 @@ mod tests {
     }
 
     #[test]
-    fn pull_batch_without_jetstream_is_rejected() {
+    fn pull_expires_without_jetstream_is_rejected() {
         let err = SubscribeOptions::new("x")
-            .pull_batch(NonZeroUsize::new(64).unwrap())
+            .pull_expires(Duration::from_secs(1))
             .validate()
             .unwrap_err();
-        assert!(matches!(err, NatsError::InvalidOptions(msg) if msg.contains("pull_batch")));
+        assert!(matches!(err, NatsError::InvalidOptions(msg) if msg.contains("pull_expires")));
     }
 
     #[test]

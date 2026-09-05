@@ -2,26 +2,28 @@
 //!
 //! Keeping registration in its own module lets the handlers stay broker-agnostic - the router binds
 //! to a concrete broker only when `main` mounts it. `confirm` carries its JetStream
-//! `SubscribeOptions` source from the decorator; `include_publishing` reuses that source as is.
+//! `SubscribeOptions` source from the decorator; the registration reuses that source as is. This
+//! is the file that names the broker, so it is the one that imports the broker prelude; `orders`
+//! names capabilities and imports the core's.
 
-use ruststream::runtime::{Router, RouterDef, TypedPublisher};
-use ruststream_nats::{NatsBroker, NatsPublish};
+use ruststream::runtime::RouterDef;
+use ruststream_nats::prelude::*;
 
 use crate::orders;
 
 /// Builds the orders router: the JetStream `confirm` handler (replies to `confirmations`) plus the
 /// plain `on_cancel`.
 ///
-/// `confirm` needs a publisher for its reply; `TypedPublisher::new` pairs the Core NATS publish
-/// policy with the default codec, reused to decode the order. Replies go to a plain subject, so
-/// the Core policy is the right one even though the subscription is a JetStream consumer; swap in
-/// `JetStreamPublish` to have each reply acknowledged by a stream. `on_cancel` has no reply, so it
-/// is mounted with `include` (also the default codec). The router is a consuming builder, so the
-/// calls chain; the registration list is opaque, hence `impl RouterDef`.
+/// `confirm` needs a publisher for its reply, and the mount site is where it is named:
+/// `.out(Reply, Publish)` attaches the plain publish policy to the reply position and `.build()`
+/// commits the registration. Replies go to a plain subject even though the subscription is a
+/// JetStream consumer; swap in `JetStreamPublish` to have each reply acknowledged by a stream. The
+/// reply travels the default codec unless the chain names one with `.codec(..)`. `on_cancel` has no
+/// reply, so its `include` registers on its own.
 pub fn orders() -> impl RouterDef<NatsBroker> {
-    let confirmations = TypedPublisher::new(NatsPublish);
-
     Router::new()
-        .include_publishing(orders::confirm, confirmations)
+        .include(orders::confirm)
+        .out(Reply, Publish)
+        .build()
         .include(orders::on_cancel)
 }

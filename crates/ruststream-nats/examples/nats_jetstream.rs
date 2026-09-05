@@ -4,8 +4,11 @@
 //! describe the source in the attribute itself with [`SubscribeOptions`], naming the stream and a
 //! durable consumer so progress survives restarts: the macro follows the builder chain, so the
 //! definition carries its own source and mounts with a plain `include`. The handler's
-//! [`HandlerResult::Ack`] acks the message back to `JetStream`; returning [`HandlerResult::Nack`]
-//! schedules redelivery.
+//! `HandlerOutcome::ack()` acks the message back to `JetStream`; returning
+//! `HandlerOutcome::retry()` schedules redelivery.
+//!
+//! The second handler takes a batch (`&[Order]`) instead of one order, and its mount names the
+//! batch size - which is what a `JetStream` pull request asks the server for.
 //!
 //! The seed publish rides [`JetStreamPublish`]: unlike the Core policy it waits for the stream's
 //! acknowledgement, so a message the stream refuses (unknown stream, violated expectation) is an
@@ -30,9 +33,7 @@
 use std::io;
 
 use ruststream::OutgoingMessage;
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_nats::{JetStreamPublish, NatsBroker, SubscribeOptions};
+use ruststream_nats::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -42,11 +43,21 @@ struct Order {
 
 // --8<-- [start:handler]
 #[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-worker"))]
-async fn handle(order: &Order) -> HandlerResult {
+async fn handle(order: &Order) -> HandlerOutcome {
     println!("got order {}", order.id);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 // --8<-- [end:handler]
+
+// --8<-- [start:batch]
+/// A batch handler runs once per batch the consumer delivers, so a run of orders becomes one round
+/// trip instead of one each. Its own durable consumer keeps its progress apart from `handle`'s.
+#[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-reconciler"))]
+async fn reconcile(orders: &[Order]) -> HandlerOutcome {
+    println!("reconciling {} orders", orders.len());
+    HandlerOutcome::ack()
+}
+// --8<-- [end:batch]
 
 #[ruststream::app]
 fn app() -> impl App {
@@ -56,6 +67,12 @@ fn app() -> impl App {
             // --8<-- [start:mount]
             b.include(handle);
             // --8<-- [end:mount]
+
+            // --8<-- [start:batch_mount]
+            // The batch size is the one number a batch mount owes the broker, and on JetStream it
+            // is the pull request's batch size: at most six orders per call.
+            b.include(reconcile.batch(nonzero!(6)));
+            // --8<-- [end:batch_mount]
 
             // --8<-- [start:publish]
             b.after_startup(

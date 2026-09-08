@@ -18,7 +18,7 @@ use crate::{
     testing::{
         NatsTestSubscriber,
         publisher::NatsTestPublishPolicy,
-        router::SubjectRouter,
+        router::{DeliveryGroup, SubjectRouter},
         subject::{SubjectPattern, validate_concrete_subject},
     },
 };
@@ -78,9 +78,11 @@ impl std::fmt::Debug for TestBrokerState {
 /// Mirrors the real ladder: `new` is synchronous, and the connecting transition hands out the
 /// [`ConnectedNatsTestBroker`] that carries the subscribe and publish surface.
 ///
-/// Broker-specific edge cases (`JetStream` durable cursor, `ack_wait` redelivery,
-/// `max_ack_pending`, retention, mirrors) are intentionally NOT simulated. Use a real NATS
-/// server for those scenarios.
+/// Broker-specific edge cases (the `JetStream` durable's cursor and its resume, `ack_wait`
+/// redelivery, `max_ack_pending`, retention, mirrors) are intentionally NOT simulated. Use a real
+/// NATS server for those scenarios. Competing consumers are the exception, because a stand-in
+/// that let two workers run the same job would be worse than none: a Core queue group and the
+/// subscriptions sharing a `JetStream` durable take turns here as they do on a server.
 ///
 /// # Examples
 ///
@@ -123,8 +125,10 @@ impl DescribeServer for NatsTestBroker {
 /// The connected form of [`NatsTestBroker`].
 ///
 /// `publish` performs NATS subject matching (`*` per-token, `>` tail) and hands the message to
-/// every matching subscriber's channel; ack/nack are no-ops on the broker side (Core NATS has no
-/// ack concept) and `nack(requeue=true)` re-sends to the same subscriber's queue. It implements
+/// every matching subscriber's channel, one per competing set (see
+/// [`subscribe_with`](Self::subscribe_with)); ack/nack are no-ops on the broker side (Core NATS
+/// has no ack concept) and `nack(requeue=true)` re-sends to the same subscriber's queue. It
+/// implements
 /// [`TestableBroker`], so it drives both the [`TestApp`](ruststream::testing::TestApp) harness and
 /// the framework's conformance suite in process, with no server.
 #[derive(Clone, Debug)]
@@ -138,9 +142,14 @@ impl ConnectedNatsTestBroker {
     }
 
     /// Opens a subscription described by `opts`. Mirrors
-    /// [`ConnectedNatsBroker::subscribe_with`](crate::ConnectedNatsBroker::subscribe_with);
-    /// `JetStream`-only fields are validated for consistency but do not influence dispatch in
-    /// handler-stub mode - only the subject pattern is used for routing.
+    /// [`ConnectedNatsBroker::subscribe_with`](crate::ConnectedNatsBroker::subscribe_with).
+    ///
+    /// Two fields beyond the subject reach dispatch, and only because a server would let a
+    /// service observe them without a stream: a Core `queue_group`, and a `JetStream` `durable`
+    /// name. Both name a set of subscriptions that compete for each message rather than each
+    /// taking a copy, so a competing-consumers mount splits its work here as it does on a server.
+    /// The remaining `JetStream` fields (`ack_wait`, `max_ack_pending`, `deliver_policy`,
+    /// retention) are validated for consistency and go no further.
     ///
     /// # Errors
     ///
@@ -156,7 +165,7 @@ impl ConnectedNatsTestBroker {
         if let Err(err) = opts.validate() {
             return ready(Err(err));
         }
-        // Only the subject drives in-process routing, so take it and drop the rest.
+        let group = delivery_group(&opts);
         let subject = opts.into_subject();
         if let Err(err) = self.state.ensure_live(&subject) {
             return ready(Err(err));
@@ -169,7 +178,7 @@ impl ConnectedNatsTestBroker {
                 )));
             }
         };
-        let (id, requeue, rx) = self.state.router.subscribe(pattern);
+        let (id, requeue, rx) = self.state.router.subscribe(pattern, group);
         ready(Ok(NatsTestSubscriber::new(
             Arc::clone(&self.state),
             id,
@@ -270,6 +279,29 @@ impl TestableBroker for ConnectedNatsTestBroker {
 }
 
 ruststream::register_testable_broker!(ConnectedNatsTestBroker);
+
+/// The competing set `opts` joins, if any: every subscription that resolves to the same
+/// [`DeliveryGroup`] draws from one stream of messages instead of each taking a copy.
+///
+/// A Core queue group and a `JetStream` durable are never both present - `validate` rejects that
+/// combination - so the two arms cannot disagree.
+fn delivery_group(opts: &SubscribeOptions) -> Option<DeliveryGroup> {
+    if let Some(name) = opts.queue_group_ref() {
+        return Some(DeliveryGroup::Queue {
+            subject: opts.subject().to_owned(),
+            name: name.to_owned(),
+        });
+    }
+    // An ephemeral JetStream subscription gets a consumer of its own on a server, so it competes
+    // with nobody; only a named durable is shared.
+    let (Some(stream), Some(durable)) = (opts.stream_ref(), opts.durable_ref()) else {
+        return None;
+    };
+    Some(DeliveryGroup::Durable {
+        stream: stream.to_owned(),
+        name: durable.to_owned(),
+    })
+}
 
 /// Validates that `subject` is publishable and converts a [`crate::testing::subject::SubjectError`]
 /// into [`NatsError::Publish`] on failure.

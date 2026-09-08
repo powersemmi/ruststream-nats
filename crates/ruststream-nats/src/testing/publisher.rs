@@ -185,7 +185,8 @@ impl RequestReply for NatsTestPublisher {
     ) -> Result<Self::Reply, Self::Error> {
         let inbox = new_inbox_subject();
         let pattern = SubjectPattern::parse(&inbox).expect("generated inbox subject must parse");
-        let (id, requeue, mut rx) = self.state.router.subscribe(pattern);
+        // The inbox belongs to this requester alone, so it joins no competing set.
+        let (id, requeue, mut rx) = self.state.router.subscribe(pattern, None);
 
         let mut headers = msg.headers().clone();
         headers.insert("reply-to", Bytes::from(inbox.clone()));

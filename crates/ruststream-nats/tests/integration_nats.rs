@@ -38,6 +38,9 @@ use ruststream_nats::{
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(2);
+/// How long a drain waits for one more delivery before calling the stream quiet. Short, because
+/// everything it waits on has already been published and acknowledged by the server.
+const IDLE: Duration = Duration::from_millis(300);
 
 fn nats_url() -> Option<String> {
     std::env::var("NATS_TEST_URL").ok()
@@ -76,6 +79,19 @@ where
         .expect("timed out waiting for a delivery")
         .expect("the subscription stream ended")
         .expect("the subscription reported an error")
+}
+
+/// Every delivery already waiting on `stream`, in arrival order, ending when it stays quiet for
+/// [`IDLE`]. Used where the assertion is about what did *not* arrive as much as what did.
+async fn drain<S>(stream: &mut S) -> Vec<Vec<u8>>
+where
+    S: Stream<Item = Result<NatsMessage, NatsError>> + Unpin,
+{
+    let mut seen = Vec::new();
+    while let Ok(Some(Ok(msg))) = timeout(IDLE, stream.next()).await {
+        seen.push(msg.payload().to_vec());
+    }
+    seen
 }
 
 /// A live connection plus a `JetStream` stream of its own, created here and deleted on teardown.
@@ -276,6 +292,66 @@ async fn a_delayed_nack_holds_the_message_server_side() {
 
     drop(consumer);
     fx.teardown().await;
+}
+
+// The server-side half of the queue-group contract the in-process transport reproduces: a queue
+// group splits its subject between its members, and a subscription outside the group still gets
+// everything. `a_queue_group_splits_the_subject_between_its_members` in `testing_core.rs` asserts
+// the same property against the stand-in; this is what keeps that one honest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queue_group_splits_the_work_across_its_members() {
+    let Some(connected) = connected_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("queue");
+
+    let mut worker_a = connected
+        .subscribe_with(SubscribeOptions::new(subject.clone()).queue_group("workers"))
+        .await
+        .expect("subscribe worker a failed");
+    let mut worker_b = connected
+        .subscribe_with(SubscribeOptions::new(subject.clone()).queue_group("workers"))
+        .await
+        .expect("subscribe worker b failed");
+    let mut observer = connected
+        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .await
+        .expect("subscribe observer failed");
+
+    let publisher = connected.publisher(NatsPublish);
+    for payload in [b"1".as_slice(), b"2"] {
+        publisher
+            .publish(OutgoingMessage::new(subject.as_str(), payload))
+            .await
+            .expect("publish failed");
+    }
+
+    {
+        // Which member the server picks is the server's business, so both are drained to
+        // exhaustion and the assertion is on the property a service depends on: each job reached
+        // the group exactly once. Draining rather than taking two is what makes a fan-out fail
+        // here instead of passing whenever the two arrive one apiece by luck.
+        let mut stream_a = std::pin::pin!(worker_a.stream());
+        let mut stream_b = std::pin::pin!(worker_b.stream());
+        let mut taken = drain(&mut stream_a).await;
+        taken.extend(drain(&mut stream_b).await);
+        taken.sort();
+        assert_eq!(
+            taken,
+            vec![b"1".to_vec(), b"2".to_vec()],
+            "the group must see each job exactly once between its members",
+        );
+
+        let mut every_message = std::pin::pin!(observer.stream());
+        assert_eq!(
+            drain(&mut every_message).await,
+            vec![b"1".to_vec(), b"2".to_vec()],
+            "a subscription outside the group still receives every message",
+        );
+    }
+
+    drop((worker_a, worker_b, observer));
+    connected.shutdown().await.expect("shutdown failed");
 }
 
 // Core NATS has no acknowledgement at all, so a core delivery must say so rather than silently

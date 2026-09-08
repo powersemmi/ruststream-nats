@@ -2,8 +2,10 @@
 //!
 //! Gated by the `testing` cargo feature. The broker follows the same ladder as the real one
 //! (synchronous `new`, consuming `connect`, consuming `shutdown`) over a synchronous dispatcher:
-//! `publish` fans the message out to every subscriber whose subject pattern matches. Public
-//! surface:
+//! `publish` fans the message out to every subscriber whose subject pattern matches, except that
+//! subscriptions a server would treat as one competing set - a Core queue group, or the
+//! subscriptions sharing a `JetStream` durable - take turns instead of each taking a copy, so a
+//! competing-consumers mount splits its work here as it does on a server. Public surface:
 //!
 //! * [`NatsTestBroker`] / [`ConnectedNatsTestBroker`] - the ladder; the connected form implements
 //!   [`TestableBroker`](ruststream::testing::TestableBroker), so it drives both the
@@ -20,9 +22,10 @@
 //!   with `nack(requeue=true)` redelivery (re-sent into the same subscriber's queue) and its
 //!   delayed form, whose timer the harness drives.
 //!
-//! No `nats-server`, no docker, no network. Broker-specific edge cases (`JetStream` durable
-//! cursor, `ack_wait` redelivery, `max_ack_pending`, retention) are out of scope here.
-//! Exercise them against a real NATS server. On the publish side that exclusion is the
+//! No `nats-server`, no docker, no network. Broker-specific edge cases (the `JetStream` durable's
+//! cursor and its resume, `ack_wait` redelivery, `max_ack_pending`, retention) are out of scope
+//! here - what a shared durable reproduces is that its subscriptions compete, not where the
+//! consumer left off. Exercise the rest against a real NATS server. On the publish side that exclusion is the
 //! `JetStream` stream itself: the publish acknowledgement and the expectations
 //! [`JetStreamPublish`](crate::JetStreamPublish) declares are server-side checks with no stream
 //! in process to check them against, so a publish that violates one succeeds here where a server

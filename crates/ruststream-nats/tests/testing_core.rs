@@ -175,6 +175,46 @@ async fn wildcard_subscription_receives_matching_subjects() {
     assert_eq!(&tail3, b"c");
 }
 
+// Competing consumers are the reason a queue group exists, so a stand-in that gave every member a
+// copy would let two workers do the same job and call it a pass. The split is client-side
+// selection, exactly reproducible, and this is the level a service sees it at. Asserted against a
+// real server by `a_queue_group_splits_the_work_across_its_members` in `integration_nats.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queue_group_splits_the_subject_between_its_members() {
+    let broker = connected().await;
+    let mut worker_a = broker
+        .subscribe_with(SubscribeOptions::new("jobs").queue_group("workers"))
+        .await
+        .expect("subscribe worker a");
+    let mut worker_b = broker
+        .subscribe_with(SubscribeOptions::new("jobs").queue_group("workers"))
+        .await
+        .expect("subscribe worker b");
+    let mut observer = broker
+        .subscribe_with(SubscribeOptions::new("jobs"))
+        .await
+        .expect("subscribe observer");
+    let publisher = broker.publisher(NatsPublish);
+
+    for payload in [b"1".as_slice(), b"2"] {
+        publisher
+            .publish(OutgoingMessage::new("jobs", payload))
+            .await
+            .expect("publish");
+    }
+
+    let mut stream_a = Box::pin(worker_a.stream());
+    let mut stream_b = Box::pin(worker_b.stream());
+    assert_eq!(next_payload(&mut stream_a).await, b"1");
+    assert_eq!(next_payload(&mut stream_b).await, b"2");
+
+    // Both jobs ran once between the two workers, and the subscription outside the group still
+    // saw everything.
+    let mut every_message = Box::pin(observer.stream());
+    assert_eq!(next_payload(&mut every_message).await, b"1");
+    assert_eq!(next_payload(&mut every_message).await, b"2");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nack_requeue_redelivers_to_same_subscriber() {
     let broker = connected().await;

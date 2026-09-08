@@ -26,8 +26,9 @@
 //! `JetStream` stream itself: the publish acknowledgement and the expectations
 //! [`JetStreamPublish`](crate::JetStreamPublish) declares are server-side checks with no stream
 //! in process to check them against, so a publish that violates one succeeds here where a server
-//! would refuse it. Assert that against a real server; `tests/integration_nats.rs` does.
-//! [`JetStreamTestPublisher`] repeats the list on the type.
+//! would refuse it. Assert that against a real server, as
+//! `the_stream_checks_the_expectations_the_publish_policy_declares` in
+//! `tests/integration_nats.rs` does. [`JetStreamTestPublisher`] repeats the list on the type.
 
 mod broker;
 mod publisher;

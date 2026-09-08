@@ -32,8 +32,8 @@ use ruststream::{
 };
 use ruststream_nats::context::{JetStreamContext, keys};
 use ruststream_nats::{
-    ConnectedNatsBroker, NatsBroker, NatsError, NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
-    SubscribeOptions,
+    ConnectedNatsBroker, JetStreamPublish, NatsBroker, NatsError, NatsMessage, NatsPublish,
+    PARTITION_KEY_HEADER, SubscribeOptions,
 };
 use tokio::time::timeout;
 
@@ -129,6 +129,41 @@ impl JetStreamFixture {
         let _ = self.connected.jetstream().delete_stream(&self.stream).await;
         self.connected.shutdown().await.expect("shutdown failed");
     }
+}
+
+// The half of `JetStreamPublish` that only a stream can answer for: the acknowledgement, and the
+// expectations the policy declares. Both are checked server-side against stream state, so the
+// in-process transport can neither produce the one nor refuse on the other - it routes and says
+// so. This is where a violated expectation is proved to be refused rather than written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_stream_checks_the_expectations_the_publish_policy_declares() {
+    let Some(fx) = JetStreamFixture::open("expect").await else {
+        return;
+    };
+
+    let ack = fx
+        .connected
+        .publisher(JetStreamPublish::default().expect_stream(fx.stream.clone()))
+        .publish_ack(OutgoingMessage::new(fx.subject.as_str(), b"first"))
+        .await
+        .expect("a met expectation is accepted");
+    assert_eq!(ack.stream, fx.stream);
+    assert_eq!(ack.sequence, 1, "the first message takes sequence 1");
+
+    // The optimistic-concurrency chain, broken: the stream is at sequence 1, so a writer that
+    // believes it is at 99 must be refused rather than appended after.
+    let err = fx
+        .connected
+        .publisher(JetStreamPublish::default().expect_last_sequence(99))
+        .publish_ack(OutgoingMessage::new(fx.subject.as_str(), b"stale"))
+        .await
+        .expect_err("a violated expectation must be refused");
+    assert!(
+        matches!(err, NatsError::JetStream(_)),
+        "the stream's refusal must surface as a JetStream error, got: {err}",
+    );
+
+    fx.teardown().await;
 }
 
 // The source descriptor is the only thing that creates a durable consumer, and only a server has

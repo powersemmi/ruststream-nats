@@ -75,8 +75,8 @@ async fn pub_sub_round_trip_through_broker_traits() {
 
 // The JetStream policy pairs here too, so a routes file that names it mounts in process; what it
 // pairs into routes over the same Core fabric, because that is all there is without a server. The
-// expectations it declares are stream-side checks and go unchecked here - which is why the
-// optimistic-concurrency assertions live in `integration_nats.rs`, against a real server.
+// expectations it declares are stream-side checks and go unchecked here - that a server refuses a
+// violated one is asserted in `integration_nats.rs`, where there is a stream to violate.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_jetstream_policy_pairs_into_a_core_routing_publisher() {
     let broker = connected().await;

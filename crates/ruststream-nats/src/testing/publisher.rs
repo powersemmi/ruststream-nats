@@ -225,7 +225,9 @@ impl RequestReply for NatsTestPublisher {
 ///   stream state and rejects the publish when one does not hold; here they are carried for
 ///   [`Debug`](std::fmt::Debug) and never checked, so an in-process run cannot assert that a
 ///   violated expectation is refused, and an optimistic-concurrency chain built on them proves
-///   nothing until it runs against a server. `tests/integration_nats.rs` is where that lives.
+///   nothing until it runs against a server. That is what
+///   `the_stream_checks_the_expectations_the_publish_policy_declares` in
+///   `tests/integration_nats.rs` covers.
 ///
 /// # Examples
 ///

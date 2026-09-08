@@ -24,6 +24,7 @@ mod subscribe_options;
 mod subscriber;
 
 pub mod context;
+pub mod prelude;
 
 pub use broker::{ClosedNatsBroker, ConnectedNatsBroker, NatsBroker};
 pub use error::NatsError;

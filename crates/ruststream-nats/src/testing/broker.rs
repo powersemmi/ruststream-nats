@@ -1,5 +1,6 @@
 //! The in-process ladder: [`NatsTestBroker`] -> [`ConnectedNatsTestBroker`].
 
+use std::future::{Future, ready};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -105,8 +106,8 @@ impl Broker for NatsTestBroker {
     type Error = NatsError;
     type Connected = ConnectedNatsTestBroker;
 
-    async fn connect(self) -> Result<Self::Connected, Self::Error> {
-        Ok(ConnectedNatsTestBroker { state: self.state })
+    fn connect(self) -> impl Future<Output = Result<Self::Connected, Self::Error>> {
+        ready(Ok(ConnectedNatsTestBroker { state: self.state }))
     }
 }
 
@@ -145,27 +146,36 @@ impl ConnectedNatsTestBroker {
     /// Returns [`NatsError::InvalidOptions`] when `opts` mixes Core and `JetStream` fields
     /// incompatibly, [`NatsError::Subscribe`] when the subject pattern is not a valid NATS
     /// subject, or [`NatsError::Closed`] when the transport has shut down.
-    #[allow(
-        clippy::unused_async,
-        reason = "API parity with ConnectedNatsBroker::subscribe_with"
-    )]
-    pub async fn subscribe_with(
+    // Spelled out rather than `async fn` only because this body is synchronous; the call shape
+    // stays identical to the real broker's, which does await.
+    pub fn subscribe_with(
         &self,
         opts: SubscribeOptions,
-    ) -> Result<NatsTestSubscriber, NatsError> {
-        opts.validate()?;
-        self.state.ensure_live(opts.subject())?;
-        let pattern = SubjectPattern::parse(opts.subject()).map_err(|err| {
-            NatsError::Subscribe(Box::new(err) as Box<dyn std::error::Error + Send + Sync>)
-        })?;
+    ) -> impl Future<Output = Result<NatsTestSubscriber, NatsError>> {
+        if let Err(err) = opts.validate() {
+            return ready(Err(err));
+        }
+        // Only the subject drives in-process routing, so take it and drop the rest.
+        let subject = opts.into_subject();
+        if let Err(err) = self.state.ensure_live(&subject) {
+            return ready(Err(err));
+        }
+        let pattern = match SubjectPattern::parse(&subject) {
+            Ok(pattern) => pattern,
+            Err(err) => {
+                return ready(Err(NatsError::Subscribe(
+                    Box::new(err) as Box<dyn std::error::Error + Send + Sync>
+                )));
+            }
+        };
         let (id, requeue, rx) = self.state.router.subscribe(pattern);
-        Ok(NatsTestSubscriber::new(
+        ready(Ok(NatsTestSubscriber::new(
             Arc::clone(&self.state),
             id,
             rx,
             requeue,
             self.state.coordinator(),
-        ))
+        )))
     }
 
     /// A live publisher for `policy`, mirroring
@@ -181,10 +191,10 @@ impl ConnectedBroker for ConnectedNatsTestBroker {
     type Error = NatsError;
     type Closed = ();
 
-    async fn shutdown(self) -> Result<Self::Closed, Self::Error> {
+    fn shutdown(self) -> impl Future<Output = Result<Self::Closed, Self::Error>> {
         self.state.closed.store(true, Ordering::Release);
         self.state.router.clear();
-        Ok(())
+        ready(Ok(()))
     }
 }
 

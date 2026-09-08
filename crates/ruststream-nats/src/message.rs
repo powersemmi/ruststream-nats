@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_nats::jetstream::AckKind;
-use ruststream::{AckError, Headers, IncomingMessage, Partitioned};
+use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned};
 
 use crate::convert::headers_from_nats;
 
@@ -33,7 +33,7 @@ impl Debug for NatsMessage {
 /// Wrapper around an `async_nats::Message` from a core (non-JetStream) subscription.
 pub struct CoreMessage {
     inner: async_nats::Message,
-    headers: Headers,
+    headers: HeaderMap,
 }
 
 impl Debug for CoreMessage {
@@ -63,7 +63,7 @@ impl CoreMessage {
 /// Wrapper around an `async_nats::jetstream::Message` with ack semantics.
 pub struct JetStreamMessage {
     inner: async_nats::jetstream::Message,
-    headers: Headers,
+    headers: HeaderMap,
 }
 
 impl Debug for JetStreamMessage {
@@ -92,9 +92,9 @@ impl JetStreamMessage {
     }
 }
 
-fn empty_headers() -> &'static Headers {
-    static EMPTY: OnceLock<Headers> = OnceLock::new();
-    EMPTY.get_or_init(Headers::new)
+fn empty_headers() -> &'static HeaderMap {
+    static EMPTY: OnceLock<HeaderMap> = OnceLock::new();
+    EMPTY.get_or_init(HeaderMap::new)
 }
 
 impl IncomingMessage for NatsMessage {
@@ -105,7 +105,7 @@ impl IncomingMessage for NatsMessage {
         }
     }
 
-    fn headers(&self) -> &Headers {
+    fn headers(&self) -> &HeaderMap {
         match self {
             Self::Core(m) => &m.headers,
             Self::JetStream(m) => &m.headers,
@@ -197,7 +197,7 @@ where
 }
 
 #[allow(dead_code)]
-fn _empty_headers_keepalive() -> &'static Headers {
+fn _empty_headers_keepalive() -> &'static HeaderMap {
     empty_headers()
 }
 

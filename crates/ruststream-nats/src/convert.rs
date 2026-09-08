@@ -1,13 +1,13 @@
 //! Conversions between `RustStream` and `async-nats` types.
 
 use bytes::Bytes;
-use ruststream::Headers;
+use ruststream::HeaderMap;
 
-pub(crate) fn headers_from_nats(map: Option<&async_nats::HeaderMap>) -> Headers {
+pub(crate) fn headers_from_nats(map: Option<&async_nats::HeaderMap>) -> HeaderMap {
     let Some(map) = map else {
-        return Headers::new();
+        return HeaderMap::new();
     };
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     for (name, values) in map.iter() {
         if let Some(first) = values.iter().next() {
             headers.insert(name.to_string(), Bytes::copy_from_slice(first.as_ref()));
@@ -16,7 +16,7 @@ pub(crate) fn headers_from_nats(map: Option<&async_nats::HeaderMap>) -> Headers 
     headers
 }
 
-pub(crate) fn headers_to_nats(headers: &Headers) -> Option<async_nats::HeaderMap> {
+pub(crate) fn headers_to_nats(headers: &HeaderMap) -> Option<async_nats::HeaderMap> {
     if headers.is_empty() {
         return None;
     }

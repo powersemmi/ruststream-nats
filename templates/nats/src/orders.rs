@@ -3,9 +3,11 @@
 //! The first parameter is the decoded payload; the macro turns each function into a mountable
 //! definition that `routes` collects into a `Router`. `confirm` consumes `orders` and replies on
 //! `confirmations`; `on_cancel` handles `cancellations` with no reply.
+//!
+//! Nothing here names NATS: a handler names capabilities, so the core prelude is the whole import.
+//! Which broker fills them is `routes`' business.
 
-use ruststream::runtime::HandlerResult;
-use ruststream::subscriber;
+use ruststream::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -38,9 +40,9 @@ pub async fn confirm(order: &Order) -> Confirmation {
     }
 }
 
-/// Logs cancellations, bound by plain name. No reply, so it returns a plain `HandlerResult`.
+/// Logs cancellations, bound by plain name. No reply, so it returns a plain `HandlerOutcome`.
 #[subscriber("cancellations")]
-pub async fn on_cancel(order: &Order) -> HandlerResult {
+pub async fn on_cancel(order: &Order) -> HandlerOutcome {
     println!("order {} ({}) cancelled", order.id, order.item);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }

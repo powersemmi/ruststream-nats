@@ -11,8 +11,9 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use ruststream::{
-    BatchSubscriber, Broker, ConnectedBroker, DescribeServer, Headers, IncomingMessage,
-    OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, testing::expect_published,
+    BatchSubscriber, Broker, ConnectedBroker, DescribeServer, HeaderMap, IncomingMessage,
+    OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, nonzero,
+    testing::expect_published,
 };
 use ruststream_nats::{
     NatsError, PARTITION_KEY_HEADER, SubscribeOptions,
@@ -22,7 +23,7 @@ use ruststream_nats::{
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ruststream::runtime::{AppInfo, HandlerResult, RustStream};
+use ruststream::runtime::{AppInfo, HandlerOutcome, RustStream};
 use ruststream::subscriber;
 use ruststream::testing::TestApp;
 use serde::{Deserialize, Serialize};
@@ -243,7 +244,7 @@ async fn headers_are_propagated_to_subscribers() {
         .expect("subscribe");
     let publisher = broker.publisher(NatsTestPublish);
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/json");
     headers.insert("correlation-id", "abc-1");
     let outgoing = OutgoingMessage::new("orders", b"{}").with_headers(headers);
@@ -328,7 +329,7 @@ async fn partition_key_header_is_surfaced() {
         .await
         .expect("subscribe");
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert(PARTITION_KEY_HEADER, "tenant-a");
 
     broker
@@ -372,7 +373,7 @@ async fn batch_subscriber_yields_non_empty_batches() {
     }
 
     {
-        let mut batches = Box::pin(sub.batches());
+        let mut batches = Box::pin(sub.batches(nonzero!(8)));
         let batch = tokio::time::timeout(WAIT, batches.next())
             .await
             .expect("batch within timeout")
@@ -415,8 +416,11 @@ async fn partition_key_absent_yields_none() {
     broker.shutdown().await.expect("shutdown");
 }
 
+// The batch size is the registration's, and the transport spends it as the cap on one batch: more
+// messages are buffered here than the batch asks for, so a transport ignoring the size would be
+// caught by the length rather than by the timing of the drain.
 #[tokio::test]
-async fn batch_drains_in_publish_order() {
+async fn batch_drains_in_publish_order_up_to_the_batch_size() {
     let broker = connected().await;
     let publisher = broker.publisher(NatsTestPublish);
     let mut sub = broker
@@ -433,14 +437,18 @@ async fn batch_drains_in_publish_order() {
     }
 
     {
-        let mut batches = Box::pin(sub.batches());
+        let mut batches = Box::pin(sub.batches(nonzero!(3)));
         let batch = tokio::time::timeout(WAIT, batches.next())
             .await
             .expect("batch within timeout")
             .expect("stream has next")
             .expect("ok batch");
 
-        assert!(batch.len() <= usize::from(count));
+        assert!(
+            batch.len() <= 3,
+            "a batch must never carry more than the size it was opened with, got {}",
+            batch.len(),
+        );
         for (i, msg) in batch.into_iter().enumerate() {
             assert_eq!(msg.payload(), &[u8::try_from(i).expect("count fits u8")]);
             msg.ack().await.ok();
@@ -466,7 +474,7 @@ async fn batches_can_be_reentered() {
         .await
         .expect("publish");
     {
-        let mut batches = Box::pin(sub.batches());
+        let mut batches = Box::pin(sub.batches(nonzero!(8)));
         let batch = tokio::time::timeout(WAIT, batches.next())
             .await
             .expect("batch within timeout")
@@ -486,7 +494,7 @@ async fn batches_can_be_reentered() {
         .await
         .expect("publish");
     {
-        let mut batches = Box::pin(sub.batches());
+        let mut batches = Box::pin(sub.batches(nonzero!(8)));
         let batch = tokio::time::timeout(WAIT, batches.next())
             .await
             .expect("batch within timeout")
@@ -510,17 +518,17 @@ struct Order {
 }
 
 #[subscriber("orders")]
-async fn ack_order(order: &Order) -> HandlerResult {
+async fn ack_order(order: &Order) -> HandlerOutcome {
     let _ = order;
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 // A JetStream-configured source resolves against the in-process broker too, so a handler bound to
 // a durable consumer is still unit-testable; only the subject pattern drives routing here.
 #[subscriber(SubscribeOptions::new("orders.durable").jetstream("ORDERS").durable("worker"))]
-async fn durable_order(order: &Order) -> HandlerResult {
+async fn durable_order(order: &Order) -> HandlerOutcome {
     let _ = order;
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 /// Counts how many times the retry handler ran, wired as typed app state.
@@ -528,14 +536,14 @@ async fn durable_order(order: &Order) -> HandlerResult {
 struct Attempts(Arc<AtomicUsize>);
 
 #[subscriber("retry")]
-async fn retry_then_ack(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> HandlerResult {
+async fn retry_then_ack(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> HandlerOutcome {
     let _ = order;
     // Requeue once, then ack: exercises `nack(requeue = true)` -> `enqueued` re-count balanced
     // against the delivery's `Drop` -> `consumed` decrement.
     if ctx.state().0.fetch_add(1, Ordering::SeqCst) == 0 {
-        HandlerResult::retry()
+        HandlerOutcome::retry()
     } else {
-        HandlerResult::Ack
+        HandlerOutcome::ack()
     }
 }
 
@@ -559,7 +567,7 @@ async fn test_app_drives_nats_test_broker_to_quiescence() {
         .subscriber("orders")
         .assert_called_once()
         .with(&Order { id: 1 })
-        .settled(HandlerResult::Ack);
+        .settled(HandlerOutcome::ack());
 
     tb.broker::<NatsTestBroker>()
         .publish("orders.durable", &Order { id: 2 })
@@ -570,7 +578,7 @@ async fn test_app_drives_nats_test_broker_to_quiescence() {
         .subscriber("orders.durable")
         .assert_called_once()
         .with(&Order { id: 2 })
-        .settled(HandlerResult::Ack);
+        .settled(HandlerOutcome::ack());
 
     tb.shutdown().await.expect("shutdown");
 }
@@ -594,7 +602,7 @@ async fn test_app_requeue_stays_balanced() {
     tb.broker::<NatsTestBroker>()
         .subscriber("retry")
         .assert_called(2)
-        .settled(HandlerResult::Ack);
+        .settled(HandlerOutcome::ack());
 
     tb.shutdown().await.expect("shutdown");
 }

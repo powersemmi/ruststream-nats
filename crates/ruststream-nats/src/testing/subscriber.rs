@@ -5,13 +5,16 @@
 //! [`router::SubjectRouter`], so handlers stop receiving messages as soon as their task
 //! finishes.
 
+use std::future::{Future, ready};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use futures::Stream;
 use std::task::Poll;
 
 use ruststream::{
-    AckError, BatchSubscriber, Headers, IncomingMessage, Partitioned, Subscriber,
+    AckError, BatchSubscriber, HeaderMap, IncomingMessage, Partitioned, Subscriber,
     testing::Coordinator,
 };
 
@@ -168,19 +171,19 @@ impl IncomingMessage for NatsTestMessage {
             .unwrap_or_default()
     }
 
-    fn headers(&self) -> &Headers {
-        static EMPTY: OnceLock<Headers> = OnceLock::new();
+    fn headers(&self) -> &HeaderMap {
+        static EMPTY: OnceLock<HeaderMap> = OnceLock::new();
         self.delivery
             .as_ref()
-            .map_or_else(|| EMPTY.get_or_init(Headers::new), |d| &d.headers)
+            .map_or_else(|| EMPTY.get_or_init(HeaderMap::new), |d| &d.headers)
     }
 
-    async fn ack(mut self) -> Result<(), AckError> {
+    fn ack(mut self) -> impl Future<Output = Result<(), AckError>> {
         self.delivery.take();
-        Ok(())
+        ready(Ok(()))
     }
 
-    async fn nack(mut self, requeue: bool) -> Result<(), AckError> {
+    fn nack(mut self, requeue: bool) -> impl Future<Output = Result<(), AckError>> {
         let delivery = self
             .delivery
             .take()
@@ -195,21 +198,59 @@ impl IncomingMessage for NatsTestMessage {
                 coordinator.enqueued();
             }
         }
-        Ok(())
+        ready(Ok(()))
+    }
+
+    /// The real broker answers `true` for a `JetStream` delivery, so the transport answers `true`
+    /// too: the runtime picks between the native delay and its own deferred re-publish on this
+    /// flag, and a transport that under-reported it would send a handler's `retry_after` down a
+    /// different path in tests than in production.
+    fn supports_nack_after(&self) -> bool {
+        true
+    }
+
+    /// Delayed redelivery: the message returns to the same subscription's queue once `delay` has
+    /// elapsed. Under the harness the timer belongs to the coordinator, so a test fires it with
+    /// [`TestApp::advance`](ruststream::testing::TestApp::advance) on a paused clock instead of
+    /// waiting out a real one. What the server does with the delay (holding the message with its
+    /// stream sequence and delivery count intact) is a `JetStream` behaviour and is asserted
+    /// against a real server.
+    fn nack_after(mut self, delay: Duration) -> impl Future<Output = Result<(), AckError>> {
+        let delivery = self
+            .delivery
+            .take()
+            .expect("NatsTestMessage ack/nack invoked twice");
+        let requeue = self.requeue.clone();
+        if let Some(coordinator) = self.coordinator.clone() {
+            let counter = coordinator.clone();
+            coordinator.schedule_redelivery(delay, move || {
+                if requeue.send(delivery).is_ok() {
+                    counter.enqueued();
+                }
+            });
+            return ready(Ok(()));
+        }
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            // The subscription may be gone by then; a dropped receiver is not an error.
+            let _ = requeue.send(delivery);
+        });
+        ready(Ok(()))
     }
 }
-
-/// Max messages drained per batch on the testing subscriber (same role as `CORE_BATCH_LIMIT` on
-/// the real subscriber: bounds one synchronous drain without blocking on more arrivals).
-const TEST_BATCH_LIMIT: usize = 256;
 
 impl BatchSubscriber for NatsTestSubscriber {
     type Batch = Vec<NatsTestMessage>;
 
-    /// Drains whatever is already buffered in the subscriber's channel (at least one, at most
-    /// 256 messages). Blocks until the first message arrives, matching the
-    /// behaviour of the real [`crate::NatsSubscriber`] Core path.
-    fn batches(&mut self) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
+    /// Greedy batching: a batch is the first awaited delivery plus everything already buffered in
+    /// the subscription's channel, up to the `size` the registration asked for. Partial batches
+    /// ship immediately, so no deadline timer is needed - an in-process transport has nothing to
+    /// wait for, and a test on a paused clock would have to advance it for one.
+    fn batches(
+        &mut self,
+        size: NonZeroUsize,
+    ) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
+        let limit = size.get();
         let requeue = self.requeue.clone();
         let coordinator = self.coordinator.clone();
         futures::stream::poll_fn(move |cx| {
@@ -221,7 +262,7 @@ impl BatchSubscriber for NatsTestSubscriber {
                 }
             };
             let mut batch = vec![first];
-            while batch.len() < TEST_BATCH_LIMIT {
+            while batch.len() < limit {
                 match self.rx.poll_recv(cx) {
                     Poll::Ready(Some(d)) => {
                         batch.push(NatsTestMessage::new(

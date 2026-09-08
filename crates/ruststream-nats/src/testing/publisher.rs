@@ -2,6 +2,7 @@
 //! [`NatsTestPublisher`].
 
 use std::{
+    future::{Future, ready},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -59,8 +60,11 @@ impl NatsTestPublish {
 impl PublishPolicy<ConnectedNatsTestBroker> for NatsTestPublish {
     type Live = NatsTestPublisher;
 
-    async fn pair(self, connected: &ConnectedNatsTestBroker) -> Result<Self::Live, PairError> {
-        Ok(self.bind(connected))
+    fn pair(
+        self,
+        connected: &ConnectedNatsTestBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(self.bind(connected)))
     }
 }
 
@@ -89,16 +93,20 @@ impl NatsTestPublisher {
 impl Publisher for NatsTestPublisher {
     type Error = NatsError;
 
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
-        self.state.ensure_live(msg.name())?;
-        validate_publish_subject(msg.name())?;
+    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
+        if let Err(err) = self.state.ensure_live(msg.name()) {
+            return ready(Err(err));
+        }
+        if let Err(err) = validate_publish_subject(msg.name()) {
+            return ready(Err(err));
+        }
         self.state.router.publish(
             msg.name().to_owned(),
             Bytes::copy_from_slice(msg.payload()),
             msg.headers().clone(),
             self.state.coordinator().as_ref(),
         );
-        Ok(())
+        ready(Ok(()))
     }
 }
 

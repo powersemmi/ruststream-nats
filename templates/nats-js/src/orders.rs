@@ -4,10 +4,12 @@
 //! definition that `routes` collects into a `Router`. `confirm` binds to a durable JetStream
 //! consumer (the `SubscribeOptions` builder sits right in the decorator) and replies on
 //! `confirmations`; `on_cancel` handles `cancellations` by plain name with no reply.
+//!
+//! The decorator names a NATS subscription, so this file imports the broker prelude rather than
+//! the core one; a handler file with no broker vocabulary in it (the `nats` scaffold's) needs only
+//! `ruststream::prelude`.
 
-use ruststream::runtime::HandlerResult;
-use ruststream::subscriber;
-use ruststream_nats::SubscribeOptions;
+use ruststream_nats::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -44,9 +46,9 @@ pub async fn confirm(order: &Order) -> Confirmation {
     }
 }
 
-/// Logs cancellations, bound by plain name. No reply, so it returns a plain `HandlerResult`.
+/// Logs cancellations, bound by plain name. No reply, so it returns a plain `HandlerOutcome`.
 #[subscriber("cancellations")]
-pub async fn on_cancel(order: &Order) -> HandlerResult {
+pub async fn on_cancel(order: &Order) -> HandlerOutcome {
     println!("order {} ({}) cancelled", order.id, order.item);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }

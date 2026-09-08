@@ -11,8 +11,7 @@
 mod orders;
 mod routes;
 
-use ruststream::runtime::{App, AppInfo, RustStream};
-use ruststream_nats::NatsBroker;
+use ruststream_nats::prelude::*;
 
 /// Builds the service: one NATS broker with the orders router mounted.
 #[ruststream::app]

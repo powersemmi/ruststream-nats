@@ -11,7 +11,8 @@
 //!   the framework's conformance suite in process;
 //! * [`NatsTestPublish`] / [`NatsTestPublisher`] - the publish pair, `Publisher` + `RequestReply`;
 //! * [`NatsTestSubscriber`] / [`NatsTestMessage`] - `Subscriber` and `IncomingMessage` impls
-//!   with `nack(requeue=true)` redelivery (re-sent into the same subscriber's queue).
+//!   with `nack(requeue=true)` redelivery (re-sent into the same subscriber's queue) and its
+//!   delayed form, whose timer the harness drives.
 //!
 //! No `nats-server`, no docker, no network. Broker-specific edge cases (`JetStream` durable
 //! cursor, `ack_wait` redelivery, `max_ack_pending`, retention) are out of scope here.

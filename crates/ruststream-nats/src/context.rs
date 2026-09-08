@@ -2,41 +2,49 @@
 //!
 //! A handler reads native `JetStream` delivery metadata - the stream and consumer names, the stream
 //! and consumer sequence numbers, the server-side redelivery count, and the pending count - by
-//! declaring [`JetStreamContext`] as its per-delivery context and reading fields with the
-//! compile-time [`keys`]. The runtime builds the context once per delivery via
-//! [`BuildContext`]; resolving a key is a direct field read, with no
-//! hashing, boxing, or downcasting.
+//! binding a compile-time key from [`keys`] as a `Ctx<K>` parameter. The key names the context it
+//! reads, so nothing else in the signature changes. A handler that already takes a
+//! `&mut Context<'_, JetStreamContext>` reads the same keys with `ctx.context(KEY)` instead. The
+//! runtime builds the context once per delivery via [`BuildContext`]; resolving a key is a direct
+//! field read, with no hashing, boxing, or downcasting.
 //!
 //! This is purely additive: the default context is `()` (no fields), so existing handlers are
-//! unaffected. Opting in means changing the handler's context type to [`JetStreamContext`].
+//! unaffected. Opting in means naming one of these keys.
 //!
 //! These fields are genuinely native: they come from the `JetStream` `$JS.ACK` reply subject, not
-//! from the payload or the message [`Headers`](ruststream::Headers), so they are not reachable any
-//! other way. Core (non-JetStream) NATS deliveries carry no such metadata - their only native datum
-//! is the reply inbox, already surfaced as the `reply-to` header - so Core handlers should keep the
-//! default `()` context. A handler bound to [`JetStreamContext`] still works on a Core subscription;
-//! every key just reads `None` there.
+//! from the payload or the message [`HeaderMap`](ruststream::HeaderMap), so they are not reachable
+//! any other way. Core (non-JetStream) NATS deliveries carry no such metadata - their only native
+//! datum is the reply inbox, already surfaced as the `reply-to` header - so Core handlers should
+//! keep the default `()` context. A handler bound to [`JetStreamContext`] still works on a Core
+//! subscription; every key just reads `None` there.
 //!
 //! # Examples
 //!
 //! ```
-//! use ruststream::IncomingMessage;
-//! use ruststream::runtime::{Context, HandlerResult};
-//! use ruststream_nats::context::{JetStreamContext, keys};
+//! use ruststream_nats::context::keys::{Delivered, StreamSequence};
+//! use ruststream_nats::prelude::*;
+//! use serde::Deserialize;
 //!
-//! async fn handle<M: IncomingMessage>(
-//!     _msg: &M,
-//!     ctx: &mut Context<'_, JetStreamContext>,
-//! ) -> HandlerResult {
+//! #[derive(Deserialize)]
+//! struct Order {
+//!     id: u64,
+//! }
+//!
+//! #[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("worker"))]
+//! async fn handle(
+//!     order: &Order,
+//!     Ctx(sequence): Ctx<StreamSequence>,
+//!     Ctx(delivered): Ctx<Delivered>,
+//! ) -> HandlerOutcome {
 //!     // `None` on a core delivery; the stream sequence on a JetStream one.
-//!     if let Some(seq) = ctx.context(keys::STREAM_SEQUENCE) {
-//!         println!("stream sequence {seq}");
+//!     if let Some(sequence) = sequence {
+//!         println!("order {} sits at stream sequence {sequence}", order.id);
 //!     }
 //!     // The server-side delivery count distinguishes a first delivery from a redelivery.
-//!     if ctx.context(keys::DELIVERED).is_some_and(|n| n > 1) {
+//!     if delivered.is_some_and(|n| n > 1) {
 //!         println!("redelivery");
 //!     }
-//!     HandlerResult::Ack
+//!     HandlerOutcome::ack()
 //! }
 //! ```
 
@@ -99,6 +107,19 @@ impl BuildContext<NatsMessage> for JetStreamContext {
     }
 }
 
+/// The in-process transport carries no `JetStream` metadata, exactly as a core delivery does not,
+/// so the context it builds is the empty one and every key reads `None`.
+///
+/// This is what makes a handler bound to these keys unit-testable. Without it the mount bound
+/// `Cx: BuildContext<S::Message>` would hold for the real broker and not for its test transport,
+/// so such a handler could only ever run against a server.
+#[cfg(feature = "testing")]
+impl BuildContext<crate::testing::NatsTestMessage> for JetStreamContext {
+    fn build(_msg: &crate::testing::NatsTestMessage) -> Self {
+        Self::default()
+    }
+}
+
 // Compile-time guarantee that the context is buildable from the subscriber's actual delivery type,
 // so a handler declaring `Context<'_, JetStreamContext>` satisfies the runtime's
 // `Cx: BuildContext<S::Message>` mount bound. The JetStream `build` arm itself is only exercised
@@ -109,6 +130,11 @@ const _: fn() = || {
     assert_build_context::<
         JetStreamContext,
         <crate::NatsSubscriber as ruststream::Subscriber>::Message,
+    >();
+    #[cfg(feature = "testing")]
+    assert_build_context::<
+        JetStreamContext,
+        <crate::testing::NatsTestSubscriber as ruststream::Subscriber>::Message,
     >();
 };
 

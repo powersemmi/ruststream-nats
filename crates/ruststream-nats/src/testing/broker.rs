@@ -12,11 +12,12 @@ use ruststream::{
 };
 
 use crate::{
+    NatsPublish,
     error::NatsError,
     subscribe_options::SubscribeOptions,
     testing::{
-        NatsTestPublisher, NatsTestSubscriber,
-        publisher::NatsTestPublish,
+        NatsTestSubscriber,
+        publisher::NatsTestPublishPolicy,
         router::SubjectRouter,
         subject::{SubjectPattern, validate_concrete_subject},
     },
@@ -179,10 +180,30 @@ impl ConnectedNatsTestBroker {
     }
 
     /// A live publisher for `policy`, mirroring
-    /// [`ConnectedNatsBroker::publisher`](crate::ConnectedNatsBroker::publisher). The in-process
-    /// transport simulates Core routing only, so it has a single policy.
+    /// [`ConnectedNatsBroker::publisher`](crate::ConnectedNatsBroker::publisher) over the same
+    /// production policies: [`NatsPublish`] pairs into the
+    /// [`NatsTestPublisher`](crate::testing::NatsTestPublisher) and
+    /// [`JetStreamPublish`](crate::JetStreamPublish) into the
+    /// [`JetStreamTestPublisher`](crate::testing::JetStreamTestPublisher), which routes over the
+    /// same Core fabric and says so.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream::Broker;
+    /// use ruststream_nats::testing::NatsTestBroker;
+    /// use ruststream_nats::{JetStreamPublish, NatsPublish};
+    ///
+    /// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// let connected = NatsTestBroker::new().connect().await?;
+    /// let core = connected.publisher(NatsPublish);
+    /// let jetstream = connected.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
+    /// # let _ = (core, jetstream);
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
-    pub fn publisher(&self, policy: NatsTestPublish) -> NatsTestPublisher {
+    pub fn publisher<P: NatsTestPublishPolicy>(&self, policy: P) -> P::Live {
         policy.bind(self)
     }
 }
@@ -222,7 +243,9 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for SubscribeOptions {
 }
 
 impl DefaultPublish for ConnectedNatsTestBroker {
-    type Policy = NatsTestPublish;
+    // The production policy, so a `publish("dest")` handler included without an explicit publisher
+    // resolves its reply through the same declaration on both ladders.
+    type Policy = NatsPublish;
 }
 
 impl TestableBroker for ConnectedNatsTestBroker {

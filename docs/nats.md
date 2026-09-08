@@ -219,11 +219,18 @@ the same builder a service publishes through, and the harness reports what the h
 what it published and how the delivery settled. See
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
-Three NATS-specific things hold in process, so a handler that uses them is testable without a
+Four NATS-specific things hold in process, so a handler that uses them is testable without a
 server:
 
 - A `JetStream`-configured `SubscribeOptions` source resolves here too; only the subject pattern
   drives routing.
+- The publish policies are the production ones. `NatsPublish` and `JetStreamPublish` pair against
+  the test broker as well, and `NatsPublish` is its default policy, so a routes file mounts
+  unchanged: `b.include(confirm).out(Reply, Publish)` and `b.include(audit).out(Audit,
+  JetStreamPublish::default())` say the same thing on both brokers. There is no policy of the test
+  transport's own to swap in. Each live form carries exactly the capabilities its production
+  counterpart carries - `Publisher` and `RequestReply` for Core, `Publisher` alone for
+  `JetStream` - so a slot that compiles here compiles against a server too.
 - A handler that binds native `JetStream` metadata with a `ruststream_nats::context` key mounts,
   and every key reads `None`, exactly as on a core delivery.
 - `HandlerOutcome::retry_after(delay)` becomes a delayed redelivery whose timer the harness owns,
@@ -231,7 +238,12 @@ server:
 
 `JetStream` semantics themselves (durable resume, `ack_wait` redelivery, retention, what the
 metadata and the server-side delay actually do) are not simulated; test them against a real server,
-gated behind `NATS_TEST_URL`.
+gated behind `NATS_TEST_URL`. On the publish side that exclusion is the stream: the in-process
+transport is one Core subject-matching fabric, so a `JetStreamPublish` mount routes but there is no
+acknowledgement to await and no stream state to check the policy's expectations (`expect_stream`,
+`expect_last_sequence`, `expect_last_subject_sequence`, `expect_last_message_id`) against. A publish
+that violates one succeeds here where a server would reject it, so an optimistic-concurrency chain
+built on those expectations proves nothing until it runs live.
 
 For how this broker implements the contract from the inside, read the
 [worked example](https://powersemmi.github.io/ruststream/latest/broker-authors/example-nats/) in

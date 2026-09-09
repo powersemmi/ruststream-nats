@@ -30,7 +30,7 @@
 - **A typed lifecycle.** `NatsBroker::new(url)` is synchronous and does no I/O, so the broker composes with `#[ruststream::app]`; the runtime dials once at startup through the consuming `connect`, which yields the `ConnectedNatsBroker` that carries the whole subscribe and publish surface. `shutdown` consumes that in turn, so a publish or subscribe after shutdown does not compile. Client tuning (credentials, TLS) rides `NatsBroker::with_options`; an already-connected client plugs in via `ConnectedNatsBroker::from_client`.
 - **Publishing split by transport.** `NatsPublish` pairs into the Core NATS publisher (fire-and-forget, plus `RequestReply`) and is the broker's default policy, so a reply left unnamed goes out over Core NATS; `JetStreamPublish` pairs into the JetStream publisher, which awaits the stream's acknowledgement and can declare stream expectations.
 - **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively, delayed redelivery included: a handler's `HandlerOutcome::retry_after(delay)` becomes JetStream's own delayed negative acknowledgement, so the server holds the message and redelivers it with its stream sequence and delivery count intact - no re-publish, no copy. Core NATS has no acknowledgement at all, so a core delivery reports `AckError::Unsupported` rather than silently succeeding.
-- **In-process test broker.** The `testing` feature ships `NatsTestBroker`, a handler-stub transport that follows the same ladder and reproduces Core routing with real subject wildcards (no server, no JetStream simulation). It drives the framework's `TestApp` harness, and it passes the framework's conformance suite in process.
+- **In-process test broker.** The `testing` feature ships `NatsTestBroker`, a handler-stub transport that follows the same ladder and reproduces Core routing with real subject wildcards (no server, no JetStream simulation). A service mounts on it and runs under the `TestApp` harness, and it answers the way the real transport does, which the crate's own tests hold it to.
 
 ## Install
 
@@ -65,14 +65,14 @@ struct Order {
     quantity: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Outgoing, Serialize)]
 struct Confirmation {
     id: u64,
     accepted: bool,
 }
 
-// The return value is the reply: `publish("confirmations")` makes the runtime encode it and
-// send it out.
+// The return value is the reply, and the reply type says where it goes. This one declares no
+// subject of its own, so it takes the one the clause names.
 #[subscriber("orders", publish("confirmations"))]
 async fn confirm(order: &Order) -> Confirmation {
     Confirmation {

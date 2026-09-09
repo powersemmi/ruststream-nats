@@ -8,9 +8,13 @@ routing, codecs, middleware), see the
 [RustStream documentation](https://powersemmi.github.io/ruststream/).
 
 ```toml
-ruststream = { version = "0.7", features = ["macros"] }
+[dependencies]
+ruststream = { version = "0.7", features = ["macros", "json"] }
 ruststream-nats = "0.7"
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+ruststream-nats = { version = "0.7", features = ["testing"] }
 ```
 
 ## Which glob a file writes
@@ -151,20 +155,9 @@ Outside a handler the same policy constructs a publisher at startup:
 --8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:publish"
 ```
 
-### Per-message arguments
-
 Every NATS publish option this crate exposes belongs to the publisher for its whole lifetime, so you
 set it on the policy value you pass to `.out(..)`. The `JetStreamPublish` stream expectations are
-the case to look at. This crate exposes no per-message NATS argument today; the call below is the
-shape one would take, a step on the publisher before the message:
-
-<!-- inline-rust: the shape a per-message NATS argument arrives in; the crate surfaces none yet, so there is no compiled example to embed -->
-```rust
-publisher.with_argument(value).message(&order).publish().await?;
-```
-
-Such a step returns an adapter that owns the argument, applies it to the outgoing message and
-delegates. The adapter is itself a `Publisher`, so the rest of the publish builder is unchanged.
+the case to look at.
 
 ## Request-reply
 

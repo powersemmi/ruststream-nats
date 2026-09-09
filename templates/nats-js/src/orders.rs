@@ -24,7 +24,8 @@ pub struct Order {
 }
 
 /// The reply published to `confirmations` for each order.
-#[derive(Debug, Serialize, JsonSchema)]
+#[derive(Debug, Serialize, JsonSchema, Outgoing)]
+#[outgoing(name = "confirmations")]
 pub struct Confirmation {
     pub id: u64,
     pub accepted: bool,
@@ -33,11 +34,12 @@ pub struct Confirmation {
 /// Confirms an incoming order and publishes a `Confirmation` to `confirmations`.
 ///
 /// The `SubscribeOptions` builder binds this handler to a durable pull consumer on the `ORDERS`
-/// stream. The return value is the reply: the `publish("confirmations")` clause makes the runtime
-/// encode it and send it through the publisher wired in `routes`.
+/// stream. The return value is the reply: `Confirmation` declares `confirmations` as its
+/// destination, and the `publish` clause makes the runtime encode it and send it through the
+/// publisher wired in `routes`.
 #[subscriber(
     SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("{{project-name}}-worker"),
-    publish("confirmations")
+    publish
 )]
 pub async fn confirm(order: &Order) -> Confirmation {
     Confirmation {

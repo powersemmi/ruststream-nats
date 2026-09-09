@@ -40,8 +40,8 @@ pub trait NatsPublishPolicy: PublishPolicy<ConnectedNatsBroker> + Sealed {
 /// Core NATS publishing carries no per-publisher options (subject and headers travel with each
 /// message), so the policy is a unit marker. It pairs into [`NatsPublisher`], which also serves
 /// the [`RequestReply`](ruststream::RequestReply) capability, and it is the broker's
-/// [`DefaultPublish`](ruststream::DefaultPublish) policy, so a `publish("subject")` handler
-/// mounted without an explicit publisher replies through it.
+/// [`DefaultPublish`](ruststream::DefaultPublish) policy, so a replying handler mounted without
+/// an explicit publisher replies through it.
 ///
 /// # Examples
 ///

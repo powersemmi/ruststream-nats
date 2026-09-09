@@ -128,10 +128,10 @@ constructed anywhere - in a router, in configuration, at a mount site - and the 
 with the broker at startup. Naming a policy picks the transport:
 
 - `NatsPublish` pairs into `NatsPublisher`: plain Core NATS publishing, fire-and-forget, plus the
-  `RequestReply` capability. It is also the broker's default publish policy, so a
-  `#[subscriber(.., publish("dest"))]` handler mounted without an `.out(Reply, ..)` replies
-  through it. The crate prelude carries it under the uniform mount-site name `Publish`, so a
-  routes file reads the same whichever transport it was written against.
+  `RequestReply` capability. It is also the broker's default publish policy, so a replying handler
+  mounted without an `.out(Reply, ..)` replies through it. The crate prelude carries it under the
+  uniform mount-site name `Publish`, so a routes file reads the same whichever transport it was
+  written against.
 - `JetStreamPublish` pairs into `JetStreamPublisher`: every publish waits for the stream's
   acknowledgement, so a message the stream refuses is an error rather than a silent drop.
   `publish_ack` hands back the acknowledgement itself (the stream, the sequence, whether the
@@ -140,8 +140,8 @@ with the broker at startup. Naming a policy picks the transport:
   `expect_last_subject_sequence`, `expect_last_message_id`.
 
 A mount site attaches a policy with one verb, `.out(marker, policy)`: `Reply` names the position a
-`publish("dest")` handler's return value leaves through, an `Out` slot's own marker names that
-slot's. The policy arrives already configured, since it is pure declaration, so
+replying handler's return value is published through, an `Out` slot's own marker names that slot's.
+The policy arrives already configured, since it is pure declaration, so
 `.out(Reply, JetStreamPublish::default().expect_stream("ORDERS"))` sends the replies of one handler
 into a named stream while the rest of the service stays on Core NATS.
 

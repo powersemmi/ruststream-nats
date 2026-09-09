@@ -421,3 +421,101 @@ async fn a_responder_answers_on_the_inbox_the_request_named() {
 
     tb.shutdown().await.expect("shutdown");
 }
+
+// ------------------------------------------------------------------------ replying with a value
+
+/// The confirmation an order is answered with. It fixes its own destination, so a handler
+/// returning one needs no name at the mount. The `accepted` field keeps a confirmation from
+/// decoding out of an `Order`, so the assertions below cannot pass on the input by accident.
+#[derive(Debug, PartialEq, Outgoing, Serialize, Deserialize)]
+#[outgoing(name = "orders.confirmed")]
+struct Confirmed {
+    id: u64,
+    accepted: bool,
+}
+
+/// Answers every order with a confirmation. The clause is bare because `Confirmed` already says
+/// where it goes.
+#[subscriber("orders.placed", publish)]
+async fn confirm(order: &Order) -> Confirmed {
+    Confirmed {
+        id: order.id,
+        accepted: true,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_lands_on_the_destination_its_own_type_declares() {
+    let tb = TestApp::start(app(|b| {
+        b.include(confirm);
+    }))
+    .await
+    .expect("start");
+
+    tb.broker::<NatsTestBroker>()
+        .message(&Order { id: 10 })
+        .to("orders.placed")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.broker::<NatsTestBroker>()
+        .published::<Confirmed>("orders.confirmed")
+        .assert_called_once()
+        .with(&Confirmed {
+            id: 10,
+            accepted: true,
+        });
+    tb.broker::<NatsTestBroker>()
+        .subscriber("orders.placed")
+        .assert_called_once()
+        .settled(HandlerOutcome::ack());
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+/// The receipt an order is answered with. It declares no destination, so each mount names one.
+#[derive(Debug, PartialEq, Outgoing, Serialize, Deserialize)]
+struct Receipt {
+    id: u64,
+    total: u64,
+}
+
+/// Answers every order with a receipt, on the subject the clause names.
+#[subscriber("orders.billed", publish("orders.receipts"))]
+async fn issue_receipt(order: &Order) -> Receipt {
+    Receipt {
+        id: order.id,
+        total: order.id * 100,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_with_no_declared_destination_lands_where_the_mount_names() {
+    let tb = TestApp::start(app(|b| {
+        b.include(issue_receipt);
+    }))
+    .await
+    .expect("start");
+
+    tb.broker::<NatsTestBroker>()
+        .message(&Order { id: 11 })
+        .to("orders.billed")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.broker::<NatsTestBroker>()
+        .published::<Receipt>("orders.receipts")
+        .assert_called_once()
+        .with(&Receipt {
+            id: 11,
+            total: 1100,
+        });
+    tb.broker::<NatsTestBroker>()
+        .subscriber("orders.billed")
+        .assert_called_once()
+        .settled(HandlerOutcome::ack());
+
+    tb.shutdown().await.expect("shutdown");
+}

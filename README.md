@@ -100,9 +100,9 @@ async fn handle(order: &Order) -> HandlerOutcome { /* ... */ }
 A publish policy is pure declaration: it holds no connection, so it is built anywhere - in a router, in configuration, at a mount site - and the runtime pairs it with the broker once that connects. Which policy you name picks the transport. The prelude carries the plain one as `Publish` (`NatsPublish` at the crate root):
 
 ```rust
-// One mount verb names every publish position: `Reply` for the value a `publish("dest")`
-// handler returns, an Out slot's own marker for an injected publisher. A reply left unnamed
-// takes the broker's default policy, which here is the Core NATS one.
+// One mount verb names every publish position: `Reply` for the value a replying handler
+// returns, an Out slot's own marker for an injected publisher. A reply position with no
+// `.out(Reply, ..)` takes the broker's default policy, which here is the Core NATS one.
 b.include(confirm).out(Reply, Publish).build();
 
 // Core NATS: fire-and-forget, and the RequestReply capability.
@@ -158,7 +158,7 @@ ruststream-nats/
 └── Cargo.toml                  workspace
 ```
 
-The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.7.0-rc.1, <0.8.0"`). The lower bound names the release candidate because cargo leaves pre-releases out of a range that does not mention one; the range takes the final 0.7.0 as soon as it is published.
+The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.7.0-rc.2, <0.8.0"`). The lower bound names the release candidate because cargo leaves pre-releases out of a range that does not mention one; the range takes the final 0.7.0 as soon as it is published.
 
 ## Documentation
 

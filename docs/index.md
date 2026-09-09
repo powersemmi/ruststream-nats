@@ -1,18 +1,19 @@
 # ruststream-nats
 
-**`ruststream-nats`** is the NATS broker for the
-[RustStream](https://powersemmi.github.io/ruststream/) messaging framework. It covers Core NATS
-subjects and JetStream durable consumers, implements request/reply over native NATS, and ships an
-in-process test broker under its `testing` feature.
+**`ruststream-nats`** subscribes a [RustStream](https://powersemmi.github.io/ruststream/) service to
+NATS subjects and publishes messages to them. A handler binds to a Core NATS subject or to a
+JetStream consumer. NATS matches replies to requests, so a service can send a request and wait for
+the answer.
 
-Handlers, routers, codecs, and middleware come from the framework; this crate supplies the
-transport, and nothing broker-specific leaks back into the framework.
+The `testing` feature runs a service's handlers in process, with no NATS server.
 
 ```toml
 ruststream = { version = "0.7", features = ["macros", "json"] }
 ruststream-nats = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
+
+A service mounts its handlers on a `NatsBroker`:
 
 ```rust
 --8<-- "crates/ruststream-nats/examples/nats_core.rs:app"
@@ -30,7 +31,5 @@ serde = { version = "1", features = ["derive"] }
 
 ## How this site relates to the RustStream docs
 
-This site documents the NATS broker only. Framework concepts that apply to every broker (writing
-subscribers, publishing, routing, codecs, middleware, observability, the CLI) live in the
-[RustStream documentation](https://powersemmi.github.io/ruststream/). The pages here cover what is
-specific to NATS and link back to the framework docs where the two meet.
+This site covers what is specific to NATS. Everything else lives in the
+[RustStream documentation](https://powersemmi.github.io/ruststream/).

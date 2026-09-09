@@ -8,14 +8,20 @@ the answer.
 The `testing` feature runs a service's handlers in process, with no NATS server.
 
 ```toml
+[dependencies]
 ruststream = { version = "0.7", features = ["macros", "json"] }
 ruststream-nats = "0.7"
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+ruststream-nats = { version = "0.7", features = ["testing"] }
 ```
 
 A service mounts its handlers on a `NatsBroker`:
 
 ```rust
+--8<-- "crates/ruststream-nats/examples/nats_core.rs:handler"
+
 --8<-- "crates/ruststream-nats/examples/nats_core.rs:app"
 ```
 

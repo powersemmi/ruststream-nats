@@ -37,19 +37,22 @@ use ruststream_nats::{
 };
 use tokio::time::timeout;
 
+mod live;
+
 const WAIT: Duration = Duration::from_secs(2);
 
 fn nats_url() -> Option<String> {
-    std::env::var("NATS_TEST_URL").ok()
+    live::url("NATS_TEST_URL")
 }
 
 /// A live connection, or `None` to skip when `NATS_TEST_URL` is unset or the server is unreachable.
+/// Under `RUSTSTREAM_REQUIRE_LIVE` both of those are failures instead.
 async fn connected_or_skip() -> Option<ConnectedNatsBroker> {
     let url = nats_url()?;
     match NatsBroker::new(url.as_str()).connect().await {
         Ok(connected) => Some(connected),
         Err(err) => {
-            eprintln!("could not reach NATS at {url}: {err}; skipping");
+            live::unreachable(&url, &err);
             None
         }
     }

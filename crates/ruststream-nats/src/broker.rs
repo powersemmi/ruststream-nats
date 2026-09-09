@@ -135,17 +135,44 @@ impl Broker for NatsBroker {
     }
 }
 
-/// `DescribeServer` reports the configured NATS address, which is what the `AsyncAPI` document
-/// records for the service. The live coordinates the server reports once connected are on
-/// [`ConnectedNatsBroker`].
+/// The `host[:port]` of one configured address, in the shape
+/// [`ConnectedNatsBroker::server_spec`] reports from the server's own `INFO`.
+///
+/// The order of the cuts is the whole of it. The authority ends at the first `/`, `?` or `#`, so
+/// an `@` past that point belongs to a path or a query and is not a userinfo separator: cutting on
+/// `@` first turns `nats://host/a@b` into a host of `b`. Inside the authority the last `@` is the
+/// separator, because a password may contain one.
+///
+/// Never fails: a server description must not hold up startup over an address the connection
+/// itself will reject.
+fn host_of(addr: &str) -> &str {
+    let addr = addr.trim();
+    let after_scheme = addr.split_once("://").map_or(addr, |(_, rest)| rest);
+    let authority = after_scheme
+        .split_once(['/', '?', '#'])
+        .map_or(after_scheme, |(authority, _)| authority);
+    authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host)
+}
+
+/// `DescribeServer` reports the host and port of every configured address, which is what the
+/// `AsyncAPI` document records for the service. The live coordinates the server reports once
+/// connected are on [`ConnectedNatsBroker`].
+///
+/// Credentials are not part of a coordinate. `addrs` goes to the client as written, and the client
+/// accepts `nats://user:password@host` and `nats://token@host`, but the generated document is
+/// published and shared, so what a URL carries to authenticate the connection stops here.
 impl DescribeServer for NatsBroker {
     fn describe_server(&self) -> ServerSpec {
-        let host = self
+        let hosts = self
             .addrs
-            .trim_start_matches("nats://")
-            .trim_start_matches("tls://")
-            .to_owned();
-        ServerSpec::new(host, "nats")
+            .split(',')
+            .map(host_of)
+            .filter(|host| !host.is_empty())
+            .collect::<Vec<_>>()
+            .join(",");
+        ServerSpec::new(hosts, "nats")
     }
 }
 
@@ -390,5 +417,76 @@ mod tests {
         let spec = broker.describe_server();
         assert_eq!(spec.protocol, "nats");
         assert_eq!(spec.host.as_deref(), Some("127.0.0.1:4222"));
+    }
+
+    #[test]
+    fn the_host_survives_every_address_shape_the_client_accepts() {
+        for (addr, expected) in [
+            ("nats://127.0.0.1:4222", "127.0.0.1:4222"),
+            ("tls://nats.example.com:4222", "nats.example.com:4222"),
+            // A bare address, which the client also takes.
+            ("nats.example.com:4222", "nats.example.com:4222"),
+            ("nats://nats.example.com", "nats.example.com"),
+            // User and password.
+            (
+                "nats://alice:s3cret@nats.example.com:4222",
+                "nats.example.com:4222",
+            ),
+            // A token: no colon and no user name, so a parse looking for `user:pass` misses it.
+            (
+                "nats://s3cret-token@nats.example.com:4222",
+                "nats.example.com:4222",
+            ),
+            // A password may contain the separator, so inside the authority the last `@` wins.
+            (
+                "nats://alice:p@ss@nats.example.com:4222",
+                "nats.example.com:4222",
+            ),
+            // The authority ends before the path or the query, so an `@` past it separates
+            // nothing. Cutting on `@` first would report a host of `b`.
+            ("nats://nats.example.com:4222/a@b", "nats.example.com:4222"),
+            (
+                "nats://nats.example.com:4222/?token=a@b",
+                "nats.example.com:4222",
+            ),
+            ("nats://nats.example.com:4222#a@b", "nats.example.com:4222"),
+        ] {
+            assert_eq!(host_of(addr), expected, "parsing {addr}");
+        }
+    }
+
+    #[test]
+    fn a_list_of_addresses_describes_every_host_and_no_credentials() {
+        let spec = NatsBroker::new(
+            "nats://alice:s3cret@one.example.com:4222, nats://tok@two.example.com:4223",
+        )
+        .describe_server();
+        let host = spec.host.expect("a networked broker states its host");
+
+        assert_eq!(host, "one.example.com:4222,two.example.com:4223");
+        assert!(
+            !host.contains('@'),
+            "the userinfo separator is gone: {host}"
+        );
+    }
+
+    /// The document a service generates is meant to be published, so an address that
+    /// authenticates the connection must not describe the server it reaches.
+    #[test]
+    fn an_address_carrying_credentials_describes_a_server_without_them() {
+        for addr in [
+            "nats://alice:s3cret@nats.example.com:4222",
+            "nats://s3cret@nats.example.com:4222",
+        ] {
+            let host = NatsBroker::new(addr)
+                .describe_server()
+                .host
+                .expect("a networked broker states its host");
+
+            assert_eq!(host, "nats.example.com:4222");
+            assert!(!host.contains("s3cret"), "{addr} leaked {host:?}");
+            assert!(!host.contains("alice"), "{addr} leaked {host:?}");
+            assert!(!host.contains('@'), "{addr} leaked {host:?}");
+        }
     }
 }

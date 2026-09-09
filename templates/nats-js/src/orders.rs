@@ -2,7 +2,7 @@
 //!
 //! The first parameter is the decoded payload; the macro turns each function into a mountable
 //! definition that `routes` collects into a `Router`. `confirm` binds to a durable JetStream
-//! consumer (the `SubscribeOptions` builder sits right in the decorator) and replies on
+//! consumer (the `JetStreamConsumer` descriptor sits right in the decorator) and replies on
 //! `confirmations`; `on_cancel` handles `cancellations` by plain name with no reply.
 //!
 //! The decorator names a NATS subscription, so this file imports the broker prelude rather than
@@ -32,11 +32,11 @@ pub struct Confirmation {
 
 /// Confirms an incoming order and publishes a `Confirmation` to `confirmations`.
 ///
-/// The `SubscribeOptions` builder binds this handler to a durable pull consumer on the `ORDERS`
-/// stream. The return value is the reply: the `publish("confirmations")` clause makes the runtime
-/// encode it and send it through the publisher wired in `routes`.
+/// The `JetStreamConsumer` descriptor binds this handler to a durable pull consumer on the
+/// `ORDERS` stream. The return value is the reply: the `publish("confirmations")` clause makes the
+/// runtime encode it and send it through the publisher wired in `routes`.
 #[subscriber(
-    SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("{{project-name}}-worker"),
+    JetStreamConsumer::new("orders.*", "ORDERS").durable("{{project-name}}-worker"),
     publish("confirmations")
 )]
 pub async fn confirm(order: &Order) -> Confirmation {

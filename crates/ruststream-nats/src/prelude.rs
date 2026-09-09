@@ -1,8 +1,9 @@
 //! The imports a mount site on NATS writes every time, in one glob.
 //!
-//! The broker, the subscription descriptor, the publish policies ([`Publish`] is plain Core NATS,
-//! [`JetStreamPublish`] waits for the stream's acknowledgement), the [`RequestReply`] capability,
-//! and the whole core prelude.
+//! The broker, the two subscription descriptors ([`SubscribeOptions`] for Core NATS,
+//! [`JetStreamConsumer`] for a pull consumer), the publish policies ([`Publish`] is plain Core
+//! NATS, [`JetStreamPublish`] waits for the stream's acknowledgement), the [`RequestReply`]
+//! capability, and the whole core prelude.
 //!
 //! Two vocabularies, one per file. A **handler body** names capabilities: it imports
 //! `ruststream::prelude::*` and bounds an injected slot with the trait it needs
@@ -41,7 +42,9 @@ pub use ruststream::RequestReply;
 // because JetStream is the concept rather than this broker's word for one. The prefixed originals
 // stay at the crate root, for prose and for a file that wants to say NATS out loud.
 pub use crate::NatsPublish as Publish;
-pub use crate::{JetStreamPublish, NatsBroker, SubscribeOptions};
+pub use crate::{
+    JetStreamConsumer, JetStreamPublish, NatsBroker, NonZeroDuration, SubscribeOptions,
+};
 
 // `Partitioned` is kept out on purpose: the core also surfaces `partition_key` as a defaulted
 // method on `IncomingMessage`, so re-exporting the trait makes that call ambiguous (E0034).

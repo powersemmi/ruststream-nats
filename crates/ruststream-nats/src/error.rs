@@ -45,9 +45,9 @@ pub enum NatsError {
         subject: String,
     },
 
-    /// The supplied [`crate::SubscribeOptions`] combine fields in a way the broker cannot honour
-    /// (for example `durable(_)` without `jetstream(_)`, or `queue_group(_)` together with
-    /// `jetstream(_)`).
+    /// The subscription descriptor names an empty subject. Combinations of settings the broker
+    /// cannot honour are rejected by the types instead, so this is what is left: a subject is a
+    /// string the caller supplies, often from configuration.
     #[error("invalid subscribe options: {0}")]
     InvalidOptions(String),
 }

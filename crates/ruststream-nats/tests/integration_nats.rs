@@ -32,8 +32,8 @@ use ruststream::{
 };
 use ruststream_nats::context::{JetStreamContext, keys};
 use ruststream_nats::{
-    ConnectedNatsBroker, NatsBroker, NatsError, NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
-    SubscribeOptions,
+    ConnectedNatsBroker, JetStreamConsumer, NatsBroker, NatsError, NatsMessage, NatsPublish,
+    PARTITION_KEY_HEADER, SubscribeOptions,
 };
 use tokio::time::timeout;
 
@@ -107,9 +107,8 @@ impl JetStreamFixture {
         })
     }
 
-    fn consumer(&self, durable: Option<&str>) -> SubscribeOptions {
-        let opts = SubscribeOptions::new(self.subject.clone())
-            .jetstream(self.stream.clone())
+    fn consumer(&self, durable: Option<&str>) -> JetStreamConsumer {
+        let opts = JetStreamConsumer::new(self.subject.clone(), self.stream.clone())
             .filter_subject(self.subject.clone());
         match durable {
             Some(name) => opts.durable(name),

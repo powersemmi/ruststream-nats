@@ -13,7 +13,9 @@ use futures::StreamExt;
 use ruststream::{
     BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, nonzero,
 };
-use ruststream_nats::{ConnectedNatsBroker, NatsBroker, NatsPublish, SubscribeOptions};
+use ruststream_nats::{
+    ConnectedNatsBroker, JetStreamConsumer, NatsBroker, NatsPublish, NonZeroDuration,
+};
 use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(2);
@@ -62,9 +64,8 @@ async fn jetstream_fixture(prefix: &str) -> Option<JetStreamFixture> {
 }
 
 impl JetStreamFixture {
-    fn consumer_options(&self, expires: Duration) -> SubscribeOptions {
-        SubscribeOptions::new(self.subject.clone())
-            .jetstream(self.stream.clone())
+    fn consumer_options(&self, expires: NonZeroDuration) -> JetStreamConsumer {
+        JetStreamConsumer::new(self.subject.clone(), self.stream.clone())
             .filter_subject(self.subject.clone())
             .pull_expires(expires)
     }
@@ -94,7 +95,7 @@ async fn the_batch_size_caps_the_pull_batch() {
 
     let mut consumer = fx
         .connected
-        .subscribe_with(fx.consumer_options(Duration::from_millis(300)))
+        .subscribe_with(fx.consumer_options(NonZeroDuration::from_millis(nonzero!(300))))
         .await
         .expect("consumer create failed");
 
@@ -136,7 +137,7 @@ async fn batches_skip_empty_fetches() {
 
     let mut consumer = fx
         .connected
-        .subscribe_with(fx.consumer_options(Duration::from_millis(150)))
+        .subscribe_with(fx.consumer_options(NonZeroDuration::from_millis(nonzero!(150))))
         .await
         .expect("consumer create failed");
 
@@ -187,7 +188,7 @@ async fn batches_can_be_reentered() {
 
     let mut consumer = fx
         .connected
-        .subscribe_with(fx.consumer_options(Duration::from_millis(300)))
+        .subscribe_with(fx.consumer_options(NonZeroDuration::from_millis(nonzero!(300))))
         .await
         .expect("consumer create failed");
 

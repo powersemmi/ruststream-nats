@@ -16,7 +16,7 @@ use ruststream::{
     testing::expect_published,
 };
 use ruststream_nats::{
-    NatsError, PARTITION_KEY_HEADER, SubscribeOptions,
+    JetStreamConsumer, NatsError, PARTITION_KEY_HEADER, SubscribeOptions,
     testing::{ConnectedNatsTestBroker, NatsTestBroker, NatsTestMessage, NatsTestPublish},
 };
 
@@ -525,7 +525,7 @@ async fn ack_order(order: &Order) -> HandlerOutcome {
 
 // A JetStream-configured source resolves against the in-process broker too, so a handler bound to
 // a durable consumer is still unit-testable; only the subject pattern drives routing here.
-#[subscriber(SubscribeOptions::new("orders.durable").jetstream("ORDERS").durable("worker"))]
+#[subscriber(JetStreamConsumer::new("orders.durable", "ORDERS").durable("worker"))]
 async fn durable_order(order: &Order) -> HandlerOutcome {
     let _ = order;
     HandlerOutcome::ack()

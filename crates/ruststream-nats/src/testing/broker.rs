@@ -13,7 +13,7 @@ use ruststream::{
 
 use crate::{
     error::NatsError,
-    subscribe_options::SubscribeOptions,
+    subscribe_options::{JetStreamConsumer, NatsSubscription, SubscribeOptions},
     testing::{
         NatsTestPublisher, NatsTestSubscriber,
         publisher::NatsTestPublish,
@@ -138,25 +138,25 @@ impl ConnectedNatsTestBroker {
 
     /// Opens a subscription described by `opts`. Mirrors
     /// [`ConnectedNatsBroker::subscribe_with`](crate::ConnectedNatsBroker::subscribe_with);
-    /// `JetStream`-only fields are validated for consistency but do not influence dispatch in
-    /// handler-stub mode - only the subject pattern is used for routing.
+    /// a `JetStream` source resolves here too, but only the subject pattern drives routing in
+    /// handler-stub mode.
     ///
     /// # Errors
     ///
-    /// Returns [`NatsError::InvalidOptions`] when `opts` mixes Core and `JetStream` fields
-    /// incompatibly, [`NatsError::Subscribe`] when the subject pattern is not a valid NATS
-    /// subject, or [`NatsError::Closed`] when the transport has shut down.
+    /// Returns [`NatsError::InvalidOptions`] when the subject is empty,
+    /// [`NatsError::Subscribe`] when the subject pattern is not a valid NATS subject, or
+    /// [`NatsError::Closed`] when the transport has shut down.
     // Spelled out rather than `async fn` only because this body is synchronous; the call shape
     // stays identical to the real broker's, which does await.
-    pub fn subscribe_with(
+    pub fn subscribe_with<S: NatsSubscription>(
         &self,
-        opts: SubscribeOptions,
+        source: S,
     ) -> impl Future<Output = Result<NatsTestSubscriber, NatsError>> {
-        if let Err(err) = opts.validate() {
+        if let Err(err) = source.ensure_subject() {
             return ready(Err(err));
         }
         // Only the subject drives in-process routing, so take it and drop the rest.
-        let subject = opts.into_subject();
+        let subject = source.into_subject();
         if let Err(err) = self.state.ensure_live(&subject) {
             return ready(Err(err));
         }
@@ -210,7 +210,24 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for SubscribeOptions {
     type Subscriber = NatsTestSubscriber;
 
     fn name(&self) -> &str {
-        self.subject()
+        NatsSubscription::subject(self)
+    }
+
+    async fn subscribe(
+        self,
+        connected: &ConnectedNatsTestBroker,
+    ) -> Result<Self::Subscriber, NatsError> {
+        connected.subscribe_with(self).await
+    }
+}
+
+// A JetStream source resolves against the in-process transport too: only the subject pattern
+// drives routing here, so a handler bound to a durable consumer is testable without a server.
+impl SubscriptionSource<ConnectedNatsTestBroker> for JetStreamConsumer {
+    type Subscriber = NatsTestSubscriber;
+
+    fn name(&self) -> &str {
+        NatsSubscription::subject(self)
     }
 
     async fn subscribe(

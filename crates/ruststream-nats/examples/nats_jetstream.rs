@@ -1,11 +1,10 @@
 //! A `JetStream` durable consumer, plus a `JetStream` publisher that awaits the stream's ack.
 //!
-//! A `#[subscriber("subject")]` handler carries a by-name source. To bind it to `JetStream`,
-//! describe the source in the attribute itself with [`SubscribeOptions`], naming the stream and a
-//! durable consumer so progress survives restarts: the macro follows the builder chain, so the
-//! definition carries its own source and mounts with a plain `include`. The handler's
-//! `HandlerOutcome::ack()` acks the message back to `JetStream`; returning
-//! `HandlerOutcome::retry()` schedules redelivery.
+//! A `#[subscriber("subject")]` handler carries a by-name source. To read a stream instead,
+//! describe the consumer in the attribute itself with [`JetStreamConsumer`], naming a durable
+//! consumer so its position survives restarts: the definition carries its own source and mounts
+//! with a plain `include`. The handler's `HandlerOutcome::ack()` acks the message back to
+//! `JetStream`; returning `HandlerOutcome::retry()` schedules redelivery.
 //!
 //! The second handler takes a batch (`&[Order]`) instead of one order, and its mount names the
 //! batch size - which is what a `JetStream` pull request asks the server for.
@@ -42,7 +41,7 @@ struct Order {
 }
 
 // --8<-- [start:handler]
-#[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-worker"))]
+#[subscriber(JetStreamConsumer::new("orders.*", "ORDERS").durable("orders-worker"))]
 async fn handle(order: &Order) -> HandlerOutcome {
     println!("got order {}", order.id);
     HandlerOutcome::ack()
@@ -52,7 +51,7 @@ async fn handle(order: &Order) -> HandlerOutcome {
 // --8<-- [start:batch]
 /// A batch handler runs once per batch the consumer delivers, so a run of orders becomes one round
 /// trip instead of one each. Its own durable consumer keeps its progress apart from `handle`'s.
-#[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-reconciler"))]
+#[subscriber(JetStreamConsumer::new("orders.*", "ORDERS").durable("orders-reconciler"))]
 async fn reconcile(orders: &[Order]) -> HandlerOutcome {
     println!("reconciling {} orders", orders.len());
     HandlerOutcome::ack()

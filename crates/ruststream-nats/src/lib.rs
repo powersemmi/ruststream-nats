@@ -31,7 +31,9 @@ pub use error::NatsError;
 pub use jetstream::{JetStreamPublish, JetStreamPublisher, PublishAck};
 pub use message::{CoreMessage, JetStreamMessage, NatsMessage, PARTITION_KEY_HEADER};
 pub use publisher::{NatsPublish, NatsPublishPolicy, NatsPublisher};
-pub use subscribe_options::{DeliverPolicy, SubscribeOptions};
+pub use subscribe_options::{
+    DeliverPolicy, JetStreamConsumer, NatsSubscription, NonZeroDuration, SubscribeOptions,
+};
 pub use subscriber::NatsSubscriber;
 
 #[cfg(feature = "testing")]

@@ -10,6 +10,9 @@
 //! The second handler takes a batch (`&[Order]`) instead of one order, and its mount names the
 //! batch size - which is what a `JetStream` pull request asks the server for.
 //!
+//! The third answers each order with a `Confirmation`, and its mount sends that reply through the
+//! `JetStream` policy into a second stream, while everything else here publishes over Core NATS.
+//!
 //! The seed publish rides [`JetStreamPublish`]: unlike the Core policy it waits for the stream's
 //! acknowledgement, so a message the stream refuses (unknown stream, violated expectation) is an
 //! error rather than a silent drop.
@@ -17,10 +20,11 @@
 //! The codec resolves the same way as for a by-name handler (the default, or a scope codec set
 //! with `with_broker_codec`).
 //! `NatsBroker::new` is synchronous, so this fits `#[ruststream::app]`; the runtime connects the
-//! broker at startup and then opens the consumer. Create the stream once, then run:
+//! broker at startup and then opens the consumer. Create the streams once, then run:
 //!
 //! ```text
 //! nats stream add ORDERS --subjects 'orders.*' --defaults
+//! nats stream add CONFIRMATIONS --subjects 'confirmations' --defaults
 //! cargo run --example nats_jetstream -- run
 //! ```
 //!
@@ -34,7 +38,7 @@ use std::io;
 
 use ruststream::OutgoingMessage;
 use ruststream_nats::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 struct Order {
@@ -59,6 +63,25 @@ async fn reconcile(orders: &[Order]) -> HandlerOutcome {
 }
 // --8<-- [end:batch]
 
+// --8<-- [start:reply]
+/// The confirmation an order is answered with. The type declares the subject it goes to, so the
+/// mount site is left to say only which policy carries it. That subject is outside the `ORDERS`
+/// filter on purpose: a confirmation the consumer picked up again would answer itself forever.
+#[derive(Debug, Serialize, Outgoing)]
+#[outgoing(name = "confirmations")]
+struct Confirmation {
+    id: u64,
+}
+
+#[subscriber(
+    SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-confirmer"),
+    publish
+)]
+async fn confirm(order: &Order) -> Confirmation {
+    Confirmation { id: order.id }
+}
+// --8<-- [end:reply]
+
 #[ruststream::app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
@@ -73,6 +96,16 @@ fn app() -> impl App {
             // is the pull request's batch size: at most six orders per call.
             b.include(reconcile.batch(nonzero!(6)));
             // --8<-- [end:batch_mount]
+
+            // --8<-- [start:reply_mount]
+            // The reply position takes a policy like any other slot. Naming the JetStream one
+            // sends these confirmations into a stream that acknowledges them, while the rest of
+            // the service keeps publishing over Core NATS.
+            b.include(confirm).out(
+                Reply,
+                JetStreamPublish::default().expect_stream("CONFIRMATIONS"),
+            );
+            // --8<-- [end:reply_mount]
 
             // --8<-- [start:publish]
             b.after_startup(

@@ -139,11 +139,23 @@ with the broker at startup. Naming a policy picks the transport:
   the server checks before accepting a publish: `expect_stream`, `expect_last_sequence`,
   `expect_last_subject_sequence`, `expect_last_message_id`.
 
+A handler replies by returning a value, and where that value goes is its type's own declaration:
+
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:reply"
+```
+
 A mount site attaches a policy with one verb, `.out(marker, policy)`: `Reply` names the position a
 replying handler's return value is published through, an `Out` slot's own marker names that slot's.
-The policy arrives already configured, since it is pure declaration, so
-`.out(Reply, JetStreamPublish::default().expect_stream("ORDERS"))` sends the replies of one handler
-into a named stream while the rest of the service stays on Core NATS.
+The policy arrives already configured, since it is pure declaration, so one handler's replies go
+into a named stream while the rest of the service stays on Core NATS:
+
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:reply_mount"
+```
+
+Outside a handler, the same policy produces a publisher through the scope's `after_startup` hook,
+and the JetStream one hands back the stream's acknowledgement:
 
 ```rust
 --8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:publish"

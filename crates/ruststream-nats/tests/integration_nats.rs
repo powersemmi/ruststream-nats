@@ -32,8 +32,8 @@ use ruststream::{
 };
 use ruststream_nats::context::{JetStreamContext, keys};
 use ruststream_nats::{
-    ConnectedNatsBroker, JetStreamConsumer, NatsBroker, NatsError, NatsMessage, NatsPublish,
-    PARTITION_KEY_HEADER, SubscribeOptions,
+    ConnectedNatsBroker, CoreSubject, JetStreamSubject, NatsBroker, NatsError, NatsMessage,
+    NatsPublish, PARTITION_KEY_HEADER,
 };
 use tokio::time::timeout;
 
@@ -107,12 +107,12 @@ impl JetStreamFixture {
         })
     }
 
-    fn consumer(&self, durable: Option<&str>) -> JetStreamConsumer {
-        let opts = JetStreamConsumer::new(self.subject.clone(), self.stream.clone())
+    fn consumer(&self, durable: Option<&str>) -> JetStreamSubject {
+        let subject = JetStreamSubject::new(self.subject.clone(), self.stream.clone())
             .filter_subject(self.subject.clone());
         match durable {
-            Some(name) => opts.durable(name),
-            None => opts,
+            Some(name) => subject.durable(name),
+            None => subject,
         }
     }
 
@@ -253,7 +253,7 @@ async fn a_core_delivery_reports_that_it_cannot_be_acknowledged() {
     let subject = unique_subject("coreack");
 
     let mut subscriber = connected
-        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .subscribe_with(CoreSubject::new(subject.clone()))
         .await
         .expect("subscribe failed");
     connected
@@ -288,7 +288,7 @@ async fn a_request_carries_its_reply_inbox_as_the_reply_to_header() {
     let subject = unique_subject("reqrep");
 
     let mut responder = connected
-        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .subscribe_with(CoreSubject::new(subject.clone()))
         .await
         .expect("subscribe failed");
     let publisher = connected.publisher(NatsPublish);
@@ -373,7 +373,7 @@ async fn a_live_delivery_carries_the_partition_key_header() {
     let subject = unique_subject("partition");
 
     let mut subscriber = connected
-        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .subscribe_with(CoreSubject::new(subject.clone()))
         .await
         .expect("subscribe failed");
 
@@ -409,7 +409,7 @@ async fn core_stream_can_be_reentered() {
     let subject = unique_subject("reenter");
 
     let mut subscriber = connected
-        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .subscribe_with(CoreSubject::new(subject.clone()))
         .await
         .expect("subscribe failed");
     let publisher = connected.publisher(NatsPublish);

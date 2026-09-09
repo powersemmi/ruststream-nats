@@ -59,8 +59,8 @@ Wire it onto the broker; the `with_broker` / `include` part is identical to the 
 
 ## JetStream durable consumer
 
-To consume from JetStream instead, describe the source in the `#[subscriber(..)]` attribute with
-`JetStreamConsumer`, naming the stream and a durable consumer so progress survives restarts. The
+To consume from JetStream instead, name the subject in the `#[subscriber(..)]` attribute with
+`JetStreamSubject`, naming the stream and a durable consumer so progress survives restarts. The
 macro follows the builder chain, so the definition carries its own source. The handler's
 `HandlerOutcome::ack()` acks back to JetStream. This is what the `nats-js` CLI scaffold generates.
 
@@ -74,14 +74,14 @@ The mount site names no source, and the codec resolves the same way as for a by-
 --8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:mount"
 ```
 
-Beyond `durable`, `JetStreamConsumer` carries `filter_subject`, `ack_wait`, `max_ack_pending`,
+Beyond `durable`, `JetStreamSubject` carries `filter_subject`, `ack_wait`, `max_ack_pending`,
 `deliver_policy`, and `pull_expires` (how long one pull request waits before it comes back with
-what it has). Core NATS load balancing is `SubscribeOptions::queue_group`, and the two descriptors
-share no settings, so a setting on the wrong model is a compile error rather than a service that
-starts and then refuses its own subscription.
+what it has). Core NATS load balancing is `CoreSubject::queue_group`, and the two types share no
+settings, so a setting on the wrong model is a compile error rather than a service that starts and
+then refuses its own subscription.
 
-The descriptor is a subscription source as it stands, so the macro-free path takes it directly:
-`subscriber(JetStreamConsumer::new("orders.*", "ORDERS"), body)` builds the same definition
+The subject is a subscription source as it stands, so the macro-free path takes it directly:
+`subscriber(JetStreamSubject::new("orders.*", "ORDERS"), body)` builds the same definition
 the decorator does, and the same settings chain and `include` mount it. See
 [Subscribers](https://powersemmi.github.io/ruststream/latest/guides/subscribers/) in the framework
 docs for the body contract on that path.
@@ -107,7 +107,7 @@ closes 10 ms after its first delivery. Nothing at the mount site says which of t
 batch the body sees is the batch the subscription delivered, never a slice of it.
 
 The size is not a subscription option: it belongs to the registration, which is why
-`JetStreamConsumer` carries the timing (`pull_expires`) and not the count.
+`JetStreamSubject` carries the timing (`pull_expires`) and not the count.
 
 ### Acknowledgement and delayed retry
 
@@ -201,7 +201,7 @@ Which of the framework's optional capability traits this broker implements nativ
 
 | Capability | Native | Notes |
 | --- | --- | --- |
-| `Subscribe` | yes | Subscribes by subject through `SubscribeOptions`; `JetStreamConsumer` describes a JetStream consumer instead. |
+| `Subscribe` | yes | Subscribes by subject through `CoreSubject`; `JetStreamSubject` reads one through a JetStream consumer instead. |
 | `BatchSubscriber` | yes | The mount site's `batch(n)` is the batch size. JetStream spends it on the wire: one batch is one pull `fetch` of up to `n` messages, bounded by `pull_expires`. Core NATS has no wire-level batching, so its batches are assembled on the client by the framework's `Buffered` adapter. See [Batches](#batches). |
 | `TransactionalPublisher` | no | Neither Core NATS nor JetStream has a multi-message transaction; a JetStream publish is acknowledged one message at a time. |
 | `OwnedTransactions` | no | Same reason: there is no transaction to own. |
@@ -223,7 +223,7 @@ what it published and how the delivery settled. See
 Three NATS-specific things hold in process, so a handler that uses them is testable without a
 server:
 
-- A `JetStreamConsumer` source resolves here too; only the subject pattern drives routing.
+- A `JetStreamSubject` source resolves here too; only the subject pattern drives routing.
 - A handler that binds native `JetStream` metadata with a `ruststream_nats::context` key mounts,
   and every key reads `None`, exactly as on a core delivery.
 - `HandlerOutcome::retry_after(delay)` becomes a delayed redelivery whose timer the harness owns,

@@ -30,7 +30,7 @@
 //!     id: u64,
 //! }
 //!
-//! #[subscriber(JetStreamConsumer::new("orders.*", "ORDERS").durable("worker"))]
+//! #[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("worker"))]
 //! async fn handle(
 //!     order: &Order,
 //!     Ctx(sequence): Ctx<StreamSequence>,

@@ -16,7 +16,7 @@ use ruststream::{
     testing::expect_published,
 };
 use ruststream_nats::{
-    JetStreamConsumer, NatsError, PARTITION_KEY_HEADER, SubscribeOptions,
+    CoreSubject, JetStreamSubject, NatsError, PARTITION_KEY_HEADER,
     testing::{ConnectedNatsTestBroker, NatsTestBroker, NatsTestMessage, NatsTestPublish},
 };
 
@@ -55,7 +55,7 @@ async fn pub_sub_round_trip_through_broker_traits() {
     let broker = connected().await;
 
     let mut subscriber = broker
-        .subscribe_with(SubscribeOptions::new("orders.created"))
+        .subscribe_with(CoreSubject::new("orders.created"))
         .await
         .expect("subscribe");
     let publisher = broker.publisher(NatsTestPublish);
@@ -112,11 +112,11 @@ async fn publisher_errors_after_shutdown() {
 async fn wildcard_subscription_receives_matching_subjects() {
     let broker = connected().await;
     let mut star_sub = broker
-        .subscribe_with(SubscribeOptions::new("orders.*"))
+        .subscribe_with(CoreSubject::new("orders.*"))
         .await
         .expect("subscribe *");
     let mut tail_sub = broker
-        .subscribe_with(SubscribeOptions::new(">"))
+        .subscribe_with(CoreSubject::new(">"))
         .await
         .expect("subscribe >");
     let publisher = broker.publisher(NatsTestPublish);
@@ -153,7 +153,7 @@ async fn wildcard_subscription_receives_matching_subjects() {
 async fn nack_requeue_redelivers_to_same_subscriber() {
     let broker = connected().await;
     let mut subscriber = broker
-        .subscribe_with(SubscribeOptions::new("orders"))
+        .subscribe_with(CoreSubject::new("orders"))
         .await
         .expect("subscribe");
     let publisher = broker.publisher(NatsTestPublish);
@@ -184,7 +184,7 @@ async fn nack_requeue_redelivers_to_same_subscriber() {
 async fn request_reply_round_trip() {
     let broker = connected().await;
     let mut responder = broker
-        .subscribe_with(SubscribeOptions::new("echo"))
+        .subscribe_with(CoreSubject::new("echo"))
         .await
         .expect("subscribe echo");
     let responder_publisher = broker.publisher(NatsTestPublish);
@@ -239,7 +239,7 @@ async fn request_times_out_when_no_responder() {
 async fn headers_are_propagated_to_subscribers() {
     let broker = connected().await;
     let mut subscriber = broker
-        .subscribe_with(SubscribeOptions::new("orders"))
+        .subscribe_with(CoreSubject::new("orders"))
         .await
         .expect("subscribe");
     let publisher = broker.publisher(NatsTestPublish);
@@ -288,7 +288,7 @@ async fn broker_observes_published_log() {
 async fn stream_can_be_reentered() {
     let broker = connected().await;
     let mut subscriber = broker
-        .subscribe_with(SubscribeOptions::new("orders"))
+        .subscribe_with(CoreSubject::new("orders"))
         .await
         .expect("subscribe");
     let publisher = broker.publisher(NatsTestPublish);
@@ -325,7 +325,7 @@ async fn describe_server_returns_nats_protocol() {
 async fn partition_key_header_is_surfaced() {
     let broker = connected().await;
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("events"))
+        .subscribe_with(CoreSubject::new("events"))
         .await
         .expect("subscribe");
 
@@ -361,7 +361,7 @@ async fn batch_subscriber_yields_non_empty_batches() {
 
     // Open the subscription before publishing so messages are buffered.
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("batch"))
+        .subscribe_with(CoreSubject::new("batch"))
         .await
         .expect("subscribe");
 
@@ -393,7 +393,7 @@ async fn batch_subscriber_yields_non_empty_batches() {
 async fn partition_key_absent_yields_none() {
     let broker = connected().await;
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("events.bare"))
+        .subscribe_with(CoreSubject::new("events.bare"))
         .await
         .expect("subscribe");
 
@@ -424,7 +424,7 @@ async fn batch_drains_in_publish_order_up_to_the_batch_size() {
     let broker = connected().await;
     let publisher = broker.publisher(NatsTestPublish);
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("batch.order"))
+        .subscribe_with(CoreSubject::new("batch.order"))
         .await
         .expect("subscribe");
 
@@ -465,7 +465,7 @@ async fn batches_can_be_reentered() {
     let broker = connected().await;
     let publisher = broker.publisher(NatsTestPublish);
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("batch.reenter"))
+        .subscribe_with(CoreSubject::new("batch.reenter"))
         .await
         .expect("subscribe");
 
@@ -525,7 +525,7 @@ async fn ack_order(order: &Order) -> HandlerOutcome {
 
 // A JetStream-configured source resolves against the in-process broker too, so a handler bound to
 // a durable consumer is still unit-testable; only the subject pattern drives routing here.
-#[subscriber(JetStreamConsumer::new("orders.durable", "ORDERS").durable("worker"))]
+#[subscriber(JetStreamSubject::new("orders.durable", "ORDERS").durable("worker"))]
 async fn durable_order(order: &Order) -> HandlerOutcome {
     let _ = order;
     HandlerOutcome::ack()

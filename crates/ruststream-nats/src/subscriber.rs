@@ -60,12 +60,11 @@ impl Subscriber for CoreSubscriber {
 ///
 /// Backed transparently by either a Core subscription (no ack) or a `JetStream` pull consumer
 /// (full ack/nack/term). Construct via [`ConnectedNatsBroker::subscribe_with`] with
-/// [`SubscribeOptions`] or [`JetStreamConsumer`], or let the runtime resolve either source at
-/// startup.
+/// [`CoreSubject`] or [`JetStreamSubject`], or let the runtime resolve either source at startup.
 ///
 /// [`ConnectedNatsBroker::subscribe_with`]: crate::ConnectedNatsBroker::subscribe_with
-/// [`SubscribeOptions`]: crate::SubscribeOptions
-/// [`JetStreamConsumer`]: crate::JetStreamConsumer
+/// [`CoreSubject`]: crate::CoreSubject
+/// [`JetStreamSubject`]: crate::JetStreamSubject
 pub struct NatsSubscriber {
     subject: String,
     kind: SubscriberKind,
@@ -156,7 +155,7 @@ impl BatchSubscriber for NatsSubscriber {
     ///
     /// `size` is the registration's batch size, and each transport spends it in its own currency.
     /// `JetStream` batches on the wire: one stream item is one pull `fetch` of up to `size`
-    /// messages, waiting at most [`pull_expires`](crate::JetStreamConsumer::pull_expires) before
+    /// messages, waiting at most [`pull_expires`](crate::JetStreamSubject::pull_expires) before
     /// delivering a partial batch (an empty fetch is retried, so the stream never yields empty
     /// batches). Core NATS has no wire-level batching, so its batches are assembled on the client
     /// by the framework's [`BufferedSubscriber`]: a batch closes at `size` deliveries or 10 ms

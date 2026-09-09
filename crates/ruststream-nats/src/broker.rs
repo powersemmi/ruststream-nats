@@ -17,7 +17,7 @@ use ruststream::{Broker, ConnectedBroker, DefaultPublish, DescribeServer, Server
 use crate::{
     error::NatsError,
     publisher::{NatsPublish, NatsPublishPolicy},
-    subscribe_options::{NatsSubscription, SubscribeOptions, SubscriptionPlan},
+    subject::{CoreSubject, NatsSubscription, SubscriptionPlan},
     subscriber::NatsSubscriber,
 };
 
@@ -153,7 +153,7 @@ impl DescribeServer for NatsBroker {
 /// The typed witness that [`Broker::connect`] succeeded: holds the live connection.
 ///
 /// Everything connection-bound hangs off this value: subscriptions ([`Subscribe`],
-/// [`SubscribeOptions`]) and publishers ([`publisher`](Self::publisher)).
+/// [`CoreSubject`]) and publishers ([`publisher`](Self::publisher)).
 /// [`ConnectedBroker::shutdown`] consumes it, so a publish or subscribe after shutdown is a
 /// compile error for the owner of the handle.
 #[derive(Debug)]
@@ -225,9 +225,8 @@ impl ConnectedNatsBroker {
         &self.connection
     }
 
-    /// Opens the subscription `source` describes: a Core subscription for
-    /// [`SubscribeOptions`], a pull consumer for
-    /// [`JetStreamConsumer`](crate::JetStreamConsumer).
+    /// Opens the subscription `source` describes: a Core subscription for [`CoreSubject`], a pull
+    /// consumer for [`JetStreamSubject`](crate::JetStreamSubject).
     ///
     /// # Errors
     ///
@@ -357,7 +356,7 @@ impl Subscribe for ConnectedNatsBroker {
     type Subscriber = NatsSubscriber;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
-        self.subscribe_with(SubscribeOptions::new(name)).await
+        self.subscribe_with(CoreSubject::new(name)).await
     }
 }
 

@@ -1,13 +1,13 @@
-//! The two subscription descriptors: [`SubscribeOptions`] for Core NATS, [`JetStreamConsumer`]
-//! for a `JetStream` pull consumer.
+//! The subject a service subscribes to: [`CoreSubject`] over Core NATS, [`JetStreamSubject`]
+//! through a `JetStream` pull consumer.
 //!
 //! They are the crate's [`SubscriptionSource`]s: the value a `#[subscriber(..)]` handler carries,
 //! and the value the runtime resolves once against the connected broker at startup.
 //!
-//! One descriptor per delivery model, because the two models share no settings. A queue group is
-//! Core NATS only and a durable name describes a `JetStream` consumer, so each is a method on one
-//! type and absent from the other. Naming the wrong one is a compile error rather than a service
-//! that starts and then refuses its own subscription.
+//! One type per delivery model, because the two models share no settings. A queue group is Core
+//! NATS only and a durable name describes a `JetStream` consumer, so each is a method on one type
+//! and absent from the other. Naming the wrong one is a compile error rather than a service that
+//! starts and then refuses its own subscription.
 
 use std::num::NonZeroU64;
 use std::time::Duration;
@@ -28,7 +28,7 @@ const DEFAULT_PULL_EXPIRES: Duration = Duration::from_secs(5);
 
 /// A [`Duration`] that is known not to be zero.
 ///
-/// [`JetStreamConsumer::pull_expires`] and [`JetStreamConsumer::ack_wait`] take one. A fetch that
+/// [`JetStreamSubject::pull_expires`] and [`JetStreamSubject::ack_wait`] take one. A fetch that
 /// expires the instant it is issued turns the batch loop into a hot spin, so the zero is kept out
 /// of the type instead of being caught when the subscription opens.
 ///
@@ -94,7 +94,7 @@ impl From<NonZeroDuration> for Duration {
 /// What a descriptor asks the connected broker to open, with every default already resolved.
 ///
 /// Reachable through the sealed [`NatsSubscription`], so it is `pub` for the visibility checker
-/// only: `subscribe_options` is a private module and nothing re-exports this, so no crate outside
+/// only: `subject` is a private module and nothing re-exports this, so no crate outside
 /// can name it.
 #[doc(hidden)]
 #[derive(Debug)]
@@ -127,14 +127,14 @@ mod sealed {
     }
 }
 
-/// A NATS subscription descriptor: [`SubscribeOptions`] or [`JetStreamConsumer`].
+/// A NATS subscription descriptor: [`CoreSubject`] or [`JetStreamSubject`].
 ///
 /// Sealed, because the two delivery models NATS has are the two this crate ships.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not describe a NATS subscription",
     label = "not a subscription descriptor",
-    note = "use `SubscribeOptions::new(subject)` for Core NATS, or \
-            `JetStreamConsumer::new(subject, stream)` for a JetStream pull consumer"
+    note = "use `CoreSubject::new(subject)` for Core NATS, or \
+            `JetStreamSubject::new(subject, stream)` for a JetStream pull consumer"
 )]
 pub trait NatsSubscription: Sealed {
     /// The subject pattern this subscription receives messages on.
@@ -158,38 +158,38 @@ pub trait NatsSubscription: Sealed {
     }
 }
 
-/// A Core NATS subscription.
+/// A subject subscribed to over Core NATS.
 ///
 /// Core NATS delivers to whoever is subscribed at that moment and stores nothing, so the only
 /// setting it has is the queue group that load-balances a subject across several subscribers.
-/// Reading a stream instead is [`JetStreamConsumer`].
+/// Reading a stream instead is [`JetStreamSubject`].
 ///
 /// # Examples
 ///
 /// ```
-/// use ruststream_nats::SubscribeOptions;
+/// use ruststream_nats::CoreSubject;
 ///
-/// let plain = SubscribeOptions::new("orders.*");
-/// let balanced = SubscribeOptions::new("orders.*").queue_group("workers");
+/// let plain = CoreSubject::new("orders.*");
+/// let balanced = CoreSubject::new("orders.*").queue_group("workers");
 /// # let _ = (plain, balanced);
 /// ```
 ///
 /// A `JetStream` setting is not a method here, so asking for one does not compile:
 ///
 /// ```compile_fail
-/// use ruststream_nats::SubscribeOptions;
+/// use ruststream_nats::CoreSubject;
 ///
 /// // `durable` names a JetStream consumer, and Core NATS has none.
-/// let bad = SubscribeOptions::new("orders.*").durable("worker-1");
+/// let bad = CoreSubject::new("orders.*").durable("worker-1");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
-pub struct SubscribeOptions {
+pub struct CoreSubject {
     subject: String,
     queue_group: Option<String>,
 }
 
-impl SubscribeOptions {
+impl CoreSubject {
     /// Subscribes to `subject` over Core NATS.
     pub fn new(subject: impl Into<String>) -> Self {
         Self {
@@ -206,7 +206,7 @@ impl SubscribeOptions {
     }
 }
 
-impl Sealed for SubscribeOptions {
+impl Sealed for CoreSubject {
     fn plan(&self) -> SubscriptionPlan<'_> {
         SubscriptionPlan::Core {
             queue_group: self.queue_group.as_deref(),
@@ -218,13 +218,13 @@ impl Sealed for SubscribeOptions {
     }
 }
 
-impl NatsSubscription for SubscribeOptions {
+impl NatsSubscription for CoreSubject {
     fn subject(&self) -> &str {
         &self.subject
     }
 }
 
-/// A `JetStream` pull consumer reading one stream.
+/// A subject read through a `JetStream` pull consumer on one stream.
 ///
 /// The consumer is created when the subscription opens. Name it with [`durable`](Self::durable)
 /// and the server keeps its position across restarts; leave the name out and the consumer is
@@ -234,24 +234,24 @@ impl NatsSubscription for SubscribeOptions {
 ///
 /// ```
 /// use ruststream::nonzero;
-/// use ruststream_nats::{JetStreamConsumer, NonZeroDuration};
+/// use ruststream_nats::{JetStreamSubject, NonZeroDuration};
 ///
-/// let consumer = JetStreamConsumer::new("orders.*", "ORDERS")
+/// let orders = JetStreamSubject::new("orders.*", "ORDERS")
 ///     .durable("worker-1")
 ///     .ack_wait(NonZeroDuration::from_secs(nonzero!(30)));
-/// # let _ = consumer;
+/// # let _ = orders;
 /// ```
 ///
 /// A queue group is Core NATS only, so it is not a method here:
 ///
 /// ```compile_fail
-/// use ruststream_nats::JetStreamConsumer;
+/// use ruststream_nats::JetStreamSubject;
 ///
-/// let bad = JetStreamConsumer::new("orders.*", "ORDERS").queue_group("workers");
+/// let bad = JetStreamSubject::new("orders.*", "ORDERS").queue_group("workers");
 /// ```
 #[derive(Debug, Clone)]
 #[must_use]
-pub struct JetStreamConsumer {
+pub struct JetStreamSubject {
     subject: String,
     stream: String,
     durable: Option<String>,
@@ -262,7 +262,7 @@ pub struct JetStreamConsumer {
     pull_expires: Option<NonZeroDuration>,
 }
 
-impl JetStreamConsumer {
+impl JetStreamSubject {
     /// Reads `subject` from the stream named `stream`.
     ///
     /// `subject` is the pattern the subscription reports and the default consumer filter;
@@ -325,7 +325,7 @@ impl JetStreamConsumer {
     }
 }
 
-impl Sealed for JetStreamConsumer {
+impl Sealed for JetStreamSubject {
     fn plan(&self) -> SubscriptionPlan<'_> {
         SubscriptionPlan::JetStream {
             stream: &self.stream,
@@ -345,26 +345,26 @@ impl Sealed for JetStreamConsumer {
     }
 }
 
-impl NatsSubscription for JetStreamConsumer {
+impl NatsSubscription for JetStreamSubject {
     fn subject(&self) -> &str {
         &self.subject
     }
 }
 
 /// A descriptor is already a source, so the macro-free constructor takes it as it stands:
-/// `subscriber(JetStreamConsumer::new("orders.*", "ORDERS"), body)` names the same subscription
+/// `subscriber(JetStreamSubject::new("orders.*", "ORDERS"), body)` names the same subscription
 /// the `#[subscriber(..)]` attribute does.
 ///
 /// # Examples
 ///
 /// ```
 /// use ruststream::runtime::IntoSource;
-/// use ruststream_nats::{NatsSubscription, SubscribeOptions};
+/// use ruststream_nats::{NatsSubscription, CoreSubject};
 ///
-/// let source = SubscribeOptions::new("orders.*").into_source();
+/// let source = CoreSubject::new("orders.*").into_source();
 /// assert_eq!(source.subject(), "orders.*");
 /// ```
-impl IntoSource for SubscribeOptions {
+impl IntoSource for CoreSubject {
     type Source = Self;
 
     fn into_source(self) -> Self {
@@ -372,7 +372,7 @@ impl IntoSource for SubscribeOptions {
     }
 }
 
-impl IntoSource for JetStreamConsumer {
+impl IntoSource for JetStreamSubject {
     type Source = Self;
 
     fn into_source(self) -> Self {
@@ -380,7 +380,7 @@ impl IntoSource for JetStreamConsumer {
     }
 }
 
-impl SubscriptionSource<ConnectedNatsBroker> for SubscribeOptions {
+impl SubscriptionSource<ConnectedNatsBroker> for CoreSubject {
     type Subscriber = NatsSubscriber;
 
     fn name(&self) -> &str {
@@ -395,7 +395,7 @@ impl SubscriptionSource<ConnectedNatsBroker> for SubscribeOptions {
     }
 }
 
-impl SubscriptionSource<ConnectedNatsBroker> for JetStreamConsumer {
+impl SubscriptionSource<ConnectedNatsBroker> for JetStreamSubject {
     type Subscriber = NatsSubscriber;
 
     fn name(&self) -> &str {
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn a_plain_subscription_is_core_without_a_queue_group() {
-        let opts = SubscribeOptions::new("orders.*");
+        let opts = CoreSubject::new("orders.*");
         opts.ensure_subject().expect("core ok");
         assert!(matches!(
             opts.plan(),
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn a_queue_group_reaches_the_broker() {
-        let opts = SubscribeOptions::new("orders.*").queue_group("workers");
+        let opts = CoreSubject::new("orders.*").queue_group("workers");
         assert!(matches!(
             opts.plan(),
             SubscriptionPlan::Core {
@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn jetstream_defaults_are_resolved_in_the_plan() {
-        let consumer = JetStreamConsumer::new("orders.*", "ORDERS");
+        let consumer = JetStreamSubject::new("orders.*", "ORDERS");
         let SubscriptionPlan::JetStream {
             stream,
             durable,
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn jetstream_settings_reach_the_plan() {
-        let consumer = JetStreamConsumer::new("orders.*", "ORDERS")
+        let consumer = JetStreamSubject::new("orders.*", "ORDERS")
             .durable("worker")
             .filter_subject("orders.created")
             .ack_wait(NonZeroDuration::from_secs(nonzero!(5)))
@@ -490,9 +490,9 @@ mod tests {
 
     #[test]
     fn an_empty_subject_is_rejected_on_both_descriptors() {
-        let core = SubscribeOptions::new("").ensure_subject().unwrap_err();
+        let core = CoreSubject::new("").ensure_subject().unwrap_err();
         assert!(matches!(core, NatsError::InvalidOptions(msg) if msg.contains("subject")));
-        let js = JetStreamConsumer::new("", "ORDERS")
+        let js = JetStreamSubject::new("", "ORDERS")
             .ensure_subject()
             .unwrap_err();
         assert!(matches!(js, NatsError::InvalidOptions(msg) if msg.contains("subject")));

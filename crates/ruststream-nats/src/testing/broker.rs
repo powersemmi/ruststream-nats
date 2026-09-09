@@ -13,7 +13,7 @@ use ruststream::{
 
 use crate::{
     error::NatsError,
-    subscribe_options::{JetStreamConsumer, NatsSubscription, SubscribeOptions},
+    subject::{CoreSubject, JetStreamSubject, NatsSubscription},
     testing::{
         NatsTestPublisher, NatsTestSubscriber,
         publisher::NatsTestPublish,
@@ -202,11 +202,11 @@ impl Subscribe for ConnectedNatsTestBroker {
     type Subscriber = NatsTestSubscriber;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
-        self.subscribe_with(SubscribeOptions::new(name)).await
+        self.subscribe_with(CoreSubject::new(name)).await
     }
 }
 
-impl SubscriptionSource<ConnectedNatsTestBroker> for SubscribeOptions {
+impl SubscriptionSource<ConnectedNatsTestBroker> for CoreSubject {
     type Subscriber = NatsTestSubscriber;
 
     fn name(&self) -> &str {
@@ -223,7 +223,7 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for SubscribeOptions {
 
 // A JetStream source resolves against the in-process transport too: only the subject pattern
 // drives routing here, so a handler bound to a durable consumer is testable without a server.
-impl SubscriptionSource<ConnectedNatsTestBroker> for JetStreamConsumer {
+impl SubscriptionSource<ConnectedNatsTestBroker> for JetStreamSubject {
     type Subscriber = NatsTestSubscriber;
 
     fn name(&self) -> &str {

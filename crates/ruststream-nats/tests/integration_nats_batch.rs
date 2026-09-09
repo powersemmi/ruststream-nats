@@ -14,7 +14,7 @@ use ruststream::{
     BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, nonzero,
 };
 use ruststream_nats::{
-    ConnectedNatsBroker, JetStreamConsumer, NatsBroker, NatsPublish, NonZeroDuration,
+    ConnectedNatsBroker, JetStreamSubject, NatsBroker, NatsPublish, NonZeroDuration,
 };
 use tokio::time::timeout;
 
@@ -64,8 +64,8 @@ async fn jetstream_fixture(prefix: &str) -> Option<JetStreamFixture> {
 }
 
 impl JetStreamFixture {
-    fn consumer_options(&self, expires: NonZeroDuration) -> JetStreamConsumer {
-        JetStreamConsumer::new(self.subject.clone(), self.stream.clone())
+    fn consumer_options(&self, expires: NonZeroDuration) -> JetStreamSubject {
+        JetStreamSubject::new(self.subject.clone(), self.stream.clone())
             .filter_subject(self.subject.clone())
             .pull_expires(expires)
     }

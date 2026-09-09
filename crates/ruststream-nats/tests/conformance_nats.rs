@@ -19,7 +19,7 @@
 
 use ruststream::conformance::{capabilities, harness};
 use ruststream_nats::testing::NatsTestBroker;
-use ruststream_nats::{NatsBroker, NatsPublish, SubscribeOptions};
+use ruststream_nats::{CoreSubject, NatsBroker, NatsPublish};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nats_test_broker_passes_conformance_suite() {
@@ -37,7 +37,7 @@ async fn passes_lifecycle() {
     };
     harness::lifecycle(
         || NatsBroker::new(url.clone()),
-        |subject| SubscribeOptions::new(subject),
+        |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
     )
     .await;
@@ -51,7 +51,7 @@ async fn passes_request_reply() {
     };
     capabilities::request_reply(
         || NatsBroker::new(url.clone()),
-        |subject| SubscribeOptions::new(subject),
+        |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
         |connected| connected.publisher(NatsPublish),
     )
@@ -66,7 +66,7 @@ async fn passes_batches() {
     };
     capabilities::batches(
         || NatsBroker::new(url.clone()),
-        |subject| SubscribeOptions::new(subject),
+        |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
     )
     .await;

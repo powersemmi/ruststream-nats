@@ -276,16 +276,7 @@ server:
   either side:
 
     ```rust
-    tb.out::<Archive>()
-        .assert_called_once()
-        .with_options(&JetStreamOptions {
-            message_id: Some("order-7".into()),
-            ..JetStreamOptions::default()
-        });
-    tb.broker::<NatsTestBroker>()
-        .published::<Archived>("archive.orders")
-        .assert_called_once()
-        .with_header("Nats-Msg-Id", "order-7");
+    --8<-- "crates/ruststream-nats/tests/handlers.rs:options_assert"
     ```
 
     `assert_options_default()` is the mirror assertion, for a publish that named no step.

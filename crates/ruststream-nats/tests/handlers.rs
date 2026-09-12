@@ -556,8 +556,15 @@ async fn a_reply_position_bound_to_the_production_policy_answers_in_process() {
 
 // ------------------------------------------------------- what one JetStream message states itself
 
+/// The copy of an order kept in the archive stream.
+#[derive(Debug, PartialEq, Outgoing, Serialize, Deserialize)]
+#[outgoing(name = "archive.orders")]
+struct Archived {
+    id: u64,
+}
+
 #[derive(OutSlot)]
-#[publishes(Order)]
+#[publishes(Archived)]
 struct Archive;
 
 /// Archives every order twice: once saying nothing about the message, once tagging it for the
@@ -570,15 +577,10 @@ async fn archive(
     order: &Order,
     Out(out): Out<impl Publisher<Options = JetStreamOptions>, Archive>,
 ) -> HandlerOutcome {
-    if out
-        .message(order)
-        .to("orders.archived")
-        .publish()
-        .await
-        .is_err()
+    let archived = Archived { id: order.id };
+    if out.message(&archived).publish().await.is_err()
         || out
-            .message(order)
-            .to("orders.archived.deduplicated")
+            .message(&archived)
             .message_id(format!("order-{}", order.id))
             .expect_last_subject_sequence(41)
             .publish()
@@ -609,6 +611,9 @@ async fn a_step_states_a_jetstream_setting_for_one_message_only() {
         .await
         .expect("publish");
 
+    // --8<-- [start:options_assert]
+    // The slot view reads back what the call site asked for; the broker's log shows it reached the
+    // message as the JetStream protocol header a server reads.
     tb.out::<Archive>()
         .assert_called(2)
         .with_options(&JetStreamOptions {
@@ -617,11 +622,12 @@ async fn a_step_states_a_jetstream_setting_for_one_message_only() {
             ..JetStreamOptions::default()
         });
     tb.broker::<NatsTestBroker>()
-        .published::<Order>("orders.archived.deduplicated")
-        .assert_called_once()
-        .with(&Order { id: 7 })
+        .published::<Archived>("archive.orders")
+        .assert_called(2)
+        .with(&Archived { id: 7 })
         .with_header("Nats-Msg-Id", "order-7")
         .with_header("Nats-Expected-Last-Subject-Sequence", "41");
+    // --8<-- [end:options_assert]
 
     tb.shutdown().await.expect("shutdown");
 }

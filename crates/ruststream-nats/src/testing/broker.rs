@@ -7,17 +7,18 @@ use std::sync::{Arc, OnceLock};
 use bytes::Bytes;
 use ruststream::{
     Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, RawMessage,
-    ServerSpec, Subscribe, SubscriptionSource,
+    RedeliveryAddress, ServerSpec, Subscribe, SubscriptionSource,
     testing::{Coordinator, TestableBroker},
 };
 
 use crate::{
+    NatsPublish,
     error::NatsError,
-    subscribe_options::SubscribeOptions,
+    subject::{CoreSubject, JetStreamSubject, NatsSubscription, SubscriptionPlan},
     testing::{
-        NatsTestPublisher, NatsTestSubscriber,
-        publisher::NatsTestPublish,
-        router::SubjectRouter,
+        NatsTestSubscriber,
+        publisher::NatsTestPublishPolicy,
+        router::{DeliveryGroup, SubjectRouter},
         subject::{SubjectPattern, validate_concrete_subject},
     },
 };
@@ -77,9 +78,11 @@ impl std::fmt::Debug for TestBrokerState {
 /// Mirrors the real ladder: `new` is synchronous, and the connecting transition hands out the
 /// [`ConnectedNatsTestBroker`] that carries the subscribe and publish surface.
 ///
-/// Broker-specific edge cases (`JetStream` durable cursor, `ack_wait` redelivery,
-/// `max_ack_pending`, retention, mirrors) are intentionally NOT simulated. Use a real NATS
-/// server for those scenarios.
+/// Broker-specific edge cases (the `JetStream` durable's cursor and its resume, `ack_wait`
+/// redelivery, `max_ack_pending`, retention, mirrors) are intentionally NOT simulated. Use a real
+/// NATS server for those scenarios. Competing consumers are the exception, because a stand-in
+/// that let two workers run the same job would be worse than none: a Core queue group and the
+/// subscriptions sharing a `JetStream` durable take turns here as they do on a server.
 ///
 /// # Examples
 ///
@@ -122,8 +125,10 @@ impl DescribeServer for NatsTestBroker {
 /// The connected form of [`NatsTestBroker`].
 ///
 /// `publish` performs NATS subject matching (`*` per-token, `>` tail) and hands the message to
-/// every matching subscriber's channel; ack/nack are no-ops on the broker side (Core NATS has no
-/// ack concept) and `nack(requeue=true)` re-sends to the same subscriber's queue. It implements
+/// every matching subscriber's channel, one per competing set (see
+/// [`subscribe_with`](Self::subscribe_with)); ack/nack are no-ops on the broker side (Core NATS
+/// has no ack concept) and `nack(requeue=true)` re-sends to the same subscriber's queue. It
+/// implements
 /// [`TestableBroker`], so it drives both the [`TestApp`](ruststream::testing::TestApp) harness and
 /// the framework's conformance suite in process, with no server.
 #[derive(Clone, Debug)]
@@ -136,27 +141,32 @@ impl ConnectedNatsTestBroker {
         Arc::clone(&self.state)
     }
 
-    /// Opens a subscription described by `opts`. Mirrors
-    /// [`ConnectedNatsBroker::subscribe_with`](crate::ConnectedNatsBroker::subscribe_with);
-    /// `JetStream`-only fields are validated for consistency but do not influence dispatch in
-    /// handler-stub mode - only the subject pattern is used for routing.
+    /// Opens the subscription `source` describes. Mirrors
+    /// [`ConnectedNatsBroker::subscribe_with`](crate::ConnectedNatsBroker::subscribe_with).
+    ///
+    /// Two fields beyond the subject reach dispatch, and only because a server would let a
+    /// service observe them without a stream: a Core `queue_group`, and a `JetStream` `durable`
+    /// name. Both name a set of subscriptions that compete for each message rather than each
+    /// taking a copy, so a competing-consumers mount splits its work here as it does on a server.
+    /// The remaining `JetStream` fields (`ack_wait`, `max_ack_pending`, `deliver_policy`,
+    /// retention) go no further.
     ///
     /// # Errors
     ///
-    /// Returns [`NatsError::InvalidOptions`] when `opts` mixes Core and `JetStream` fields
-    /// incompatibly, [`NatsError::Subscribe`] when the subject pattern is not a valid NATS
-    /// subject, or [`NatsError::Closed`] when the transport has shut down.
+    /// Returns [`NatsError::InvalidOptions`] when the subject is empty,
+    /// [`NatsError::Subscribe`] when the subject pattern is not a valid NATS subject, or
+    /// [`NatsError::Closed`] when the transport has shut down.
     // Spelled out rather than `async fn` only because this body is synchronous; the call shape
     // stays identical to the real broker's, which does await.
-    pub fn subscribe_with(
+    pub fn subscribe_with<S: NatsSubscription>(
         &self,
-        opts: SubscribeOptions,
+        source: S,
     ) -> impl Future<Output = Result<NatsTestSubscriber, NatsError>> {
-        if let Err(err) = opts.validate() {
+        if let Err(err) = source.ensure_subject() {
             return ready(Err(err));
         }
-        // Only the subject drives in-process routing, so take it and drop the rest.
-        let subject = opts.into_subject();
+        let group = delivery_group(&source);
+        let subject = source.into_subject();
         if let Err(err) = self.state.ensure_live(&subject) {
             return ready(Err(err));
         }
@@ -168,7 +178,7 @@ impl ConnectedNatsTestBroker {
                 )));
             }
         };
-        let (id, requeue, rx) = self.state.router.subscribe(pattern);
+        let (id, requeue, rx) = self.state.router.subscribe(pattern, group);
         ready(Ok(NatsTestSubscriber::new(
             Arc::clone(&self.state),
             id,
@@ -179,10 +189,30 @@ impl ConnectedNatsTestBroker {
     }
 
     /// A live publisher for `policy`, mirroring
-    /// [`ConnectedNatsBroker::publisher`](crate::ConnectedNatsBroker::publisher). The in-process
-    /// transport simulates Core routing only, so it has a single policy.
+    /// [`ConnectedNatsBroker::publisher`](crate::ConnectedNatsBroker::publisher) over the same
+    /// production policies: [`NatsPublish`] pairs into the
+    /// [`NatsTestPublisher`](crate::testing::NatsTestPublisher) and
+    /// [`JetStreamPublish`](crate::JetStreamPublish) into the
+    /// [`JetStreamTestPublisher`](crate::testing::JetStreamTestPublisher), which routes over the
+    /// same Core fabric and says so.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream::Broker;
+    /// use ruststream_nats::testing::NatsTestBroker;
+    /// use ruststream_nats::{JetStreamPublish, NatsPublish};
+    ///
+    /// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// let connected = NatsTestBroker::new().connect().await?;
+    /// let core = connected.publisher(NatsPublish);
+    /// let jetstream = connected.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
+    /// # let _ = (core, jetstream);
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
-    pub fn publisher(&self, policy: NatsTestPublish) -> NatsTestPublisher {
+    pub fn publisher<P: NatsTestPublishPolicy>(&self, policy: P) -> P::Live {
         policy.bind(self)
     }
 }
@@ -202,15 +232,21 @@ impl Subscribe for ConnectedNatsTestBroker {
     type Subscriber = NatsTestSubscriber;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
-        self.subscribe_with(SubscribeOptions::new(name)).await
+        self.subscribe_with(CoreSubject::new(name)).await
+    }
+
+    // The answer the real broker gives, so a `retry_via` mount that starts in process starts
+    // against a server too.
+    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
+        CoreSubject::new(name).redelivery_subject()
     }
 }
 
-impl SubscriptionSource<ConnectedNatsTestBroker> for SubscribeOptions {
+impl SubscriptionSource<ConnectedNatsTestBroker> for CoreSubject {
     type Subscriber = NatsTestSubscriber;
 
     fn name(&self) -> &str {
-        self.subject()
+        NatsSubscription::subject(self)
     }
 
     async fn subscribe(
@@ -219,10 +255,43 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for SubscribeOptions {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+
+    fn redelivery_address(
+        &self,
+        _connected: &ConnectedNatsTestBroker,
+    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
+        ready(Ok(self.redelivery_subject()))
+    }
+}
+
+// A JetStream source resolves against the in-process transport too: only the subject pattern
+// drives routing here, so a handler bound to a durable consumer is testable without a server.
+impl SubscriptionSource<ConnectedNatsTestBroker> for JetStreamSubject {
+    type Subscriber = NatsTestSubscriber;
+
+    fn name(&self) -> &str {
+        NatsSubscription::subject(self)
+    }
+
+    async fn subscribe(
+        self,
+        connected: &ConnectedNatsTestBroker,
+    ) -> Result<Self::Subscriber, NatsError> {
+        connected.subscribe_with(self).await
+    }
+
+    fn redelivery_address(
+        &self,
+        _connected: &ConnectedNatsTestBroker,
+    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
+        ready(Ok(self.redelivery_subject()))
+    }
 }
 
 impl DefaultPublish for ConnectedNatsTestBroker {
-    type Policy = NatsTestPublish;
+    // The production policy, so a `publish("dest")` handler included without an explicit publisher
+    // resolves its reply through the same declaration on both ladders.
+    type Policy = NatsPublish;
 }
 
 impl TestableBroker for ConnectedNatsTestBroker {
@@ -247,6 +316,28 @@ impl TestableBroker for ConnectedNatsTestBroker {
 }
 
 ruststream::register_testable_broker!(ConnectedNatsTestBroker);
+
+/// The competing set `source` joins, if any: every subscription that resolves to the same
+/// [`DeliveryGroup`] draws from one stream of messages instead of each taking a copy.
+///
+/// One descriptor type per delivery model, so a queue group and a durable name cannot both be
+/// present and the two arms cannot disagree.
+fn delivery_group<S: NatsSubscription>(source: &S) -> Option<DeliveryGroup> {
+    match source.plan() {
+        SubscriptionPlan::Core { queue_group } => queue_group.map(|name| DeliveryGroup::Queue {
+            subject: source.subject().to_owned(),
+            name: name.to_owned(),
+        }),
+        // An ephemeral JetStream subscription gets a consumer of its own on a server, so it
+        // competes with nobody; only a named durable is shared.
+        SubscriptionPlan::JetStream {
+            stream, durable, ..
+        } => durable.map(|name| DeliveryGroup::Durable {
+            stream: stream.to_owned(),
+            name: name.to_owned(),
+        }),
+    }
+}
 
 /// Validates that `subject` is publishable and converts a [`crate::testing::subject::SubjectError`]
 /// into [`NatsError::Publish`] on failure.

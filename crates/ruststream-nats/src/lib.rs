@@ -8,8 +8,9 @@
 //!
 //! Publishing splits by transport rather than by flag: [`NatsPublish`] pairs into the Core NATS
 //! [`NatsPublisher`] (fire-and-forget, plus request/reply), and [`JetStreamPublish`] pairs into
-//! the [`JetStreamPublisher`], which awaits the stream's acknowledgement and can state what it
-//! expects the stream to look like.
+//! the [`JetStreamPublisher`], which awaits the stream's acknowledgement. What one `JetStream`
+//! message states about itself - a deduplication id, an expected position in the stream - travels
+//! in [`JetStreamOptions`], written by the [`JetStreamPublishSteps`] steps on the publish builder.
 
 #![forbid(unsafe_code)]
 
@@ -20,7 +21,7 @@ mod jetstream;
 mod message;
 mod publisher;
 mod request_reply;
-mod subscribe_options;
+mod subject;
 mod subscriber;
 
 pub mod context;
@@ -28,10 +29,14 @@ pub mod prelude;
 
 pub use broker::{ClosedNatsBroker, ConnectedNatsBroker, NatsBroker};
 pub use error::NatsError;
-pub use jetstream::{JetStreamPublish, JetStreamPublisher, PublishAck};
+pub use jetstream::{
+    JetStreamOptions, JetStreamPublish, JetStreamPublishSteps, JetStreamPublisher, PublishAck,
+};
 pub use message::{CoreMessage, JetStreamMessage, NatsMessage, PARTITION_KEY_HEADER};
 pub use publisher::{NatsPublish, NatsPublishPolicy, NatsPublisher};
-pub use subscribe_options::{DeliverPolicy, SubscribeOptions};
+pub use subject::{
+    CoreSubject, DeliverPolicy, JetStreamSubject, NatsSubscription, NonZeroDuration,
+};
 pub use subscriber::NatsSubscriber;
 
 #[cfg(feature = "testing")]

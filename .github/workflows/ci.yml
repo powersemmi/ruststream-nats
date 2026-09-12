@@ -3,8 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # No base filter: a pull request stacked on another one has a branch for its base, and a filter
+  # naming `main` leaves it with no checks at all - which reads as a conflicting branch rather
+  # than as a workflow that declined to run.
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -102,7 +104,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-hack
-        uses: taiki-e/install-action@v2.87.6
+        uses: taiki-e/install-action@v2.87.7
         with:
           tool: cargo-hack
 
@@ -179,7 +181,7 @@ jobs:
           workspaces: ruststream-nats
 
       - name: Install cargo-generate
-        uses: taiki-e/install-action@v2.87.6
+        uses: taiki-e/install-action@v2.87.7
         with:
           tool: cargo-generate
 
@@ -239,9 +241,13 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # RUSTSTREAM_REQUIRE_LIVE is this job's contract with the suites: a server is up, so a test
+      # that skips is a defect rather than a convenience. Without it a live test returns before
+      # its first assertion and reports ok, which reads exactly like a run that did the work.
       - name: Run NATS integration tests
         env:
           NATS_TEST_URL: nats://127.0.0.1:4222
+          RUSTSTREAM_REQUIRE_LIVE: "1"
         run: >-
           cargo test -p ruststream-nats
           --test integration_nats
@@ -251,6 +257,7 @@ jobs:
       - name: Run NATS conformance suite
         env:
           NATS_TEST_URL: nats://127.0.0.1:4222
+          RUSTSTREAM_REQUIRE_LIVE: "1"
         run: cargo test -p ruststream-nats --features testing --test conformance_nats -- --test-threads=1
 
       - name: Cleanup
@@ -269,7 +276,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2.87.6
+        uses: taiki-e/install-action@v2.87.7
         with:
           tool: cargo-deny
 

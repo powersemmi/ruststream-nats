@@ -21,9 +21,9 @@ use ruststream::testing::{Outcome, TestApp};
 use ruststream_nats::PARTITION_KEY_HEADER;
 use ruststream_nats::context::keys::{Delivered, StreamSequence};
 use ruststream_nats::prelude::*;
-// The handlers below bound their slot with the core capability, not a broker type, so the same
-// bodies mount on the production broker under `Publish` and here under the transport's own policy.
-use ruststream_nats::testing::{NatsTestBroker, NatsTestPublish};
+// Only the broker differs from a production routes file: the policies below are the ones the
+// prelude carries, so every mount here is spelled exactly as the service ships it.
+use ruststream_nats::testing::NatsTestBroker;
 use serde::{Deserialize, Serialize};
 
 /// How long the deferring handler asks the broker to hold a message.
@@ -124,7 +124,7 @@ async fn audit(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_body_reads_the_headers_the_delivery_arrived_with() {
     let tb = TestApp::start(app(|b| {
-        b.include(audit).out(Audit, NatsTestPublish).build();
+        b.include(audit).out(Audit, Publish).build();
     }))
     .await
     .expect("start");
@@ -185,7 +185,7 @@ struct Seen {
 struct Metadata;
 
 /// Bound to a durable `JetStream` consumer and reading the delivery's native metadata by key.
-#[subscriber(SubscribeOptions::new("orders.durable").jetstream("ORDERS").durable("worker"))]
+#[subscriber(JetStreamSubject::new("orders.durable", "ORDERS").durable("worker"))]
 async fn record_metadata(
     order: &Order,
     Ctx(stream_sequence): Ctx<StreamSequence>,
@@ -203,15 +203,20 @@ async fn record_metadata(
     HandlerOutcome::ack()
 }
 
-// A JetStream-configured source resolves against the in-process transport too, and the native
-// metadata it has none of reads `None` - which is the whole reason a handler bound to those keys
-// is testable without a server. What the numbers actually are is a JetStream fact, asserted
+// A JetStream-configured source resolves against the in-process transport too, and so does the
+// JetStream policy on the way out - the mount is spelled here exactly as a stream-to-stream
+// service spells it. The native metadata the transport has none of reads `None`, which is the
+// whole reason a handler bound to those keys is testable without a server. What the numbers
+// actually are, and whether the stream accepts the publish at all, are JetStream facts asserted
 // against one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_jetstream_handler_reads_no_native_metadata_in_process() {
     let tb = TestApp::start(app(|b| {
         b.include(record_metadata)
-            .out(Metadata, NatsTestPublish)
+            .out(
+                Metadata,
+                JetStreamPublish::default().expect_stream("METADATA"),
+            )
             .build();
     }))
     .await
@@ -378,7 +383,7 @@ async fn respond(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_responder_answers_on_the_inbox_the_request_named() {
     let tb = TestApp::start(app(|b| {
-        b.include(respond).out(Answers, NatsTestPublish).build();
+        b.include(respond).out(Answers, Publish).build();
     }))
     .await
     .expect("start");
@@ -418,6 +423,263 @@ async fn a_responder_answers_on_the_inbox_the_request_named() {
         .assert_called(2)
         .assert_outcome(Outcome::Drop);
     tb.out::<Answers>().assert_called_once();
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+// ------------------------------------------------------------------------ replying with a value
+
+/// The confirmation an order is answered with. It fixes its own destination, so a handler
+/// returning one needs no name at the mount. The `accepted` field keeps a confirmation from
+/// decoding out of an `Order`, so the assertions below cannot pass on the input by accident.
+#[derive(Debug, PartialEq, Outgoing, Serialize, Deserialize)]
+#[outgoing(name = "orders.confirmed")]
+struct Confirmed {
+    id: u64,
+    accepted: bool,
+}
+
+/// Answers every order with a confirmation. The clause is bare because `Confirmed` already says
+/// where it goes.
+#[subscriber("orders.placed", publish)]
+async fn confirm(order: &Order) -> Confirmed {
+    Confirmed {
+        id: order.id,
+        accepted: true,
+    }
+}
+
+/// The reply position is left unbound here, which is what a routes file writes when plain
+/// publishing is what it wants: the runtime fills it from the broker's default policy, and on this
+/// broker that default is the production one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_lands_on_the_destination_its_own_type_declares() {
+    let tb = TestApp::start(app(|b| {
+        b.include(confirm);
+    }))
+    .await
+    .expect("start");
+
+    tb.message(&Order { id: 10 })
+        .to("orders.placed")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.broker::<NatsTestBroker>()
+        .published::<Confirmed>("orders.confirmed")
+        .assert_called_once()
+        .with(&Confirmed {
+            id: 10,
+            accepted: true,
+        });
+    tb.broker::<NatsTestBroker>()
+        .subscriber("orders.placed")
+        .assert_called_once()
+        .settled(HandlerOutcome::ack());
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+/// The receipt an order is answered with. It declares no destination, so each mount names one.
+#[derive(Debug, PartialEq, Outgoing, Serialize, Deserialize)]
+struct Receipt {
+    id: u64,
+    total: u64,
+}
+
+/// Answers every order with a receipt, on the subject the clause names.
+#[subscriber("orders.billed", publish("orders.receipts"))]
+async fn issue_receipt(order: &Order) -> Receipt {
+    Receipt {
+        id: order.id,
+        total: order.id * 100,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_with_no_declared_destination_lands_where_the_mount_names() {
+    let tb = TestApp::start(app(|b| {
+        b.include(issue_receipt);
+    }))
+    .await
+    .expect("start");
+
+    tb.message(&Order { id: 11 })
+        .to("orders.billed")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.broker::<NatsTestBroker>()
+        .published::<Receipt>("orders.receipts")
+        .assert_called_once()
+        .with(&Receipt {
+            id: 11,
+            total: 1100,
+        });
+    tb.broker::<NatsTestBroker>()
+        .subscriber("orders.billed")
+        .assert_called_once()
+        .settled(HandlerOutcome::ack());
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+// The point of the whole in-process publish surface: the reply position is bound with the policy
+// the prelude carries, so this mount is byte-for-byte the one a service ships and the reply is
+// what a service would put on the wire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_position_bound_to_the_production_policy_answers_in_process() {
+    let tb = TestApp::start(app(|b| {
+        b.include(issue_receipt).out(Reply, Publish);
+    }))
+    .await
+    .expect("start");
+
+    tb.message(&Order { id: 12 })
+        .to("orders.billed")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.broker::<NatsTestBroker>()
+        .published::<Receipt>("orders.receipts")
+        .assert_called_once()
+        .with(&Receipt {
+            id: 12,
+            total: 1200,
+        });
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+// ------------------------------------------------------- what one JetStream message states itself
+
+/// The copy of an order kept in the archive stream.
+#[derive(Debug, PartialEq, Outgoing, Serialize, Deserialize)]
+#[outgoing(name = "archive.orders")]
+struct Archived {
+    id: u64,
+}
+
+#[derive(OutSlot)]
+#[publishes(Archived)]
+struct Archive;
+
+/// Archives every order twice: once saying nothing about the message, once tagging it for the
+/// stream's deduplication window and pinning the subject's position.
+///
+/// The body names the steps, so it imports this crate's prelude and bounds its slot on the
+/// `JetStream` options type - the one place a handler body is allowed to name a broker.
+#[subscriber("orders.archiving")]
+async fn archive(
+    order: &Order,
+    Out(out): Out<impl Publisher<Options = JetStreamOptions>, Archive>,
+) -> HandlerOutcome {
+    let archived = Archived { id: order.id };
+    if out.message(&archived).publish().await.is_err()
+        || out
+            .message(&archived)
+            .message_id(format!("order-{}", order.id))
+            .expect_last_subject_sequence(41)
+            .publish()
+            .await
+            .is_err()
+    {
+        return HandlerOutcome::retry();
+    }
+    HandlerOutcome::ack()
+}
+
+/// A step is what one message says; the mount site says nothing about it. The slot view reads back
+/// the value the publish carried, and the broker's log shows it reached the message as the
+/// `JetStream` protocol header a server reads.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_step_states_a_jetstream_setting_for_one_message_only() {
+    let tb = TestApp::start(app(|b| {
+        b.include(archive)
+            .out(Archive, JetStreamPublish::default().expect_stream("ORDERS"))
+            .build();
+    }))
+    .await
+    .expect("start");
+
+    tb.message(&Order { id: 7 })
+        .to("orders.archiving")
+        .publish()
+        .await
+        .expect("publish");
+
+    // --8<-- [start:options_assert]
+    // The slot view reads back what the call site asked for; the broker's log shows it reached the
+    // message as the JetStream protocol header a server reads.
+    tb.out::<Archive>()
+        .assert_called(2)
+        .with_options(&JetStreamOptions {
+            message_id: Some("order-7".into()),
+            expect_last_subject_sequence: Some(41),
+            ..JetStreamOptions::default()
+        });
+    tb.broker::<NatsTestBroker>()
+        .published::<Archived>("archive.orders")
+        .assert_called(2)
+        .with(&Archived { id: 7 })
+        .with_header("Nats-Msg-Id", "order-7")
+        .with_header("Nats-Expected-Last-Subject-Sequence", "41");
+    // --8<-- [end:options_assert]
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+#[derive(OutSlot)]
+#[publishes(Order)]
+struct Mirror;
+
+/// The same publish with no step on it.
+#[subscriber("orders.mirroring")]
+async fn mirror(
+    order: &Order,
+    Out(out): Out<impl Publisher<Options = JetStreamOptions>, Mirror>,
+) -> HandlerOutcome {
+    if out
+        .message(order)
+        .to("orders.mirrored")
+        .publish()
+        .await
+        .is_err()
+    {
+        return HandlerOutcome::retry();
+    }
+    HandlerOutcome::ack()
+}
+
+/// A publish that names no step states nothing of its own, and what the mount site declared is the
+/// whole answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publish_with_no_step_states_nothing_of_its_own() {
+    let tb = TestApp::start(app(|b| {
+        b.include(mirror)
+            .out(Mirror, JetStreamPublish::default().expect_stream("ORDERS"))
+            .build();
+    }))
+    .await
+    .expect("start");
+
+    tb.message(&Order { id: 8 })
+        .to("orders.mirroring")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.out::<Mirror>()
+        .assert_called_once()
+        .assert_options_default();
+    tb.broker::<NatsTestBroker>()
+        .published::<Order>("orders.mirrored")
+        .assert_called_once()
+        .with(&Order { id: 8 })
+        .with_header("Nats-Expected-Stream", "ORDERS");
 
     tb.shutdown().await.expect("shutdown");
 }

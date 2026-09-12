@@ -34,3 +34,12 @@ fn _request_reply_is_the_core_capability<T: RequestReply>() {}
 /// `PublishPolicy` is the core's declaration half of a publisher; this crate's policies implement
 /// it rather than replacing the name.
 fn _publish_policy_is_the_core_trait<T: PublishPolicy<C>, C: ruststream::ConnectedBroker>() {}
+
+/// The one body-side name this crate adds. A handler that sets a per-message `JetStream` setting
+/// names the options type in its bound and reaches the steps through this glob, so both halves
+/// have to arrive together or that body does not compile in a service's file.
+fn _jetstream_options_and_its_steps_arrive_together<
+    Pub: Publisher<Options = JetStreamOptions>,
+    Builder: JetStreamPublishSteps,
+>() {
+}

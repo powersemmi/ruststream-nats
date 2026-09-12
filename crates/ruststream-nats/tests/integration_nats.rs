@@ -32,24 +32,30 @@ use ruststream::{
 };
 use ruststream_nats::context::{JetStreamContext, keys};
 use ruststream_nats::{
-    ConnectedNatsBroker, NatsBroker, NatsError, NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
-    SubscribeOptions,
+    ConnectedNatsBroker, CoreSubject, JetStreamOptions, JetStreamPublish, JetStreamSubject,
+    NatsBroker, NatsError, NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
 };
 use tokio::time::timeout;
 
+mod live;
+
 const WAIT: Duration = Duration::from_secs(2);
+/// How long a drain waits for one more delivery before calling the stream quiet. Short, because
+/// everything it waits on has already been published and acknowledged by the server.
+const IDLE: Duration = Duration::from_millis(300);
 
 fn nats_url() -> Option<String> {
-    std::env::var("NATS_TEST_URL").ok()
+    live::url("NATS_TEST_URL")
 }
 
 /// A live connection, or `None` to skip when `NATS_TEST_URL` is unset or the server is unreachable.
+/// Under `RUSTSTREAM_REQUIRE_LIVE` both of those are failures instead.
 async fn connected_or_skip() -> Option<ConnectedNatsBroker> {
     let url = nats_url()?;
     match NatsBroker::new(url.as_str()).connect().await {
         Ok(connected) => Some(connected),
         Err(err) => {
-            eprintln!("could not reach NATS at {url}: {err}; skipping");
+            live::unreachable(&url, &err);
             None
         }
     }
@@ -76,6 +82,19 @@ where
         .expect("timed out waiting for a delivery")
         .expect("the subscription stream ended")
         .expect("the subscription reported an error")
+}
+
+/// Every delivery already waiting on `stream`, in arrival order, ending when it stays quiet for
+/// [`IDLE`]. Used where the assertion is about what did *not* arrive as much as what did.
+async fn drain<S>(stream: &mut S) -> Vec<Vec<u8>>
+where
+    S: Stream<Item = Result<NatsMessage, NatsError>> + Unpin,
+{
+    let mut seen = Vec::new();
+    while let Ok(Some(Ok(msg))) = timeout(IDLE, stream.next()).await {
+        seen.push(msg.payload().to_vec());
+    }
+    seen
 }
 
 /// A live connection plus a `JetStream` stream of its own, created here and deleted on teardown.
@@ -107,20 +126,19 @@ impl JetStreamFixture {
         })
     }
 
-    fn consumer(&self, durable: Option<&str>) -> SubscribeOptions {
-        let opts = SubscribeOptions::new(self.subject.clone())
-            .jetstream(self.stream.clone())
+    fn consumer(&self, durable: Option<&str>) -> JetStreamSubject {
+        let subject = JetStreamSubject::new(self.subject.clone(), self.stream.clone())
             .filter_subject(self.subject.clone());
         match durable {
-            Some(name) => opts.durable(name),
-            None => opts,
+            Some(name) => subject.durable(name),
+            None => subject,
         }
     }
 
     async fn publish(&self, payload: &[u8]) {
         self.connected
             .publisher(NatsPublish)
-            .publish(OutgoingMessage::new(self.subject.as_str(), payload))
+            .publish(OutgoingMessage::new(self.subject.as_str(), payload), None)
             .await
             .expect("publish failed");
     }
@@ -129,6 +147,48 @@ impl JetStreamFixture {
         let _ = self.connected.jetstream().delete_stream(&self.stream).await;
         self.connected.shutdown().await.expect("shutdown failed");
     }
+}
+
+// The half of `JetStreamPublish` that only a stream can answer for: the acknowledgement, and the
+// expectations the policy declares. Both are checked server-side against stream state, so the
+// in-process transport can neither produce the one nor refuse on the other - it routes and says
+// so. This is where a violated expectation is proved to be refused rather than written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_stream_checks_the_expectations_a_publish_states() {
+    let Some(fx) = JetStreamFixture::open("expect").await else {
+        return;
+    };
+
+    let ack = fx
+        .connected
+        .publisher(JetStreamPublish::default().expect_stream(fx.stream.clone()))
+        .publish_ack(OutgoingMessage::new(fx.subject.as_str(), b"first"), None)
+        .await
+        .expect("a met expectation is accepted");
+    assert_eq!(ack.stream, fx.stream);
+    assert_eq!(ack.sequence, 1, "the first message takes sequence 1");
+
+    // The optimistic-concurrency chain, broken: the stream is at sequence 1, so a writer that
+    // believes it is at 99 must be refused rather than appended after. The expectation belongs to
+    // this one message, so it rides the publish rather than the publisher.
+    let err = fx
+        .connected
+        .publisher(JetStreamPublish::default())
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"stale"),
+            Some(&JetStreamOptions {
+                expect_last_sequence: Some(99),
+                ..JetStreamOptions::default()
+            }),
+        )
+        .await
+        .expect_err("a violated expectation must be refused");
+    assert!(
+        matches!(err, NatsError::JetStream(_)),
+        "the stream's refusal must surface as a JetStream error, got: {err}",
+    );
+
+    fx.teardown().await;
 }
 
 // The source descriptor is the only thing that creates a durable consumer, and only a server has
@@ -243,6 +303,66 @@ async fn a_delayed_nack_holds_the_message_server_side() {
     fx.teardown().await;
 }
 
+// The server-side half of the queue-group contract the in-process transport reproduces: a queue
+// group splits its subject between its members, and a subscription outside the group still gets
+// everything. `a_queue_group_splits_the_subject_between_its_members` in `testing_core.rs` asserts
+// the same property against the stand-in; this is what keeps that one honest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queue_group_splits_the_work_across_its_members() {
+    let Some(connected) = connected_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("queue");
+
+    let mut worker_a = connected
+        .subscribe_with(CoreSubject::new(subject.clone()).queue_group("workers"))
+        .await
+        .expect("subscribe worker a failed");
+    let mut worker_b = connected
+        .subscribe_with(CoreSubject::new(subject.clone()).queue_group("workers"))
+        .await
+        .expect("subscribe worker b failed");
+    let mut observer = connected
+        .subscribe_with(CoreSubject::new(subject.clone()))
+        .await
+        .expect("subscribe observer failed");
+
+    let publisher = connected.publisher(NatsPublish);
+    for payload in [b"1".as_slice(), b"2"] {
+        publisher
+            .publish(OutgoingMessage::new(subject.as_str(), payload), None)
+            .await
+            .expect("publish failed");
+    }
+
+    {
+        // Which member the server picks is the server's business, so both are drained to
+        // exhaustion and the assertion is on the property a service depends on: each job reached
+        // the group exactly once. Draining rather than taking two is what makes a fan-out fail
+        // here instead of passing whenever the two arrive one apiece by luck.
+        let mut stream_a = std::pin::pin!(worker_a.stream());
+        let mut stream_b = std::pin::pin!(worker_b.stream());
+        let mut taken = drain(&mut stream_a).await;
+        taken.extend(drain(&mut stream_b).await);
+        taken.sort();
+        assert_eq!(
+            taken,
+            vec![b"1".to_vec(), b"2".to_vec()],
+            "the group must see each job exactly once between its members",
+        );
+
+        let mut every_message = std::pin::pin!(observer.stream());
+        assert_eq!(
+            drain(&mut every_message).await,
+            vec![b"1".to_vec(), b"2".to_vec()],
+            "a subscription outside the group still receives every message",
+        );
+    }
+
+    drop((worker_a, worker_b, observer));
+    connected.shutdown().await.expect("shutdown failed");
+}
+
 // Core NATS has no acknowledgement at all, so a core delivery must say so rather than silently
 // succeed, and must decline the native delay so the runtime falls back to its own deferred
 // re-publish. Only a real core subscription produces one.
@@ -254,12 +374,15 @@ async fn a_core_delivery_reports_that_it_cannot_be_acknowledged() {
     let subject = unique_subject("coreack");
 
     let mut subscriber = connected
-        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .subscribe_with(CoreSubject::new(subject.clone()))
         .await
         .expect("subscribe failed");
     connected
         .publisher(NatsPublish)
-        .publish(OutgoingMessage::new(subject.as_str(), b"fire-and-forget"))
+        .publish(
+            OutgoingMessage::new(subject.as_str(), b"fire-and-forget"),
+            None,
+        )
         .await
         .expect("publish failed");
 
@@ -289,7 +412,7 @@ async fn a_request_carries_its_reply_inbox_as_the_reply_to_header() {
     let subject = unique_subject("reqrep");
 
     let mut responder = connected
-        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .subscribe_with(CoreSubject::new(subject.clone()))
         .await
         .expect("subscribe failed");
     let publisher = connected.publisher(NatsPublish);
@@ -304,7 +427,7 @@ async fn a_request_carries_its_reply_inbox_as_the_reply_to_header() {
             .expect("the request must carry its inbox as the reply-to header")
             .to_owned();
         publisher
-            .publish(OutgoingMessage::new(reply_to.as_str(), b"pong"))
+            .publish(OutgoingMessage::new(reply_to.as_str(), b"pong"), None)
             .await
             .expect("reply failed");
     };
@@ -355,7 +478,7 @@ async fn publisher_errors_after_shutdown() {
     connected.shutdown().await.expect("shutdown failed");
 
     let err = publisher
-        .publish(OutgoingMessage::new(subject.as_str(), b"too late"))
+        .publish(OutgoingMessage::new(subject.as_str(), b"too late"), None)
         .await
         .expect_err("publishing through a closed connection must fail");
     assert!(
@@ -374,7 +497,7 @@ async fn a_live_delivery_carries_the_partition_key_header() {
     let subject = unique_subject("partition");
 
     let mut subscriber = connected
-        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .subscribe_with(CoreSubject::new(subject.clone()))
         .await
         .expect("subscribe failed");
 
@@ -382,7 +505,10 @@ async fn a_live_delivery_carries_the_partition_key_header() {
     headers.insert(PARTITION_KEY_HEADER, "tenant-abc");
     connected
         .publisher(NatsPublish)
-        .publish(OutgoingMessage::new(subject.as_str(), b"keyed").with_headers(headers))
+        .publish(
+            OutgoingMessage::new(subject.as_str(), b"keyed").with_headers(headers),
+            None,
+        )
         .await
         .expect("publish failed");
 
@@ -410,13 +536,13 @@ async fn core_stream_can_be_reentered() {
     let subject = unique_subject("reenter");
 
     let mut subscriber = connected
-        .subscribe_with(SubscribeOptions::new(subject.clone()))
+        .subscribe_with(CoreSubject::new(subject.clone()))
         .await
         .expect("subscribe failed");
     let publisher = connected.publisher(NatsPublish);
 
     publisher
-        .publish(OutgoingMessage::new(subject.as_str(), b"one"))
+        .publish(OutgoingMessage::new(subject.as_str(), b"one"), None)
         .await
         .expect("publish failed");
     {
@@ -425,7 +551,7 @@ async fn core_stream_can_be_reentered() {
     }
 
     publisher
-        .publish(OutgoingMessage::new(subject.as_str(), b"two"))
+        .publish(OutgoingMessage::new(subject.as_str(), b"two"), None)
         .await
         .expect("publish failed");
     {

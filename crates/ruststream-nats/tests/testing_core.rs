@@ -16,8 +16,9 @@ use ruststream::{
     testing::expect_published,
 };
 use ruststream_nats::{
-    NatsError, PARTITION_KEY_HEADER, SubscribeOptions,
-    testing::{ConnectedNatsTestBroker, NatsTestBroker, NatsTestMessage, NatsTestPublish},
+    CoreSubject, JetStreamOptions, JetStreamPublish, JetStreamSubject, NatsError, NatsPublish,
+    PARTITION_KEY_HEADER,
+    testing::{ConnectedNatsTestBroker, NatsTestBroker, NatsTestMessage},
 };
 
 use std::sync::Arc;
@@ -36,18 +37,32 @@ async fn connected() -> ConnectedNatsTestBroker {
     NatsTestBroker::new().connect().await.expect("connect")
 }
 
+async fn next_message<S>(stream: &mut S) -> NatsTestMessage
+where
+    S: Stream<Item = Result<NatsTestMessage, NatsError>> + Unpin,
+{
+    tokio::time::timeout(WAIT, stream.next())
+        .await
+        .expect("delivery within timeout")
+        .expect("stream has next")
+        .expect("delivery ok")
+}
+
 async fn next_payload<S>(stream: &mut S) -> Vec<u8>
 where
     S: Stream<Item = Result<NatsTestMessage, NatsError>> + Unpin,
 {
-    let msg = tokio::time::timeout(WAIT, stream.next())
-        .await
-        .expect("delivery within timeout")
-        .expect("stream has next")
-        .expect("delivery ok");
+    let msg = next_message(stream).await;
     let payload = msg.payload().to_vec();
     msg.ack().await.expect("ack");
     payload
+}
+
+/// One header as text, for an assertion that reads like the wire does.
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get(name)
+        .and_then(|value| str::from_utf8(value).ok())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -55,13 +70,13 @@ async fn pub_sub_round_trip_through_broker_traits() {
     let broker = connected().await;
 
     let mut subscriber = broker
-        .subscribe_with(SubscribeOptions::new("orders.created"))
+        .subscribe_with(CoreSubject::new("orders.created"))
         .await
         .expect("subscribe");
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
 
     publisher
-        .publish(OutgoingMessage::new("orders.created", b"o1"))
+        .publish(OutgoingMessage::new("orders.created", b"o1"), None)
         .await
         .expect("publish");
 
@@ -73,12 +88,105 @@ async fn pub_sub_round_trip_through_broker_traits() {
     broker.shutdown().await.expect("shutdown");
 }
 
+// The JetStream policy pairs here too, so a routes file that names it mounts in process; what it
+// pairs into routes over the same Core fabric, because that is all there is without a server. The
+// expectations are stream-side checks and go unchecked here - that a server refuses a violated one
+// is asserted in `integration_nats.rs`, where there is a stream to violate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jetstream_policy_pairs_into_a_core_routing_publisher() {
+    let broker = connected().await;
+    let mut subscriber = broker
+        .subscribe_with(CoreSubject::new("orders.created"))
+        .await
+        .expect("subscribe");
+    let publisher = broker.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
+
+    publisher
+        .publish(
+            OutgoingMessage::new("orders.created", b"js"),
+            Some(&JetStreamOptions {
+                expect_last_sequence: Some(7),
+                ..JetStreamOptions::default()
+            }),
+        )
+        .await
+        .expect("an unmeetable expectation is not checked in process");
+
+    let mut stream = Box::pin(subscriber.stream());
+    assert_eq!(next_payload(&mut stream).await, b"js");
+}
+
+// Writing the JetStream protocol headers is the client's half of a publish, and that half is
+// reproduced in process: what the mount site declared and what the call site asked for arrive on
+// the message as the server would have seen them. Checking them is the server's half, and there is
+// no stream here to check against.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_jetstream_settings_reach_the_message_as_protocol_headers() {
+    let broker = connected().await;
+    let mut subscriber = broker
+        .subscribe_with(CoreSubject::new("orders.created"))
+        .await
+        .expect("subscribe");
+    let publisher = broker.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
+
+    publisher
+        .publish(
+            OutgoingMessage::new("orders.created", b"js"),
+            Some(&JetStreamOptions {
+                message_id: Some("order-7".into()),
+                expect_last_sequence: Some(41),
+                expect_last_subject_sequence: Some(9),
+                expect_last_message_id: Some("order-6".into()),
+            }),
+        )
+        .await
+        .expect("publish");
+
+    let mut stream = Box::pin(subscriber.stream());
+    let message = next_message(&mut stream).await;
+    let headers = message.headers();
+    assert_eq!(header(headers, "Nats-Expected-Stream"), Some("ORDERS"));
+    assert_eq!(header(headers, "Nats-Msg-Id"), Some("order-7"));
+    assert_eq!(header(headers, "Nats-Expected-Last-Sequence"), Some("41"));
+    assert_eq!(
+        header(headers, "Nats-Expected-Last-Subject-Sequence"),
+        Some("9")
+    );
+    assert_eq!(
+        header(headers, "Nats-Expected-Last-Msg-Id"),
+        Some("order-6")
+    );
+}
+
+/// A publish that states nothing carries only what the mount site declared.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jetstream_publish_that_states_nothing_carries_only_the_policy() {
+    let broker = connected().await;
+    let mut subscriber = broker
+        .subscribe_with(CoreSubject::new("orders.created"))
+        .await
+        .expect("subscribe");
+    let publisher = broker.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
+
+    publisher
+        .publish(OutgoingMessage::new("orders.created", b"js"), None)
+        .await
+        .expect("publish");
+
+    let mut stream = Box::pin(subscriber.stream());
+    let message = next_message(&mut stream).await;
+    let headers = message.headers();
+    assert_eq!(header(headers, "Nats-Expected-Stream"), Some("ORDERS"));
+    assert_eq!(header(headers, "Nats-Msg-Id"), None);
+    assert_eq!(header(headers, "Nats-Expected-Last-Sequence"), None);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publisher_validates_subjects() {
     let broker = connected().await;
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
     let err = publisher
-        .publish(OutgoingMessage::new("orders.*", b"x"))
+        .publish(OutgoingMessage::new("orders.*", b"x"), None)
         .await
         .expect_err("wildcard subject must be rejected");
     let msg = format!("{err}");
@@ -94,12 +202,12 @@ async fn publisher_validates_subjects() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publisher_errors_after_shutdown() {
     let broker = connected().await;
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
 
     broker.shutdown().await.expect("shutdown");
 
     let err = publisher
-        .publish(OutgoingMessage::new("orders.created", b"too late"))
+        .publish(OutgoingMessage::new("orders.created", b"too late"), None)
         .await
         .expect_err("publishing through a closed transport must fail");
     assert!(
@@ -112,25 +220,25 @@ async fn publisher_errors_after_shutdown() {
 async fn wildcard_subscription_receives_matching_subjects() {
     let broker = connected().await;
     let mut star_sub = broker
-        .subscribe_with(SubscribeOptions::new("orders.*"))
+        .subscribe_with(CoreSubject::new("orders.*"))
         .await
         .expect("subscribe *");
     let mut tail_sub = broker
-        .subscribe_with(SubscribeOptions::new(">"))
+        .subscribe_with(CoreSubject::new(">"))
         .await
         .expect("subscribe >");
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
 
     publisher
-        .publish(OutgoingMessage::new("orders.created", b"a"))
+        .publish(OutgoingMessage::new("orders.created", b"a"), None)
         .await
         .expect("publish a");
     publisher
-        .publish(OutgoingMessage::new("orders.updated", b"b"))
+        .publish(OutgoingMessage::new("orders.updated", b"b"), None)
         .await
         .expect("publish b");
     publisher
-        .publish(OutgoingMessage::new("payments.captured", b"c"))
+        .publish(OutgoingMessage::new("payments.captured", b"c"), None)
         .await
         .expect("publish c");
 
@@ -149,17 +257,57 @@ async fn wildcard_subscription_receives_matching_subjects() {
     assert_eq!(&tail3, b"c");
 }
 
+// Competing consumers are the reason a queue group exists, so a stand-in that gave every member a
+// copy would let two workers do the same job and call it a pass. The split is client-side
+// selection, exactly reproducible, and this is the level a service sees it at. Asserted against a
+// real server by `a_queue_group_splits_the_work_across_its_members` in `integration_nats.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_queue_group_splits_the_subject_between_its_members() {
+    let broker = connected().await;
+    let mut worker_a = broker
+        .subscribe_with(CoreSubject::new("jobs").queue_group("workers"))
+        .await
+        .expect("subscribe worker a");
+    let mut worker_b = broker
+        .subscribe_with(CoreSubject::new("jobs").queue_group("workers"))
+        .await
+        .expect("subscribe worker b");
+    let mut observer = broker
+        .subscribe_with(CoreSubject::new("jobs"))
+        .await
+        .expect("subscribe observer");
+    let publisher = broker.publisher(NatsPublish);
+
+    for payload in [b"1".as_slice(), b"2"] {
+        publisher
+            .publish(OutgoingMessage::new("jobs", payload), None)
+            .await
+            .expect("publish");
+    }
+
+    let mut stream_a = Box::pin(worker_a.stream());
+    let mut stream_b = Box::pin(worker_b.stream());
+    assert_eq!(next_payload(&mut stream_a).await, b"1");
+    assert_eq!(next_payload(&mut stream_b).await, b"2");
+
+    // Both jobs ran once between the two workers, and the subscription outside the group still
+    // saw everything.
+    let mut every_message = Box::pin(observer.stream());
+    assert_eq!(next_payload(&mut every_message).await, b"1");
+    assert_eq!(next_payload(&mut every_message).await, b"2");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nack_requeue_redelivers_to_same_subscriber() {
     let broker = connected().await;
     let mut subscriber = broker
-        .subscribe_with(SubscribeOptions::new("orders"))
+        .subscribe_with(CoreSubject::new("orders"))
         .await
         .expect("subscribe");
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
 
     publisher
-        .publish(OutgoingMessage::new("orders", b"once"))
+        .publish(OutgoingMessage::new("orders", b"once"), None)
         .await
         .expect("publish");
 
@@ -184,10 +332,10 @@ async fn nack_requeue_redelivers_to_same_subscriber() {
 async fn request_reply_round_trip() {
     let broker = connected().await;
     let mut responder = broker
-        .subscribe_with(SubscribeOptions::new("echo"))
+        .subscribe_with(CoreSubject::new("echo"))
         .await
         .expect("subscribe echo");
-    let responder_publisher = broker.publisher(NatsTestPublish);
+    let responder_publisher = broker.publisher(NatsPublish);
 
     // Background responder: read one request and publish to its reply-to subject.
     let responder_task = tokio::spawn(async move {
@@ -205,10 +353,13 @@ async fn request_reply_round_trip() {
         let payload = format!("reply:{}", String::from_utf8_lossy(req.payload()));
         req.ack().await.expect("ack");
         let reply = OutgoingMessage::new(reply_to.as_str(), payload.as_bytes());
-        responder_publisher.publish(reply).await.expect("reply");
+        responder_publisher
+            .publish(reply, None)
+            .await
+            .expect("reply");
     });
 
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
     let reply = publisher
         .request(
             OutgoingMessage::new("echo", b"hello"),
@@ -224,7 +375,7 @@ async fn request_reply_round_trip() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_times_out_when_no_responder() {
     let broker = connected().await;
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
     let err = publisher
         .request(
             OutgoingMessage::new("echo.absent", b"hi"),
@@ -239,16 +390,16 @@ async fn request_times_out_when_no_responder() {
 async fn headers_are_propagated_to_subscribers() {
     let broker = connected().await;
     let mut subscriber = broker
-        .subscribe_with(SubscribeOptions::new("orders"))
+        .subscribe_with(CoreSubject::new("orders"))
         .await
         .expect("subscribe");
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
 
     let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/json");
     headers.insert("correlation-id", "abc-1");
     let outgoing = OutgoingMessage::new("orders", b"{}").with_headers(headers);
-    publisher.publish(outgoing).await.expect("publish");
+    publisher.publish(outgoing, None).await.expect("publish");
 
     let mut stream = Box::pin(subscriber.stream());
     let msg = tokio::time::timeout(WAIT, stream.next())
@@ -264,13 +415,13 @@ async fn headers_are_propagated_to_subscribers() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn broker_observes_published_log() {
     let broker = connected().await;
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
     publisher
-        .publish(OutgoingMessage::new("events", b"first"))
+        .publish(OutgoingMessage::new("events", b"first"), None)
         .await
         .expect("publish first");
     publisher
-        .publish(OutgoingMessage::new("events", b"second"))
+        .publish(OutgoingMessage::new("events", b"second"), None)
         .await
         .expect("publish second");
 
@@ -288,13 +439,13 @@ async fn broker_observes_published_log() {
 async fn stream_can_be_reentered() {
     let broker = connected().await;
     let mut subscriber = broker
-        .subscribe_with(SubscribeOptions::new("orders"))
+        .subscribe_with(CoreSubject::new("orders"))
         .await
         .expect("subscribe");
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
 
     publisher
-        .publish(OutgoingMessage::new("orders", b"one"))
+        .publish(OutgoingMessage::new("orders", b"one"), None)
         .await
         .expect("publish one");
     {
@@ -304,7 +455,7 @@ async fn stream_can_be_reentered() {
     }
 
     publisher
-        .publish(OutgoingMessage::new("orders", b"two"))
+        .publish(OutgoingMessage::new("orders", b"two"), None)
         .await
         .expect("publish two");
     let mut stream = Box::pin(subscriber.stream());
@@ -325,7 +476,7 @@ async fn describe_server_returns_nats_protocol() {
 async fn partition_key_header_is_surfaced() {
     let broker = connected().await;
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("events"))
+        .subscribe_with(CoreSubject::new("events"))
         .await
         .expect("subscribe");
 
@@ -333,8 +484,11 @@ async fn partition_key_header_is_surfaced() {
     headers.insert(PARTITION_KEY_HEADER, "tenant-a");
 
     broker
-        .publisher(NatsTestPublish)
-        .publish(OutgoingMessage::new("events", b"payload").with_headers(headers))
+        .publisher(NatsPublish)
+        .publish(
+            OutgoingMessage::new("events", b"payload").with_headers(headers),
+            None,
+        )
         .await
         .expect("publish");
 
@@ -357,17 +511,17 @@ async fn partition_key_header_is_surfaced() {
 #[tokio::test]
 async fn batch_subscriber_yields_non_empty_batches() {
     let broker = connected().await;
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
 
     // Open the subscription before publishing so messages are buffered.
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("batch"))
+        .subscribe_with(CoreSubject::new("batch"))
         .await
         .expect("subscribe");
 
     for i in 0u8..5 {
         publisher
-            .publish(OutgoingMessage::new("batch", &[i]))
+            .publish(OutgoingMessage::new("batch", &[i]), None)
             .await
             .expect("publish");
     }
@@ -393,13 +547,13 @@ async fn batch_subscriber_yields_non_empty_batches() {
 async fn partition_key_absent_yields_none() {
     let broker = connected().await;
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("events.bare"))
+        .subscribe_with(CoreSubject::new("events.bare"))
         .await
         .expect("subscribe");
 
     broker
-        .publisher(NatsTestPublish)
-        .publish(OutgoingMessage::new("events.bare", b"payload"))
+        .publisher(NatsPublish)
+        .publish(OutgoingMessage::new("events.bare", b"payload"), None)
         .await
         .expect("publish");
 
@@ -422,16 +576,16 @@ async fn partition_key_absent_yields_none() {
 #[tokio::test]
 async fn batch_drains_in_publish_order_up_to_the_batch_size() {
     let broker = connected().await;
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("batch.order"))
+        .subscribe_with(CoreSubject::new("batch.order"))
         .await
         .expect("subscribe");
 
     let count = 5u8;
     for i in 0..count {
         publisher
-            .publish(OutgoingMessage::new("batch.order", &[i]))
+            .publish(OutgoingMessage::new("batch.order", &[i]), None)
             .await
             .expect("publish");
     }
@@ -463,14 +617,14 @@ async fn batch_drains_in_publish_order_up_to_the_batch_size() {
 #[tokio::test]
 async fn batches_can_be_reentered() {
     let broker = connected().await;
-    let publisher = broker.publisher(NatsTestPublish);
+    let publisher = broker.publisher(NatsPublish);
     let mut sub = broker
-        .subscribe_with(SubscribeOptions::new("batch.reenter"))
+        .subscribe_with(CoreSubject::new("batch.reenter"))
         .await
         .expect("subscribe");
 
     publisher
-        .publish(OutgoingMessage::new("batch.reenter", b"one"))
+        .publish(OutgoingMessage::new("batch.reenter", b"one"), None)
         .await
         .expect("publish");
     {
@@ -490,7 +644,7 @@ async fn batches_can_be_reentered() {
     }
 
     publisher
-        .publish(OutgoingMessage::new("batch.reenter", b"two"))
+        .publish(OutgoingMessage::new("batch.reenter", b"two"), None)
         .await
         .expect("publish");
     {
@@ -525,7 +679,7 @@ async fn ack_order(order: &Order) -> HandlerOutcome {
 
 // A JetStream-configured source resolves against the in-process broker too, so a handler bound to
 // a durable consumer is still unit-testable; only the subject pattern drives routing here.
-#[subscriber(SubscribeOptions::new("orders.durable").jetstream("ORDERS").durable("worker"))]
+#[subscriber(JetStreamSubject::new("orders.durable", "ORDERS").durable("worker"))]
 async fn durable_order(order: &Order) -> HandlerOutcome {
     let _ = order;
     HandlerOutcome::ack()

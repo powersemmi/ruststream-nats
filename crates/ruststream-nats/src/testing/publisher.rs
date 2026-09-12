@@ -18,7 +18,7 @@ use bytes::Bytes;
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply};
 
 use crate::{
-    JetStreamPublish, NatsPublish,
+    JetStreamOptions, JetStreamPublish, NatsPublish,
     error::NatsError,
     testing::{
         broker::{ConnectedNatsTestBroker, TestBrokerState, validate_publish_subject},
@@ -133,7 +133,7 @@ impl NatsTestPublishPolicy for JetStreamPublish {
 /// let connected = NatsTestBroker::new().connect().await?;
 /// let publisher = connected.publisher(NatsPublish);
 /// publisher
-///     .publish(OutgoingMessage::new("orders.created", b"{}".as_slice()))
+///     .publish(OutgoingMessage::new("orders.created", b"{}".as_slice()), None)
 ///     .await?;
 /// # Ok(())
 /// # }
@@ -158,7 +158,14 @@ impl NatsTestPublisher {
 impl Publisher for NatsTestPublisher {
     type Error = NatsError;
 
-    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
+    /// The same answer the production Core publisher gives: Core NATS has no per-message setting.
+    type Options = ();
+
+    fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> impl Future<Output = Result<(), Self::Error>> {
         if let Err(err) = self.state.ensure_live(msg.name()) {
             return ready(Err(err));
         }
@@ -193,7 +200,7 @@ impl RequestReply for NatsTestPublisher {
         let outgoing =
             OutgoingMessage::new(msg.name(), msg.payload()).with_headers(headers.clone());
 
-        if let Err(err) = self.publish(outgoing).await {
+        if let Err(err) = self.publish(outgoing, None).await {
             self.state.router.unsubscribe(id);
             return Err(err);
         }
@@ -221,12 +228,12 @@ impl RequestReply for NatsTestPublisher {
 /// * The stream's acknowledgement. There is no in-process counterpart to
 ///   [`JetStreamPublisher::publish_ack`](crate::JetStreamPublisher::publish_ack), so nothing here
 ///   invents a stream name, a sequence or a duplicate verdict.
-/// * The expectations the policy declares (`expect_stream`, `expect_last_sequence`,
-///   `expect_last_subject_sequence`, `expect_last_message_id`). A server checks them against
-///   stream state and rejects the publish when one does not hold; here they are carried for
-///   [`Debug`](std::fmt::Debug) and never checked, so an in-process run cannot assert that a
-///   violated expectation is refused, and an optimistic-concurrency chain built on them proves
-///   nothing until it runs against a server. That is what
+/// * Whether an expectation holds. The policy's `expect_stream` and every
+///   [`JetStreamOptions`] field reach the message as the protocol headers the real client writes,
+///   so a test reads back what the mount site and the call site asked for. Checking them is the
+///   server's half, and there is no stream in process to check against: a publish that violates
+///   one succeeds here where a server would refuse it, so an optimistic-concurrency chain built
+///   on them proves nothing until it runs against a server. That is what
 ///   `the_stream_checks_the_expectations_the_publish_policy_declares` in
 ///   `tests/integration_nats.rs` covers.
 ///
@@ -241,7 +248,7 @@ impl RequestReply for NatsTestPublisher {
 /// let connected = NatsTestBroker::new().connect().await?;
 /// let publisher = connected.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
 /// publisher
-///     .publish(OutgoingMessage::new("orders.created", b"{}".as_slice()))
+///     .publish(OutgoingMessage::new("orders.created", b"{}".as_slice()), None)
 ///     .await?;
 /// # Ok(())
 /// # }
@@ -249,8 +256,6 @@ impl RequestReply for NatsTestPublisher {
 #[derive(Clone)]
 pub struct JetStreamTestPublisher {
     inner: NatsTestPublisher,
-    /// Held for [`Debug`](std::fmt::Debug) alone: the expectations are server-side checks and the
-    /// in-process transport has no stream state to check them against.
     policy: JetStreamPublish,
 }
 
@@ -265,7 +270,24 @@ impl std::fmt::Debug for JetStreamTestPublisher {
 impl Publisher for JetStreamTestPublisher {
     type Error = NatsError;
 
-    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
-        self.inner.publish(msg)
+    /// The same answer the production `JetStream` publisher gives, so a body bounded on
+    /// `Out<impl Publisher<Options = JetStreamOptions>, _>` mounts on either ladder.
+    type Options = JetStreamOptions;
+
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
+        // The client's own half of a JetStream publish is writing these protocol headers, and
+        // that is exactly what is reproduced here. The server's half, checking them against
+        // stream state, is what no in-process transport can stand in for.
+        let mut headers = msg.headers().clone();
+        self.policy.write_headers(&mut headers);
+        if let Some(options) = options {
+            options.write_headers(&mut headers);
+        }
+        let stamped = OutgoingMessage::new(msg.name(), msg.payload()).with_headers(headers);
+        self.inner.publish(stamped, None).await
     }
 }

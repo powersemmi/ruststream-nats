@@ -553,3 +553,127 @@ async fn a_reply_position_bound_to_the_production_policy_answers_in_process() {
 
     tb.shutdown().await.expect("shutdown");
 }
+
+// ------------------------------------------------------- what one JetStream message states itself
+
+#[derive(OutSlot)]
+#[publishes(Order)]
+struct Archive;
+
+/// Archives every order twice: once saying nothing about the message, once tagging it for the
+/// stream's deduplication window and pinning the subject's position.
+///
+/// The body names the steps, so it imports this crate's prelude and bounds its slot on the
+/// `JetStream` options type - the one place a handler body is allowed to name a broker.
+#[subscriber("orders.archiving")]
+async fn archive(
+    order: &Order,
+    Out(out): Out<impl Publisher<Options = JetStreamOptions>, Archive>,
+) -> HandlerOutcome {
+    if out
+        .message(order)
+        .to("orders.archived")
+        .publish()
+        .await
+        .is_err()
+        || out
+            .message(order)
+            .to("orders.archived.deduplicated")
+            .message_id(format!("order-{}", order.id))
+            .expect_last_subject_sequence(41)
+            .publish()
+            .await
+            .is_err()
+    {
+        return HandlerOutcome::retry();
+    }
+    HandlerOutcome::ack()
+}
+
+/// A step is what one message says; the mount site says nothing about it. The slot view reads back
+/// the value the publish carried, and the broker's log shows it reached the message as the
+/// `JetStream` protocol header a server reads.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_step_states_a_jetstream_setting_for_one_message_only() {
+    let tb = TestApp::start(app(|b| {
+        b.include(archive)
+            .out(Archive, JetStreamPublish::default().expect_stream("ORDERS"))
+            .build();
+    }))
+    .await
+    .expect("start");
+
+    tb.message(&Order { id: 7 })
+        .to("orders.archiving")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.out::<Archive>()
+        .assert_called(2)
+        .with_options(&JetStreamOptions {
+            message_id: Some("order-7".into()),
+            expect_last_subject_sequence: Some(41),
+            ..JetStreamOptions::default()
+        });
+    tb.broker::<NatsTestBroker>()
+        .published::<Order>("orders.archived.deduplicated")
+        .assert_called_once()
+        .with(&Order { id: 7 })
+        .with_header("Nats-Msg-Id", "order-7")
+        .with_header("Nats-Expected-Last-Subject-Sequence", "41");
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+#[derive(OutSlot)]
+#[publishes(Order)]
+struct Mirror;
+
+/// The same publish with no step on it.
+#[subscriber("orders.mirroring")]
+async fn mirror(
+    order: &Order,
+    Out(out): Out<impl Publisher<Options = JetStreamOptions>, Mirror>,
+) -> HandlerOutcome {
+    if out
+        .message(order)
+        .to("orders.mirrored")
+        .publish()
+        .await
+        .is_err()
+    {
+        return HandlerOutcome::retry();
+    }
+    HandlerOutcome::ack()
+}
+
+/// A publish that names no step states nothing of its own, and what the mount site declared is the
+/// whole answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publish_with_no_step_states_nothing_of_its_own() {
+    let tb = TestApp::start(app(|b| {
+        b.include(mirror)
+            .out(Mirror, JetStreamPublish::default().expect_stream("ORDERS"))
+            .build();
+    }))
+    .await
+    .expect("start");
+
+    tb.message(&Order { id: 8 })
+        .to("orders.mirroring")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.out::<Mirror>()
+        .assert_called_once()
+        .assert_options_default();
+    tb.broker::<NatsTestBroker>()
+        .published::<Order>("orders.mirrored")
+        .assert_called_once()
+        .with(&Order { id: 8 })
+        .with_header("Nats-Expected-Stream", "ORDERS");
+
+    tb.shutdown().await.expect("shutdown");
+}

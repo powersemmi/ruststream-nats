@@ -32,8 +32,8 @@ use ruststream::{
 };
 use ruststream_nats::context::{JetStreamContext, keys};
 use ruststream_nats::{
-    ConnectedNatsBroker, CoreSubject, JetStreamPublish, JetStreamSubject, NatsBroker, NatsError,
-    NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
+    ConnectedNatsBroker, CoreSubject, JetStreamOptions, JetStreamPublish, JetStreamSubject,
+    NatsBroker, NatsError, NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
 };
 use tokio::time::timeout;
 
@@ -138,7 +138,7 @@ impl JetStreamFixture {
     async fn publish(&self, payload: &[u8]) {
         self.connected
             .publisher(NatsPublish)
-            .publish(OutgoingMessage::new(self.subject.as_str(), payload))
+            .publish(OutgoingMessage::new(self.subject.as_str(), payload), None)
             .await
             .expect("publish failed");
     }
@@ -162,18 +162,25 @@ async fn the_stream_checks_the_expectations_the_publish_policy_declares() {
     let ack = fx
         .connected
         .publisher(JetStreamPublish::default().expect_stream(fx.stream.clone()))
-        .publish_ack(OutgoingMessage::new(fx.subject.as_str(), b"first"))
+        .publish_ack(OutgoingMessage::new(fx.subject.as_str(), b"first"), None)
         .await
         .expect("a met expectation is accepted");
     assert_eq!(ack.stream, fx.stream);
     assert_eq!(ack.sequence, 1, "the first message takes sequence 1");
 
     // The optimistic-concurrency chain, broken: the stream is at sequence 1, so a writer that
-    // believes it is at 99 must be refused rather than appended after.
+    // believes it is at 99 must be refused rather than appended after. The expectation belongs to
+    // this one message, so it rides the publish rather than the publisher.
     let err = fx
         .connected
-        .publisher(JetStreamPublish::default().expect_last_sequence(99))
-        .publish_ack(OutgoingMessage::new(fx.subject.as_str(), b"stale"))
+        .publisher(JetStreamPublish::default())
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"stale"),
+            Some(&JetStreamOptions {
+                expect_last_sequence: Some(99),
+                ..JetStreamOptions::default()
+            }),
+        )
         .await
         .expect_err("a violated expectation must be refused");
     assert!(
@@ -323,7 +330,7 @@ async fn a_queue_group_splits_the_work_across_its_members() {
     let publisher = connected.publisher(NatsPublish);
     for payload in [b"1".as_slice(), b"2"] {
         publisher
-            .publish(OutgoingMessage::new(subject.as_str(), payload))
+            .publish(OutgoingMessage::new(subject.as_str(), payload), None)
             .await
             .expect("publish failed");
     }
@@ -372,7 +379,10 @@ async fn a_core_delivery_reports_that_it_cannot_be_acknowledged() {
         .expect("subscribe failed");
     connected
         .publisher(NatsPublish)
-        .publish(OutgoingMessage::new(subject.as_str(), b"fire-and-forget"))
+        .publish(
+            OutgoingMessage::new(subject.as_str(), b"fire-and-forget"),
+            None,
+        )
         .await
         .expect("publish failed");
 
@@ -417,7 +427,7 @@ async fn a_request_carries_its_reply_inbox_as_the_reply_to_header() {
             .expect("the request must carry its inbox as the reply-to header")
             .to_owned();
         publisher
-            .publish(OutgoingMessage::new(reply_to.as_str(), b"pong"))
+            .publish(OutgoingMessage::new(reply_to.as_str(), b"pong"), None)
             .await
             .expect("reply failed");
     };
@@ -468,7 +478,7 @@ async fn publisher_errors_after_shutdown() {
     connected.shutdown().await.expect("shutdown failed");
 
     let err = publisher
-        .publish(OutgoingMessage::new(subject.as_str(), b"too late"))
+        .publish(OutgoingMessage::new(subject.as_str(), b"too late"), None)
         .await
         .expect_err("publishing through a closed connection must fail");
     assert!(
@@ -495,7 +505,10 @@ async fn a_live_delivery_carries_the_partition_key_header() {
     headers.insert(PARTITION_KEY_HEADER, "tenant-abc");
     connected
         .publisher(NatsPublish)
-        .publish(OutgoingMessage::new(subject.as_str(), b"keyed").with_headers(headers))
+        .publish(
+            OutgoingMessage::new(subject.as_str(), b"keyed").with_headers(headers),
+            None,
+        )
         .await
         .expect("publish failed");
 
@@ -529,7 +542,7 @@ async fn core_stream_can_be_reentered() {
     let publisher = connected.publisher(NatsPublish);
 
     publisher
-        .publish(OutgoingMessage::new(subject.as_str(), b"one"))
+        .publish(OutgoingMessage::new(subject.as_str(), b"one"), None)
         .await
         .expect("publish failed");
     {
@@ -538,7 +551,7 @@ async fn core_stream_can_be_reentered() {
     }
 
     publisher
-        .publish(OutgoingMessage::new(subject.as_str(), b"two"))
+        .publish(OutgoingMessage::new(subject.as_str(), b"two"), None)
         .await
         .expect("publish failed");
     {

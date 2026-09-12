@@ -111,7 +111,7 @@ fn app() -> impl App {
                 JetStreamPublish::default().expect_stream("ORDERS"),
                 async move |publisher| -> io::Result<()> {
                     let ack = publisher
-                        .publish_ack(OutgoingMessage::new("orders.created", br#"{"id":1}"#))
+                        .publish_ack(OutgoingMessage::new("orders.created", br#"{"id":1}"#), None)
                         .await
                         .map_err(io::Error::other)?;
                     println!("stored in {} at sequence {}", ack.stream, ack.sequence);

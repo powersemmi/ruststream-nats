@@ -91,7 +91,7 @@ async fn the_batch_size_caps_the_pull_batch() {
     let total = 7u8;
     for i in 0..total {
         publisher
-            .publish(OutgoingMessage::new(fx.subject.as_str(), &[i]))
+            .publish(OutgoingMessage::new(fx.subject.as_str(), &[i]), None)
             .await
             .expect("publish failed");
     }
@@ -150,7 +150,7 @@ async fn batches_skip_empty_fetches() {
         // Longer than pull_expires, so the first fetch comes back empty and is retried.
         tokio::time::sleep(Duration::from_millis(400)).await;
         publisher
-            .publish(OutgoingMessage::new(subject.as_str(), b"late"))
+            .publish(OutgoingMessage::new(subject.as_str(), b"late"), None)
             .await
             .expect("publish failed");
     });
@@ -185,7 +185,7 @@ async fn batches_can_be_reentered() {
 
     let publisher = fx.connected.publisher(NatsPublish);
     publisher
-        .publish(OutgoingMessage::new(fx.subject.as_str(), b"one"))
+        .publish(OutgoingMessage::new(fx.subject.as_str(), b"one"), None)
         .await
         .expect("publish failed");
 
@@ -210,7 +210,7 @@ async fn batches_can_be_reentered() {
     }
 
     publisher
-        .publish(OutgoingMessage::new(fx.subject.as_str(), b"two"))
+        .publish(OutgoingMessage::new(fx.subject.as_str(), b"two"), None)
         .await
         .expect("publish failed");
     {

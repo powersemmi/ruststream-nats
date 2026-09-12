@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use bytes::Bytes;
 use ruststream::{
     Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, RawMessage,
-    ServerSpec, Subscribe, SubscriptionSource,
+    RedeliveryAddress, ServerSpec, Subscribe, SubscriptionSource,
     testing::{Coordinator, TestableBroker},
 };
 
@@ -234,6 +234,12 @@ impl Subscribe for ConnectedNatsTestBroker {
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.subscribe_with(CoreSubject::new(name)).await
     }
+
+    // The answer the real broker gives, so a `retry_via` mount that starts in process starts
+    // against a server too.
+    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
+        CoreSubject::new(name).redelivery_subject()
+    }
 }
 
 impl SubscriptionSource<ConnectedNatsTestBroker> for CoreSubject {
@@ -248,6 +254,13 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for CoreSubject {
         connected: &ConnectedNatsTestBroker,
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
+    }
+
+    fn redelivery_address(
+        &self,
+        _connected: &ConnectedNatsTestBroker,
+    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
+        ready(Ok(self.redelivery_subject()))
     }
 }
 
@@ -265,6 +278,13 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for JetStreamSubject {
         connected: &ConnectedNatsTestBroker,
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
+    }
+
+    fn redelivery_address(
+        &self,
+        _connected: &ConnectedNatsTestBroker,
+    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
+        ready(Ok(self.redelivery_subject()))
     }
 }
 

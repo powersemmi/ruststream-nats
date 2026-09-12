@@ -9,12 +9,13 @@
 //! and absent from the other. Naming the wrong one is a compile error rather than a service that
 //! starts and then refuses its own subscription.
 
+use std::future::{Future, ready};
 use std::num::NonZeroU64;
 use std::time::Duration;
 
 pub use async_nats::jetstream::consumer::DeliverPolicy;
-use ruststream::SubscriptionSource;
 use ruststream::runtime::IntoSource;
+use ruststream::{RedeliveryAddress, SubscriptionSource};
 
 use self::sealed::Sealed;
 use crate::{ConnectedNatsBroker, error::NatsError, subscriber::NatsSubscriber};
@@ -156,6 +157,32 @@ pub trait NatsSubscription: Sealed {
         }
         Ok(())
     }
+
+    /// Where a publisher reaches this subscription again, which on NATS is the subject it reads.
+    ///
+    /// The framework publishes a deferred `retry_after` copy here when the transport cannot hold
+    /// the message back itself, which on NATS is every Core subscription.
+    ///
+    /// A wildcard is not an answer: `orders.*` matches on delivery and is refused on publish, so a
+    /// subscription opened on a pattern reports nothing rather than an address the deferred copy
+    /// would bounce off. An application that wires `retry_via` over such a subscription then
+    /// refuses to start, and the error names it.
+    #[must_use]
+    fn redelivery_subject(&self) -> Option<RedeliveryAddress> {
+        concrete_address(self.subject())
+    }
+}
+
+/// The subject as a publish destination, or `None` when nothing can be published there.
+///
+/// A NATS subject names one destination only when every token is literal. `*` matches one token
+/// and `>` matches the rest, and the server rejects a publish to either.
+fn concrete_address(subject: &str) -> Option<RedeliveryAddress> {
+    let publishable = !subject.is_empty()
+        && subject
+            .split('.')
+            .all(|token| !token.is_empty() && token != "*" && token != ">");
+    publishable.then(|| RedeliveryAddress::new(subject.to_owned()))
 }
 
 /// A subject subscribed to over Core NATS.
@@ -349,6 +376,13 @@ impl NatsSubscription for JetStreamSubject {
     fn subject(&self) -> &str {
         &self.subject
     }
+
+    /// The consumer reads its filter, so that is where a publish reaches it. The filter defaults
+    /// to the subject; a narrower one set with [`filter_subject`](Self::filter_subject) is what a
+    /// deferred copy has to carry to arrive.
+    fn redelivery_subject(&self) -> Option<RedeliveryAddress> {
+        concrete_address(self.filter_subject.as_deref().unwrap_or(&self.subject))
+    }
 }
 
 /// A descriptor is already a source, so the macro-free constructor takes it as it stands:
@@ -393,6 +427,15 @@ impl SubscriptionSource<ConnectedNatsBroker> for CoreSubject {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+
+    /// The descriptor knows the subject, so the answer needs no connection and the future is
+    /// ready.
+    fn redelivery_address(
+        &self,
+        _connected: &ConnectedNatsBroker,
+    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
+        ready(Ok(self.redelivery_subject()))
+    }
 }
 
 impl SubscriptionSource<ConnectedNatsBroker> for JetStreamSubject {
@@ -407,6 +450,15 @@ impl SubscriptionSource<ConnectedNatsBroker> for JetStreamSubject {
         connected: &ConnectedNatsBroker,
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
+    }
+
+    /// See [`CoreSubject`]'s answer: the consumer's filter is a publish destination too, and the
+    /// descriptor carries it.
+    fn redelivery_address(
+        &self,
+        _connected: &ConnectedNatsBroker,
+    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
+        ready(Ok(self.redelivery_subject()))
     }
 }
 
@@ -459,6 +511,36 @@ mod tests {
         assert_eq!(ack_wait, DEFAULT_ACK_WAIT);
         assert_eq!(max_ack_pending, DEFAULT_MAX_ACK_PENDING);
         assert_eq!(pull_expires, DEFAULT_PULL_EXPIRES);
+    }
+
+    // What a reported address promises is that a publish there arrives, so a pattern the server
+    // would refuse a publish to must report nothing rather than a subject the deferred copy would
+    // bounce off. `conformance::harness::lifecycle` holds the positive half of that promise.
+    #[test]
+    fn only_a_concrete_subject_is_a_redelivery_address() {
+        assert_eq!(
+            CoreSubject::new("orders.created").redelivery_subject(),
+            Some(RedeliveryAddress::new("orders.created"))
+        );
+        assert_eq!(CoreSubject::new("orders.*").redelivery_subject(), None);
+        assert_eq!(CoreSubject::new("orders.>").redelivery_subject(), None);
+        assert_eq!(CoreSubject::new("").redelivery_subject(), None);
+    }
+
+    // A JetStream consumer reads its filter, so a narrower filter is the address, not the subject
+    // the descriptor was constructed with.
+    #[test]
+    fn a_jetstream_consumer_reports_the_subject_it_actually_reads() {
+        assert_eq!(
+            JetStreamSubject::new("orders.*", "ORDERS")
+                .filter_subject("orders.created")
+                .redelivery_subject(),
+            Some(RedeliveryAddress::new("orders.created"))
+        );
+        assert_eq!(
+            JetStreamSubject::new("orders.*", "ORDERS").redelivery_subject(),
+            None
+        );
     }
 
     #[test]

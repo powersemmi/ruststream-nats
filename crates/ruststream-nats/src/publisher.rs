@@ -101,12 +101,21 @@ impl NatsPublisher {
 impl Publisher for NatsPublisher {
     type Error = NatsError;
 
+    /// Core NATS says nothing about a message beyond its subject, its payload and its headers, so
+    /// there is no per-message setting to carry. `JetStream` has four, and they live on
+    /// [`JetStreamOptions`](crate::JetStreamOptions).
+    type Options = ();
+
     /// # Cancel safety
     ///
     /// Core NATS publishing is fire-and-forget: the message is handed to the connection's writer
     /// without waiting for the server. Dropping the future may leave the message either sent or
     /// unsent, with no way to tell which.
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
         let client = self.client_for(msg.name())?;
         let subject = msg.name().to_owned();
         let payload = Bytes::copy_from_slice(msg.payload());

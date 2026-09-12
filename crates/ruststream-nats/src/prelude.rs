@@ -17,6 +17,11 @@
 //! [`Publish`] pairs into the live form that carries [`RequestReply`] as well. A broker that opens
 //! request-reply as a mode of its own aliases that policy `Request`.
 //!
+//! The one place a handler body reaches for this glob is a per-message `JetStream` setting.
+//! [`JetStreamPublishSteps`] puts `message_id` and the three expectations on the publish builder,
+//! and a body that calls one bounds its slot `Out<impl Publisher<Options = JetStreamOptions>, _>`.
+//! Such a body is tied to `JetStream`, and its signature says so.
+//!
 //! Globbing this beside another broker's prelude is safe: the core items they share resolve to the
 //! same types.
 //!
@@ -42,7 +47,10 @@ pub use ruststream::RequestReply;
 // because JetStream is the concept rather than this broker's word for one. The prefixed originals
 // stay at the crate root, for prose and for a file that wants to say NATS out loud.
 pub use crate::NatsPublish as Publish;
-pub use crate::{CoreSubject, JetStreamPublish, JetStreamSubject, NatsBroker, NonZeroDuration};
+pub use crate::{
+    CoreSubject, JetStreamOptions, JetStreamPublish, JetStreamPublishSteps, JetStreamSubject,
+    NatsBroker, NonZeroDuration,
+};
 
 // `Partitioned` is kept out on purpose: the core also surfaces `partition_key` as a defaulted
 // method on `IncomingMessage`, so re-exporting the trait makes that call ambiguous (E0034).

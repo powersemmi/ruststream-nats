@@ -12,7 +12,10 @@ use std::time::Duration;
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::{PullConsumer, pull::Config as ConsumerConfig};
 use async_nats::{Client, ConnectOptions};
-use ruststream::{Broker, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe};
+use ruststream::{
+    Broker, ConnectedBroker, DefaultPublish, DescribeServer, RedeliveryAddress, ServerSpec,
+    Subscribe,
+};
 
 use crate::{
     error::NatsError,
@@ -136,40 +139,20 @@ impl Broker for NatsBroker {
     }
 }
 
-/// The `host[:port]` of one configured address, in the shape
-/// [`ConnectedNatsBroker::server_spec`] reports from the server's own `INFO`.
-///
-/// The order of the cuts is the whole of it. The authority ends at the first `/`, `?` or `#`, so
-/// an `@` past that point belongs to a path or a query and is not a userinfo separator: cutting on
-/// `@` first turns `nats://host/a@b` into a host of `b`. Inside the authority the last `@` is the
-/// separator, because a password may contain one.
-///
-/// Never fails: a server description must not hold up startup over an address the connection
-/// itself will reject.
-fn host_of(addr: &str) -> &str {
-    let addr = addr.trim();
-    let after_scheme = addr.split_once("://").map_or(addr, |(_, rest)| rest);
-    let authority = after_scheme
-        .split_once(['/', '?', '#'])
-        .map_or(after_scheme, |(authority, _)| authority);
-    authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host)
-}
-
 /// `DescribeServer` reports the host and port of every configured address, which is what the
 /// `AsyncAPI` document records for the service. The live coordinates the server reports once
 /// connected are on [`ConnectedNatsBroker`].
 ///
 /// Credentials are not part of a coordinate. `addrs` goes to the client as written, and the client
 /// accepts `nats://user:password@host` and `nats://token@host`, but the generated document is
-/// published and shared, so what a URL carries to authenticate the connection stops here.
+/// published and shared, so what a URL carries to authenticate the connection stops here. The
+/// framework's [`ServerSpec::host_from_url`] does the cutting, once per configured address.
 impl DescribeServer for NatsBroker {
     fn describe_server(&self) -> ServerSpec {
         let hosts = self
             .addrs
             .split(',')
-            .map(host_of)
+            .map(|addr| ServerSpec::host_from_url(addr.trim()))
             .filter(|host| !host.is_empty())
             .collect::<Vec<_>>()
             .join(",");
@@ -385,6 +368,14 @@ impl Subscribe for ConnectedNatsBroker {
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.subscribe_with(CoreSubject::new(name)).await
     }
+
+    /// A NATS subject is subscribed to and published to under one name, so `#[subscriber("name")]`
+    /// composes with [`retry_via`](ruststream::runtime::BrokerScope::retry_via) here. A wildcard
+    /// pattern is the exception and reports nothing; see
+    /// [`NatsSubscription::redelivery_subject`](crate::NatsSubscription::redelivery_subject).
+    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
+        CoreSubject::new(name).redelivery_subject()
+    }
 }
 
 impl DefaultPublish for ConnectedNatsBroker {
@@ -468,7 +459,8 @@ mod tests {
             ),
             ("nats://nats.example.com:4222#a@b", "nats.example.com:4222"),
         ] {
-            assert_eq!(host_of(addr), expected, "parsing {addr}");
+            let spec = NatsBroker::new(addr).describe_server();
+            assert_eq!(spec.host.as_deref(), Some(expected), "parsing {addr}");
         }
     }
 

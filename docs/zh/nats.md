@@ -65,7 +65,7 @@ NatsBroker::new(url)      只有配置，同步，没有 I/O
 ## JetStream 持久化消费者 { #jetstream-durable-consumer }
 
 要改为从 JetStream 消费，就在 `#[subscriber(..)]` 属性里用 `JetStreamSubject` 写出来源：要读的
-流，以及一个位置能跨重启保留的持久化消费者。
+subject、存着它的流，以及一个位置能跨重启保留的持久化消费者。
 
 ```rust
 --8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:handler"
@@ -104,8 +104,8 @@ NATS 的负载均衡是 `CoreSubject::queue_group`。两个类型没有共同的
 ```
 
 在 JetStream 上，这个数字就是 pull 请求的批大小：一个批是一次 `fetch`，最多六条消息；时限内到得
-更少时，`pull_expires` 提前结束它。Core NATS 的协议里没有批，因此框架的 `Buffered` 适配器在客户端
-把批攒出来，不满的批在第一次投递之后 10 ms 关闭。
+更少时，`pull_expires` 提前结束它。Core NATS 的协议里没有批，因此框架的 `BufferedSubscriber` 适配器
+在客户端把批攒出来，不满的批在第一次投递之后 10 ms 关闭。
 
 这个大小属于注册，不属于订阅。因此 `JetStreamSubject` 上有的是时间（`pull_expires`），不是条数。
 
@@ -219,13 +219,13 @@ use ruststream_nats::prelude::*;
 | 能力 | 原生 | 说明 |
 | --- | --- | --- |
 | `Subscribe` | 是 | 通过 `CoreSubject` 按 subject 订阅；`JetStreamSubject` 改为通过 JetStream 消费者来读它。 |
-| `BatchSubscriber` | 是 | 在 JetStream 上，一个批是一次 pull `fetch`，最多取到挂载点写的 `batch(n)`，并受 `pull_expires` 限制。Core NATS 的协议里没有批，因此框架的 `Buffered` 适配器在客户端把批攒出来。参见[批](#batches)。 |
+| `BatchSubscriber` | 是 | 在 JetStream 上，一个批是一次 pull `fetch`，最多取到挂载点写的 `batch(n)`，并受 `pull_expires` 限制。Core NATS 的协议里没有批，因此框架的 `BufferedSubscriber` 适配器在客户端把批攒出来。参见[批](#batches)。 |
 | `TransactionalPublisher` | 否 | 两种模型都没有跨多条消息的事务；JetStream 的发布一条一条确认。 |
 | `OwnedTransactions` | 否 | 同样的原因：没有事务可以拥有。 |
 | `RequestReply` | 是 | `NatsPublisher` 发布时带上原生的回复 inbox，并把回复返回。参见[请求-响应](#request-reply)。 |
 | `Partitioned` | 是 | NATS 没有原生的分区，因此发送方把键写进 `nats-partition-key` 消息头，运行时 `workers(n, by_key)` 的各个工作分区从那里读它。 |
 | `Seekable` + `Positioned` | 否 | `deliver_policy` 决定新建的 JetStream 消费者从哪里开始；活动的订阅不重新定位。 |
-| `DescribeServer` | 是 | 报告配置里的地址，AsyncAPI 文档记下的就是它。 |
+| `DescribeServer` | 是 | 报告每个配置地址的主机和端口，因此写进 URL 的凭据不会进入 AsyncAPI 文档。 |
 
 ## 测试 { #testing }
 

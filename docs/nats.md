@@ -69,7 +69,8 @@ Mount it inside `with_broker`:
 ## JetStream durable consumer
 
 To consume from JetStream instead, name the source in the `#[subscriber(..)]` attribute with
-`JetStreamSubject`: the stream to read, and a durable consumer whose position survives a restart.
+`JetStreamSubject`: the subject to read, the stream that stores it, and a durable consumer whose
+position survives a restart.
 
 ```rust
 --8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:handler"
@@ -110,8 +111,8 @@ The mount site adds the batch size:
 
 On JetStream that number is the pull request's batch size: one batch is one `fetch` of at most six
 messages, and `pull_expires` closes it early when fewer arrive in time. Core NATS has no batch on
-the wire, so the framework's `Buffered` adapter assembles one on the client, and a partial batch
-closes 10 ms after its first delivery.
+the wire, so the framework's `BufferedSubscriber` adapter assembles one on the client, and a
+partial batch closes 10 ms after its first delivery.
 
 The size belongs to the registration, not to the subscription, which is why `JetStreamSubject`
 carries the timing (`pull_expires`) and not the count.
@@ -236,13 +237,13 @@ Which of the framework's optional capability traits this broker implements nativ
 | Capability | Native | Notes |
 | --- | --- | --- |
 | `Subscribe` | yes | Subscribes by subject through `CoreSubject`; `JetStreamSubject` reads one through a JetStream consumer instead. |
-| `BatchSubscriber` | yes | On JetStream one batch is one pull `fetch` of up to the mount site's `batch(n)`, bounded by `pull_expires`. Core NATS has no batch on the wire, so the framework's `Buffered` adapter assembles one on the client. See [Batches](#batches). |
+| `BatchSubscriber` | yes | On JetStream one batch is one pull `fetch` of up to the mount site's `batch(n)`, bounded by `pull_expires`. Core NATS has no batch on the wire, so the framework's `BufferedSubscriber` adapter assembles one on the client. See [Batches](#batches). |
 | `TransactionalPublisher` | no | Neither model has a multi-message transaction; a JetStream publish is acknowledged one message at a time. |
 | `OwnedTransactions` | no | Same reason: there is no transaction to own. |
 | `RequestReply` | yes | `NatsPublisher` publishes with a native reply inbox and returns the reply. See [Request-reply](#request-reply). |
 | `Partitioned` | yes | NATS has no native partition, so the sender sets the key in the `nats-partition-key` header, and the runtime's `workers(n, by_key)` lanes read it from there. |
 | `Seekable` + `Positioned` | no | `deliver_policy` chooses where a newly created JetStream consumer starts; a live subscription is not repositioned. |
-| `DescribeServer` | yes | Reports the configured address, which is what the AsyncAPI document records. |
+| `DescribeServer` | yes | Reports the host and port of every configured address, so a credential written into a URL does not reach the AsyncAPI document. |
 
 ## Testing
 

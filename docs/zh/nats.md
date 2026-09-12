@@ -193,7 +193,7 @@ Core NATS 没有自己的单条消息设置：一条 core 消息就是 subject�
 ## 请求-响应 { #request-reply }
 
 NATS 原生就把回复对应起来，因此 `NatsPublisher` 实现了 `RequestReply` 能力，crate 的 prelude 也把
-它重导出。`request(msg, timeout)` 发布消息时带上一个回复地址，返回回复消息；时限内没人应答，就
+它重导出。`request(msg, timeout)` 发布消息时带上一个回复 inbox，返回回复消息；时限内没人应答，就
 返回超时错误：
 
 ```rust
@@ -209,7 +209,7 @@ use ruststream_nats::prelude::*;
 程序是
 [`examples/nats_request_reply.rs`](https://github.com/powersemmi/ruststream-nats/blob/main/crates/ruststream-nats/examples/nats_request_reply.rs)。
 
-进来的请求把自己的回复地址放在众所周知的 `reply-to` 消息头里，因此应答方读
+进来的请求把自己的回复 inbox 放在众所周知的 `reply-to` 消息头里，因此应答方读
 `ctx.headers().reply_to()`，通过注入的发布者把答复发布到那个 subject。
 
 ## 各项能力 { #capabilities }
@@ -222,8 +222,8 @@ use ruststream_nats::prelude::*;
 | `BatchSubscriber` | 是 | 在 JetStream 上，一个批是一次 pull `fetch`，最多取到挂载点写的 `batch(n)`，并受 `pull_expires` 限制。Core NATS 的协议里没有批，因此框架的 `Buffered` 适配器在客户端把批攒出来。参见[批](#batches)。 |
 | `TransactionalPublisher` | 否 | 两种模型都没有跨多条消息的事务；JetStream 的发布一条一条确认。 |
 | `OwnedTransactions` | 否 | 同样的原因：没有事务可以拥有。 |
-| `RequestReply` | 是 | `NatsPublisher` 发布时带上原生的回复地址，并把回复返回。参见[请求-响应](#request-reply)。 |
-| `Partitioned` | 是 | NATS 没有原生的分区，因此发送方把键写进 `nats-partition-key` 消息头，运行时 `workers(n, by_key)` 的各个分区从那里读它。 |
+| `RequestReply` | 是 | `NatsPublisher` 发布时带上原生的回复 inbox，并把回复返回。参见[请求-响应](#request-reply)。 |
+| `Partitioned` | 是 | NATS 没有原生的分区，因此发送方把键写进 `nats-partition-key` 消息头，运行时 `workers(n, by_key)` 的各个工作分区从那里读它。 |
 | `Seekable` + `Positioned` | 否 | `deliver_policy` 决定新建的 JetStream 消费者从哪里开始；活动的订阅不重新定位。 |
 | `DescribeServer` | 是 | 报告配置里的地址，AsyncAPI 文档记下的就是它。 |
 

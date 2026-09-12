@@ -21,9 +21,9 @@ use ruststream::testing::{Outcome, TestApp};
 use ruststream_nats::PARTITION_KEY_HEADER;
 use ruststream_nats::context::keys::{Delivered, StreamSequence};
 use ruststream_nats::prelude::*;
-// The handlers below bound their slot with the core capability, not a broker type, so the same
-// bodies mount on the production broker under `Publish` and here under the transport's own policy.
-use ruststream_nats::testing::{NatsTestBroker, NatsTestPublish};
+// Only the broker differs from a production routes file: the policies below are the ones the
+// prelude carries, so every mount here is spelled exactly as the service ships it.
+use ruststream_nats::testing::NatsTestBroker;
 use serde::{Deserialize, Serialize};
 
 /// How long the deferring handler asks the broker to hold a message.
@@ -124,7 +124,7 @@ async fn audit(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_body_reads_the_headers_the_delivery_arrived_with() {
     let tb = TestApp::start(app(|b| {
-        b.include(audit).out(Audit, NatsTestPublish).build();
+        b.include(audit).out(Audit, Publish).build();
     }))
     .await
     .expect("start");
@@ -203,15 +203,20 @@ async fn record_metadata(
     HandlerOutcome::ack()
 }
 
-// A JetStream-configured source resolves against the in-process transport too, and the native
-// metadata it has none of reads `None` - which is the whole reason a handler bound to those keys
-// is testable without a server. What the numbers actually are is a JetStream fact, asserted
+// A JetStream-configured source resolves against the in-process transport too, and so does the
+// JetStream policy on the way out - the mount is spelled here exactly as a stream-to-stream
+// service spells it. The native metadata the transport has none of reads `None`, which is the
+// whole reason a handler bound to those keys is testable without a server. What the numbers
+// actually are, and whether the stream accepts the publish at all, are JetStream facts asserted
 // against one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_jetstream_handler_reads_no_native_metadata_in_process() {
     let tb = TestApp::start(app(|b| {
         b.include(record_metadata)
-            .out(Metadata, NatsTestPublish)
+            .out(
+                Metadata,
+                JetStreamPublish::default().expect_stream("METADATA"),
+            )
             .build();
     }))
     .await
@@ -378,7 +383,7 @@ async fn respond(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_responder_answers_on_the_inbox_the_request_named() {
     let tb = TestApp::start(app(|b| {
-        b.include(respond).out(Answers, NatsTestPublish).build();
+        b.include(respond).out(Answers, Publish).build();
     }))
     .await
     .expect("start");
@@ -444,6 +449,9 @@ async fn confirm(order: &Order) -> Confirmed {
     }
 }
 
+/// The reply position is left unbound here, which is what a routes file writes when plain
+/// publishing is what it wants: the runtime fills it from the broker's default policy, and on this
+/// broker that default is the production one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_lands_on_the_destination_its_own_type_declares() {
     let tb = TestApp::start(app(|b| {
@@ -452,8 +460,7 @@ async fn a_reply_lands_on_the_destination_its_own_type_declares() {
     .await
     .expect("start");
 
-    tb.broker::<NatsTestBroker>()
-        .message(&Order { id: 10 })
+    tb.message(&Order { id: 10 })
         .to("orders.placed")
         .publish()
         .await
@@ -498,8 +505,7 @@ async fn a_reply_with_no_declared_destination_lands_where_the_mount_names() {
     .await
     .expect("start");
 
-    tb.broker::<NatsTestBroker>()
-        .message(&Order { id: 11 })
+    tb.message(&Order { id: 11 })
         .to("orders.billed")
         .publish()
         .await
@@ -516,6 +522,34 @@ async fn a_reply_with_no_declared_destination_lands_where_the_mount_names() {
         .subscriber("orders.billed")
         .assert_called_once()
         .settled(HandlerOutcome::ack());
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+// The point of the whole in-process publish surface: the reply position is bound with the policy
+// the prelude carries, so this mount is byte-for-byte the one a service ships and the reply is
+// what a service would put on the wire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_position_bound_to_the_production_policy_answers_in_process() {
+    let tb = TestApp::start(app(|b| {
+        b.include(issue_receipt).out(Reply, Publish);
+    }))
+    .await
+    .expect("start");
+
+    tb.message(&Order { id: 12 })
+        .to("orders.billed")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.broker::<NatsTestBroker>()
+        .published::<Receipt>("orders.receipts")
+        .assert_called_once()
+        .with(&Receipt {
+            id: 12,
+            total: 1200,
+        });
 
     tb.shutdown().await.expect("shutdown");
 }

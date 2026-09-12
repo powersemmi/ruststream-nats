@@ -21,6 +21,8 @@ use ruststream::conformance::{capabilities, harness};
 use ruststream_nats::testing::NatsTestBroker;
 use ruststream_nats::{NatsBroker, NatsPublish, SubscribeOptions};
 
+mod live;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn nats_test_broker_passes_conformance_suite() {
     harness::run_suite(NatsTestBroker::new).await;
@@ -73,5 +75,5 @@ async fn passes_batches() {
 }
 
 fn nats_url() -> Option<String> {
-    std::env::var("NATS_TEST_URL").ok()
+    live::url("NATS_TEST_URL")
 }

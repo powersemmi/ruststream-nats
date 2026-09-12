@@ -16,6 +16,8 @@ use ruststream::{
 use ruststream_nats::{ConnectedNatsBroker, NatsBroker, NatsPublish, SubscribeOptions};
 use tokio::time::timeout;
 
+mod live;
+
 const WAIT: Duration = Duration::from_secs(2);
 
 fn unique_suffix() -> u128 {
@@ -32,13 +34,14 @@ struct JetStreamFixture {
 }
 
 /// Connects to the test server and creates a uniquely named stream; `None` skips the test when
-/// `NATS_TEST_URL` is unset or the server is unreachable.
+/// `NATS_TEST_URL` is unset or the server is unreachable. Under `RUSTSTREAM_REQUIRE_LIVE` both of
+/// those are failures instead.
 async fn jetstream_fixture(prefix: &str) -> Option<JetStreamFixture> {
-    let url = std::env::var("NATS_TEST_URL").ok()?;
+    let url = live::url("NATS_TEST_URL")?;
     let connected = match NatsBroker::new(url.as_str()).connect().await {
         Ok(connected) => connected,
         Err(err) => {
-            eprintln!("could not reach NATS at {url}: {err}; skipping");
+            live::unreachable(&url, &err);
             return None;
         }
     };

@@ -25,7 +25,7 @@
 
 ## Features
 
-- **Core NATS and JetStream.** Subscribe by subject, or describe a durable JetStream consumer with the `SubscribeOptions` builder (stream, durable name, queue group, filter subject, ack wait, max ack pending, deliver policy).
+- **Core NATS and JetStream, one subject type each.** `CoreSubject` subscribes to a subject and load-balances it across a queue group; `JetStreamSubject` reads one through a pull consumer (durable name, filter subject, ack wait, max ack pending, deliver policy, fetch window). Each setting lives on the one model that has it, so asking Core NATS for a durable name does not compile.
 - **Batches on either transport.** A handler taking `&[T]` names one number at the mount site, the batch size (`b.include(handle.batch(nonzero!(6)))`). On JetStream it is the pull request's batch size; on Core NATS, which has no wire-level batch, the batches are assembled on the client. The mount reads the same either way.
 - **A typed lifecycle.** `NatsBroker::new(url)` is synchronous and does no I/O, so the broker composes with `#[ruststream::app]`; the runtime dials once at startup through the consuming `connect`, which yields the `ConnectedNatsBroker` that carries the whole subscribe and publish surface. `shutdown` consumes that in turn, so a publish or subscribe after shutdown does not compile. Client tuning (credentials, TLS) rides `NatsBroker::with_options`; an already-connected client plugs in via `ConnectedNatsBroker::from_client`.
 - **Publishing split by transport.** `NatsPublish` pairs into the Core NATS publisher (fire-and-forget, plus `RequestReply`); `JetStreamPublish` pairs into the JetStream publisher, which awaits the stream's acknowledgement and can declare stream expectations.
@@ -91,7 +91,7 @@ import lines of their own.
 Bind the same handler to a durable JetStream consumer by describing its source in the decorator - the macro follows the builder chain, so the definition carries the source and the mount stays a plain `b.include(handle)`:
 
 ```rust
-#[subscriber(SubscribeOptions::new("orders.*").jetstream("ORDERS").durable("orders-worker"))]
+#[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("orders-worker"))]
 async fn handle(order: &Order) -> HandlerOutcome { /* ... */ }
 ```
 

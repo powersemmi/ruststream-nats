@@ -20,7 +20,7 @@ mod jetstream;
 mod message;
 mod publisher;
 mod request_reply;
-mod subscribe_options;
+mod subject;
 mod subscriber;
 
 pub mod context;
@@ -31,7 +31,9 @@ pub use error::NatsError;
 pub use jetstream::{JetStreamPublish, JetStreamPublisher, PublishAck};
 pub use message::{CoreMessage, JetStreamMessage, NatsMessage, PARTITION_KEY_HEADER};
 pub use publisher::{NatsPublish, NatsPublishPolicy, NatsPublisher};
-pub use subscribe_options::{DeliverPolicy, SubscribeOptions};
+pub use subject::{
+    CoreSubject, DeliverPolicy, JetStreamSubject, NatsSubscription, NonZeroDuration,
+};
 pub use subscriber::NatsSubscriber;
 
 #[cfg(feature = "testing")]

@@ -185,7 +185,7 @@ struct Seen {
 struct Metadata;
 
 /// Bound to a durable `JetStream` consumer and reading the delivery's native metadata by key.
-#[subscriber(SubscribeOptions::new("orders.durable").jetstream("ORDERS").durable("worker"))]
+#[subscriber(JetStreamSubject::new("orders.durable", "ORDERS").durable("worker"))]
 async fn record_metadata(
     order: &Order,
     Ctx(stream_sequence): Ctx<StreamSequence>,

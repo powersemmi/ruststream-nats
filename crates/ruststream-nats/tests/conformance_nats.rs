@@ -19,7 +19,7 @@
 
 use ruststream::conformance::{capabilities, harness};
 use ruststream_nats::testing::NatsTestBroker;
-use ruststream_nats::{NatsBroker, NatsPublish, SubscribeOptions};
+use ruststream_nats::{CoreSubject, NatsBroker, NatsPublish};
 
 mod live;
 
@@ -39,7 +39,7 @@ async fn passes_lifecycle() {
     };
     harness::lifecycle(
         || NatsBroker::new(url.clone()),
-        |subject| SubscribeOptions::new(subject),
+        |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
     )
     .await;
@@ -53,7 +53,7 @@ async fn passes_request_reply() {
     };
     capabilities::request_reply(
         || NatsBroker::new(url.clone()),
-        |subject| SubscribeOptions::new(subject),
+        |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
         |connected| connected.publisher(NatsPublish),
     )
@@ -68,7 +68,7 @@ async fn passes_batches() {
     };
     capabilities::batches(
         || NatsBroker::new(url.clone()),
-        |subject| SubscribeOptions::new(subject),
+        |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
     )
     .await;

@@ -7,6 +7,7 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::{PullConsumer, pull::Config as ConsumerConfig};
@@ -16,7 +17,7 @@ use ruststream::{Broker, ConnectedBroker, DefaultPublish, DescribeServer, Server
 use crate::{
     error::NatsError,
     publisher::{NatsPublish, NatsPublishPolicy},
-    subscribe_options::SubscribeOptions,
+    subject::{CoreSubject, NatsSubscription, SubscriptionPlan},
     subscriber::NatsSubscriber,
 };
 
@@ -179,7 +180,7 @@ impl DescribeServer for NatsBroker {
 /// The typed witness that [`Broker::connect`] succeeded: holds the live connection.
 ///
 /// Everything connection-bound hangs off this value: subscriptions ([`Subscribe`],
-/// [`SubscribeOptions`]) and publishers ([`publisher`](Self::publisher)).
+/// [`CoreSubject`]) and publishers ([`publisher`](Self::publisher)).
 /// [`ConnectedBroker::shutdown`] consumes it, so a publish or subscribe after shutdown is a
 /// compile error for the owner of the handle.
 #[derive(Debug)]
@@ -251,30 +252,55 @@ impl ConnectedNatsBroker {
         &self.connection
     }
 
-    /// Opens a subscription described by `opts`. Selects Core or `JetStream` based on whether
-    /// [`SubscribeOptions::jetstream`] was called.
+    /// Opens the subscription `source` describes: a Core subscription for [`CoreSubject`], a pull
+    /// consumer for [`JetStreamSubject`](crate::JetStreamSubject).
     ///
     /// # Errors
     ///
-    /// Returns [`NatsError::InvalidOptions`] when `opts` mixes Core and `JetStream` fields
-    /// incompatibly, [`NatsError::Subscribe`] when the broker rejects a Core subscription, or
-    /// [`NatsError::JetStream`] when the `JetStream` stream or consumer cannot be resolved.
-    pub async fn subscribe_with(
+    /// Returns [`NatsError::InvalidOptions`] when the subject is empty, [`NatsError::Subscribe`]
+    /// when the broker rejects a Core subscription, or [`NatsError::JetStream`] when the
+    /// `JetStream` stream or consumer cannot be resolved.
+    pub async fn subscribe_with<S: NatsSubscription>(
         &self,
-        opts: SubscribeOptions,
+        source: S,
     ) -> Result<NatsSubscriber, NatsError> {
-        opts.validate()?;
-        if opts.is_jetstream() {
-            self.subscribe_jetstream(opts).await
-        } else {
-            self.subscribe_core(opts).await
+        source.ensure_subject()?;
+        let subject = source.subject();
+        match source.plan() {
+            SubscriptionPlan::Core { queue_group } => {
+                self.subscribe_core(subject, queue_group).await
+            }
+            SubscriptionPlan::JetStream {
+                stream,
+                durable,
+                filter_subject,
+                ack_wait,
+                max_ack_pending,
+                deliver_policy,
+                pull_expires,
+            } => {
+                let consumer_cfg = ConsumerConfig {
+                    durable_name: durable.map(str::to_owned),
+                    filter_subject: filter_subject.to_owned(),
+                    max_ack_pending,
+                    ack_wait,
+                    deliver_policy,
+                    ..Default::default()
+                };
+                self.subscribe_jetstream(subject, stream, consumer_cfg, pull_expires)
+                    .await
+            }
         }
     }
 
-    async fn subscribe_core(&self, opts: SubscribeOptions) -> Result<NatsSubscriber, NatsError> {
-        let client = self.connection.live_client(opts.subject())?;
-        let subject = opts.subject().to_owned();
-        let inner = if let Some(queue) = opts.queue_group_ref() {
+    async fn subscribe_core(
+        &self,
+        subject: &str,
+        queue_group: Option<&str>,
+    ) -> Result<NatsSubscriber, NatsError> {
+        let client = self.connection.live_client(subject)?;
+        let subject = subject.to_owned();
+        let inner = if let Some(queue) = queue_group {
             client
                 .queue_subscribe(subject.clone(), queue.to_owned())
                 .await
@@ -298,27 +324,18 @@ impl ConnectedNatsBroker {
 
     async fn subscribe_jetstream(
         &self,
-        opts: SubscribeOptions,
+        subject: &str,
+        stream_name: &str,
+        consumer_cfg: ConsumerConfig,
+        pull_expires: Duration,
     ) -> Result<NatsSubscriber, NatsError> {
-        let client = self.connection.live_client(opts.subject())?.clone();
+        let client = self.connection.live_client(subject)?.clone();
         let ctx = jetstream::new(client);
-        let stream_name = opts
-            .stream_ref()
-            .expect("validated jetstream option")
-            .to_owned();
         let stream = ctx
-            .get_stream(&stream_name)
+            .get_stream(stream_name)
             .await
             .map_err(|err| NatsError::JetStream(Box::new(err)))?;
 
-        let consumer_cfg = ConsumerConfig {
-            durable_name: opts.durable_ref().map(str::to_owned),
-            filter_subject: opts.filter_subject_or_default(),
-            max_ack_pending: opts.max_ack_pending_or_default(),
-            ack_wait: opts.ack_wait_or_default(),
-            deliver_policy: opts.deliver_policy_or_default(),
-            ..Default::default()
-        };
         let consumer: PullConsumer = stream
             .create_consumer(consumer_cfg)
             .await
@@ -329,11 +346,11 @@ impl ConnectedNatsBroker {
             .map_err(|err| NatsError::JetStream(Box::new(err)))?;
 
         Ok(NatsSubscriber::from_jetstream(
-            opts.subject().to_owned(),
-            stream_name,
+            subject.to_owned(),
+            stream_name.to_owned(),
             messages,
             consumer,
-            opts.pull_expires_or_default(),
+            pull_expires,
         ))
     }
 }
@@ -366,7 +383,7 @@ impl Subscribe for ConnectedNatsBroker {
     type Subscriber = NatsSubscriber;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
-        self.subscribe_with(SubscribeOptions::new(name)).await
+        self.subscribe_with(CoreSubject::new(name)).await
     }
 }
 

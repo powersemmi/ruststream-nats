@@ -104,7 +104,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-hack
-        uses: taiki-e/install-action@v2.87.6
+        uses: taiki-e/install-action@v2.87.7
         with:
           tool: cargo-hack
 
@@ -181,7 +181,7 @@ jobs:
           workspaces: ruststream-nats
 
       - name: Install cargo-generate
-        uses: taiki-e/install-action@v2.87.6
+        uses: taiki-e/install-action@v2.87.7
         with:
           tool: cargo-generate
 
@@ -276,7 +276,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2.87.6
+        uses: taiki-e/install-action@v2.87.7
         with:
           tool: cargo-deny
 

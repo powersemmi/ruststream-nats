@@ -3,7 +3,8 @@
 **`ruststream-nats`** subscribes a [RustStream](https://powersemmi.github.io/ruststream/) service to
 NATS subjects and publishes messages to them. A handler binds to a Core NATS subject or to a
 JetStream consumer. NATS matches replies to requests, so a service can send a request and wait for
-the answer.
+the answer. A JetStream publish states what it expects of the stream, and the stream refuses it when
+that does not hold.
 
 The `testing` feature runs a service's handlers in process, with no NATS server.
 

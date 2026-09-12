@@ -12,6 +12,10 @@
 //! The third answers each order with a `Confirmation`, and its mount sends that reply through the
 //! `JetStream` policy into a second stream, while everything else here publishes over Core NATS.
 //!
+//! The fourth keeps an archive copy under a deduplication id, so a redelivered order is stored
+//! once. That id describes the message rather than the publisher, so the body writes it as a step
+//! on its publish - the one reason a handler body here names this crate's prelude.
+//!
 //! The seed publish rides [`JetStreamPublish`]: unlike the Core policy it waits for the stream's
 //! acknowledgement, so a message the stream refuses (unknown stream, violated expectation) is an
 //! error rather than a silent drop.
@@ -24,6 +28,7 @@
 //! ```text
 //! nats stream add ORDERS --subjects 'orders.*' --defaults
 //! nats stream add CONFIRMATIONS --subjects 'confirmations' --defaults
+//! nats stream add ARCHIVE --subjects 'archive.orders' --defaults
 //! cargo run --example nats_jetstream -- run
 //! ```
 //!
@@ -81,6 +86,43 @@ async fn confirm(order: &Order) -> Confirmation {
 }
 // --8<-- [end:reply]
 
+// --8<-- [start:options]
+/// The copy of an order kept in the archive stream. Its subject is outside the `ORDERS` filter on
+/// purpose: a copy the consumer picked up again would archive itself forever.
+#[derive(Debug, Serialize, Outgoing)]
+#[outgoing(name = "archive.orders")]
+struct Archived {
+    id: u64,
+}
+
+/// The slot the archive copy leaves through.
+#[derive(OutSlot)]
+#[publishes(Archived)]
+struct Archive;
+
+/// Archives every order under a deduplication id, so a redelivered order is stored once.
+///
+/// The body names a JetStream step, so it imports this crate's prelude and says which options
+/// type its slot carries. Every other body in this file names capabilities alone.
+#[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("orders-archiver"))]
+async fn archive(
+    order: &Order,
+    Out(out): Out<impl Publisher<Options = JetStreamOptions>, Archive>,
+) -> HandlerOutcome {
+    let archived = Archived { id: order.id };
+    if out
+        .message(&archived)
+        .message_id(format!("order-{}", order.id))
+        .publish()
+        .await
+        .is_err()
+    {
+        return HandlerOutcome::retry();
+    }
+    HandlerOutcome::ack()
+}
+// --8<-- [end:options]
+
 #[ruststream::app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
@@ -105,6 +147,17 @@ fn app() -> impl App {
                 JetStreamPublish::default().expect_stream("CONFIRMATIONS"),
             );
             // --8<-- [end:reply_mount]
+
+            // --8<-- [start:options_mount]
+            // The mount site says which stream the archive copies belong to. What each copy states
+            // about itself - here its deduplication id - is the body's word, not this one's.
+            b.include(archive)
+                .out(
+                    Archive,
+                    JetStreamPublish::default().expect_stream("ARCHIVE"),
+                )
+                .build();
+            // --8<-- [end:options_mount]
 
             // --8<-- [start:publish]
             b.after_startup(

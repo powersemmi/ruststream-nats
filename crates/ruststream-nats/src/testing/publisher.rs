@@ -234,7 +234,7 @@ impl RequestReply for NatsTestPublisher {
 ///   server's half, and there is no stream in process to check against: a publish that violates
 ///   one succeeds here where a server would refuse it, so an optimistic-concurrency chain built
 ///   on them proves nothing until it runs against a server. That is what
-///   `the_stream_checks_the_expectations_the_publish_policy_declares` in
+///   `the_stream_checks_the_expectations_a_publish_states` in
 ///   `tests/integration_nats.rs` covers.
 ///
 /// # Examples

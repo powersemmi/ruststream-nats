@@ -154,7 +154,7 @@ impl JetStreamFixture {
 // in-process transport can neither produce the one nor refuse on the other - it routes and says
 // so. This is where a violated expectation is proved to be refused rather than written.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_stream_checks_the_expectations_the_publish_policy_declares() {
+async fn the_stream_checks_the_expectations_a_publish_states() {
     let Some(fx) = JetStreamFixture::open("expect").await else {
         return;
     };

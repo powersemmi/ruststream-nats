@@ -24,11 +24,15 @@ it needs (`Out<impl Publisher>`, `Out<impl RequestReply>`). Such a body names no
 handler mounts on a real server and on the in-process transport unchanged.
 
 A routes file writes `ruststream_nats::prelude::*`. The crate prelude re-exports the framework one
-and adds this crate's broker, its subscription descriptor and its publish policies. Their mount-site
-names are the same on every broker: `Publish` is plain publishing on whatever transport the file
-mounts.
+and adds this crate's broker, its two subscription descriptors and its publish policies. Their
+mount-site names are the same on every broker: `Publish` is plain publishing on whatever transport
+the file mounts.
 
 A single-file service is both, so it takes the broker prelude.
+
+One kind of handler body takes the broker prelude too: one that sets a per-message JetStream
+setting. See
+[what one JetStream message states about itself](#what-one-jetstream-message-states-about-itself).
 
 ## The lifecycle
 
@@ -121,7 +125,15 @@ server holds the message for that long and then redelivers it on the same consum
 sequence and its delivery count intact.
 
 Core NATS has no acknowledgement at all: a core delivery returns `AckError::Unsupported`, and a
-`retry_after` there falls back to the runtime's deferred re-publish.
+`retry_after` there falls back to the runtime's deferred re-publish. That fallback needs somewhere
+to send the copy, and a subscription answers with the subject it reads: the subject itself for a
+Core subscription, the consumer's filter for a JetStream one. So `BrokerScope::retry_via` works on
+this broker with no extra wiring.
+
+A wildcard is the exception. `orders.*` matches on delivery and is refused on publish, so a
+subscription opened on a pattern reports no address, and a scope wired with `retry_via` over one
+refuses to start rather than sending copies into nothing. Give such a handler a concrete subject, or
+read it through JetStream, where `retry_after` is the server's own delayed negative acknowledgement.
 
 ## Publishing
 
@@ -134,9 +146,8 @@ Naming a publish policy picks the transport:
 - `JetStreamPublish` constructs `JetStreamPublisher`: every publish waits for the stream's
   acknowledgement, so a message the stream refuses returns an error instead of dropping silently.
   `publish_ack` returns the acknowledgement itself: the stream, the sequence, and whether the
-  deduplication window recognised the message. The policy also carries the expectations the server
-  checks before it accepts a publish: `expect_stream`, `expect_last_sequence`,
-  `expect_last_subject_sequence`, `expect_last_message_id`.
+  deduplication window recognised the message. The policy also names the stream the subject must be
+  served by, with `expect_stream`, and a publish routed elsewhere is refused.
 
 A handler on a JetStream consumer replies by returning a value:
 
@@ -157,9 +168,43 @@ Outside a handler the same policy constructs a publisher at startup:
 --8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:publish"
 ```
 
-Every NATS publish option this crate exposes belongs to the publisher for its whole lifetime, so you
-set it on the policy value you pass to `.out(..)`. The `JetStreamPublish` stream expectations are
-the case to look at.
+### What one JetStream message states about itself
+
+A deduplication id and an expected position in the stream describe one message, not a publisher, so
+they travel with the publish. `JetStreamOptions` is the value that carries them, and the publish
+builder writes it:
+
+| Step | Protocol field | What the server does with it |
+| --- | --- | --- |
+| `message_id(id)` | `Nats-Msg-Id` | Stores a repeat inside the deduplication window once. |
+| `expect_last_sequence(n)` | `Nats-Expected-Last-Sequence` | Refuses the publish unless the stream is at `n`. |
+| `expect_last_subject_sequence(n)` | `Nats-Expected-Last-Subject-Sequence` | The same, for this message's own subject. |
+| `expect_last_message_id(id)` | `Nats-Expected-Last-Msg-Id` | Refuses the publish unless the stream's last `Nats-Msg-Id` is `id`. |
+
+A body calls a step on the publish builder:
+
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:options"
+```
+
+This is the one place a handler body names a broker. The steps come from `ruststream_nats::prelude`
+and the slot is bounded `Out<impl Publisher<Options = JetStreamOptions>, Archive>`, so the signature
+says out loud that the body is written for JetStream. A body that publishes without a step keeps the
+framework prelude and mounts on any broker.
+
+The mount site still names the policy, and the two do not overlap: the stream a publisher writes to
+is the mount's word, what one message claims about the stream's state is the body's.
+
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:options_mount"
+```
+
+A step is a position on the builder, not a wrapper around the publisher, so the publish it finishes
+still goes out through the mount site's own entry, with the codec that entry named.
+
+Core NATS has no per-message setting of its own: a Core message is a subject, a payload and headers,
+so `NatsPublisher` declares `Options = ()` and the steps above are not in scope on a builder over
+it.
 
 ## Request-reply
 
@@ -208,7 +253,7 @@ through, and the harness reports what the handler received, what it published an
 settled. See
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
-Five NATS-specific things hold in process, so a handler that uses them is testable without a
+Six NATS-specific things hold in process, so a handler that uses them is testable without a
 server:
 
 - A `JetStreamSubject` source resolves here too; the subject pattern drives routing.
@@ -226,6 +271,25 @@ server:
   transport's own to swap in. Each live form carries exactly the capabilities its production
   counterpart carries - `Publisher` and `RequestReply` for Core, `Publisher` alone for
   `JetStream` - so a slot that compiles here compiles against a server too.
+- What one message states about itself arrives. The steps write the same `JetStreamOptions` here,
+  and the transport turns it into the same protocol headers the real client writes, so a test reads
+  either side:
+
+    ```rust
+    tb.out::<Archive>()
+        .assert_called_once()
+        .with_options(&JetStreamOptions {
+            message_id: Some("order-7".into()),
+            ..JetStreamOptions::default()
+        });
+    tb.broker::<NatsTestBroker>()
+        .published::<Archived>("archive.orders")
+        .assert_called_once()
+        .with_header("Nats-Msg-Id", "order-7");
+    ```
+
+    `assert_options_default()` is the mirror assertion, for a publish that named no step.
+
 - A handler that binds native `JetStream` metadata with a `ruststream_nats::context` key mounts,
   and every key reads `None`, exactly as on a core delivery.
 - `HandlerOutcome::retry_after(delay)` becomes a delayed redelivery whose timer the harness owns,
@@ -234,12 +298,11 @@ server:
 `JetStream` semantics themselves (the durable's cursor and its resume, `ack_wait` redelivery,
 retention, what the metadata and the server-side delay actually do) are not simulated; test them
 against a real server, gated behind `NATS_TEST_URL`. What a shared durable reproduces is that its
-subscriptions compete, not where the consumer left off. On the publish side that exclusion is the stream: the in-process
-transport is one Core subject-matching fabric, so a `JetStreamPublish` mount routes but there is no
-acknowledgement to await and no stream state to check the policy's expectations (`expect_stream`,
-`expect_last_sequence`, `expect_last_subject_sequence`, `expect_last_message_id`) against. A publish
-that violates one succeeds here where a server would reject it, so an optimistic-concurrency chain
-built on those expectations proves nothing until it runs live.
+subscriptions compete, not where the consumer left off. On the publish side that exclusion is the
+stream: the in-process transport is one Core subject-matching fabric, so a `JetStreamPublish` mount
+routes, but there is no acknowledgement to await and no stream state to check an expectation
+against. A publish that violates one succeeds here where a server would reject it, so an
+optimistic-concurrency chain proves nothing until it runs live.
 
 For how this broker implements the contract from the inside, read the
 [worked example](https://powersemmi.github.io/ruststream/latest/broker-authors/example-nats/) in

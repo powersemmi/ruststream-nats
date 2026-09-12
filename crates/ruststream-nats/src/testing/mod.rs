@@ -25,13 +25,14 @@
 //! No `nats-server`, no docker, no network. Broker-specific edge cases (the `JetStream` durable's
 //! cursor and its resume, `ack_wait` redelivery, `max_ack_pending`, retention) are out of scope
 //! here - what a shared durable reproduces is that its subscriptions compete, not where the
-//! consumer left off. Exercise the rest against a real NATS server. On the publish side that exclusion is the
-//! `JetStream` stream itself: the publish acknowledgement and the expectations
-//! [`JetStreamPublish`](crate::JetStreamPublish) declares are server-side checks with no stream
-//! in process to check them against, so a publish that violates one succeeds here where a server
-//! would refuse it. Assert that against a real server, as
-//! `the_stream_checks_the_expectations_the_publish_policy_declares` in
-//! `tests/integration_nats.rs` does. [`JetStreamTestPublisher`] repeats the list on the type.
+//! consumer left off. Exercise the rest against a real NATS server. On the publish side that
+//! exclusion is the `JetStream` stream itself: the publish acknowledgement, and whether an
+//! expectation holds. The settings themselves do arrive - the policy's `expect_stream` and every
+//! [`JetStreamOptions`](crate::JetStreamOptions) field reach the message as the protocol headers
+//! the real client writes - but checking them is the server's half, and a publish that violates
+//! one succeeds here where a server would refuse it. Assert that against a real server, as
+//! `the_stream_checks_the_expectations_a_publish_states` in `tests/integration_nats.rs` does.
+//! [`JetStreamTestPublisher`] repeats the list on the type.
 
 mod broker;
 mod publisher;

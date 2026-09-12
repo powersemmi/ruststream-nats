@@ -28,8 +28,9 @@
 - **Core NATS and JetStream, one subject type each.** `CoreSubject` subscribes to a subject and load-balances it across a queue group; `JetStreamSubject` reads one through a pull consumer (durable name, filter subject, ack wait, max ack pending, deliver policy, fetch window). Each setting lives on the one model that has it, so asking Core NATS for a durable name does not compile.
 - **Batches on either transport.** A handler taking `&[T]` names one number at the mount site, the batch size (`b.include(archive.batch(nonzero!(6)))`); omitting it on a batch handler is a compile error that says so. On JetStream that number is the pull request's batch size; on Core NATS, which has no wire-level batch, the batches are assembled on the client. Either way the body sees the batch the subscription delivered, never a slice of it, and the mount reads the same.
 - **A typed lifecycle.** `NatsBroker::new(url)` is synchronous and does no I/O, so the broker composes with `#[ruststream::app]`; the runtime dials once at startup through the consuming `connect`, which yields the `ConnectedNatsBroker` that carries the whole subscribe and publish surface. `shutdown` consumes that in turn, so a publish or subscribe after shutdown does not compile. Client tuning (credentials, TLS) rides `NatsBroker::with_options`; an already-connected client plugs in via `ConnectedNatsBroker::from_client`.
-- **Publishing split by transport.** `NatsPublish` pairs into the Core NATS publisher (fire-and-forget, plus `RequestReply`) and is the broker's default policy, so a reply left unnamed goes out over Core NATS; `JetStreamPublish` pairs into the JetStream publisher, which awaits the stream's acknowledgement and can declare stream expectations.
-- **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively, delayed redelivery included: a handler's `HandlerOutcome::retry_after(delay)` becomes JetStream's own delayed negative acknowledgement, so the server holds the message and redelivers it with its stream sequence and delivery count intact - no re-publish, no copy. Core NATS has no acknowledgement at all, so a core delivery reports `AckError::Unsupported` rather than silently succeeding.
+- **Publishing split by transport.** `NatsPublish` pairs into the Core NATS publisher (fire-and-forget, plus `RequestReply`) and is the broker's default policy, so a reply left unnamed goes out over Core NATS; `JetStreamPublish` pairs into the JetStream publisher, which awaits the stream's acknowledgement and names the stream its subject must be served by.
+- **Per-message JetStream settings on the publish builder.** A deduplication id and the three position expectations describe one message, not a publisher, so `message_id`, `expect_last_sequence`, `expect_last_subject_sequence` and `expect_last_message_id` are steps on the publish the body writes. They reach the server as its own protocol fields, never as headers a handler has to parse back. Core NATS has no per-message setting, so those steps are not in scope on a Core publisher.
+- **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively, delayed redelivery included: a handler's `HandlerOutcome::retry_after(delay)` becomes JetStream's own delayed negative acknowledgement, so the server holds the message and redelivers it with its stream sequence and delivery count intact - no re-publish, no copy. Core NATS has no acknowledgement at all, so a core delivery reports `AckError::Unsupported`, and a delayed retry falls back to the framework's deferred re-publish, which a subscription on a concrete subject tells where to send the copy.
 - **In-process test broker.** The `testing` feature ships `NatsTestBroker`, a handler-stub transport that follows the same ladder and reproduces Core routing with real subject wildcards (no server, no JetStream simulation). A service mounts on it and runs under the `TestApp` harness, and it answers the way the real transport does, which the crate's own tests hold it to.
 
 ## Install
@@ -138,18 +139,39 @@ b.after_startup(Publish, async move |publisher| -> Result<(), NatsError> {
     Ok(())
 });
 
-// JetStream: each publish waits for the stream's acknowledgement, and the policy states
-// what the stream must look like for the message to be accepted.
+// JetStream: each publish waits for the stream's acknowledgement, and the policy names the
+// stream the subject must be served by.
 b.after_startup(
     JetStreamPublish::default().expect_stream("ORDERS"),
     async move |publisher| -> Result<(), NatsError> {
         let ack = publisher
-            .publish_ack(OutgoingMessage::new("orders.created", br#"{"id":1}"#))
+            .publish_ack(OutgoingMessage::new("orders.created", br#"{"id":1}"#), None)
             .await?;
         println!("stored in {} at sequence {}", ack.stream, ack.sequence);
         Ok(())
     },
 );
+```
+
+What one JetStream message states about itself - a `Nats-Msg-Id` for the deduplication window, an expected position in the stream - is not a property of the publisher, so it rides the publish instead. The steps come from this crate's prelude, and a body that calls one says so in its signature:
+
+```rust
+#[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("orders-archiver"))]
+async fn archive(
+    order: &Order,
+    Out(out): Out<impl Publisher<Options = JetStreamOptions>, Archive>,
+) -> HandlerOutcome {
+    if out
+        .message(&Archived { id: order.id })
+        .message_id(format!("order-{}", order.id))
+        .publish()
+        .await
+        .is_err()
+    {
+        return HandlerOutcome::retry();
+    }
+    HandlerOutcome::ack()
+}
 ```
 
 ## Test it

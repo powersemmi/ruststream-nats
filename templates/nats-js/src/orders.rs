@@ -14,8 +14,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// An order placed on the `orders` subject.
-///
-/// `JsonSchema` lets `asyncapi gen` emit this payload's schema into the generated document.
+// Rustdoc on a payload type and on a handler is copied into the generated AsyncAPI document, where
+// the reader is whoever integrates with this service. Keep it about the data and the operation;
+// notes about the framework belong in a plain comment like this one, which `asyncapi gen` and
+// `JsonSchema` both ignore.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct Order {
     pub id: u64,
@@ -31,12 +33,10 @@ pub struct Confirmation {
     pub accepted: bool,
 }
 
-/// Confirms an incoming order and publishes a `Confirmation` to `confirmations`.
-///
-/// The `JetStreamSubject` binds this handler to a durable pull consumer on the `ORDERS` stream.
-/// The return value is the reply: `Confirmation` declares `confirmations` as its destination, and
-/// the `publish` clause makes the runtime encode it and send it through the publisher wired in
-/// `routes`.
+/// Accepts an order and answers with a confirmation carrying the same identifier.
+// The `JetStreamSubject` binds this handler to a durable pull consumer on the `ORDERS` stream.
+// The returned value is the reply: `Confirmation` declares its own destination, so the clause is
+// the bare `publish`; the publisher that carries it is named in `routes`.
 #[subscriber(
     JetStreamSubject::new("orders.*", "ORDERS").durable("{{project-name}}-worker"),
     publish
@@ -48,7 +48,9 @@ pub async fn confirm(order: &Order) -> Confirmation {
     }
 }
 
-/// Logs cancellations, bound by plain name. No reply, so it returns a plain `HandlerOutcome`.
+/// Records that an order was cancelled. Nothing is sent back.
+// Bound by plain name, not through JetStream. No reply, so the body returns a plain
+// `HandlerOutcome` and the mount needs no publisher.
 #[subscriber("cancellations")]
 pub async fn on_cancel(order: &Order) -> HandlerOutcome {
     println!("order {} ({}) cancelled", order.id, order.item);

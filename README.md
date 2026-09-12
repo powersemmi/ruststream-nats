@@ -94,8 +94,8 @@ Two vocabularies, one per file. A **handler file** names capabilities and import
 `ruststream::prelude::*`: it bounds an injected publisher with the trait it needs
 (`Out<impl Publisher>`, `Out<impl RequestReply>`) and never says which broker fills it. A **routes
 file** names policies and imports `ruststream_nats::prelude::*`, which re-exports the framework
-prelude and adds this crate's broker (`NatsBroker`), its subscription descriptor
-(`SubscribeOptions`) and its publish policies under uniform mount-site names - `Publish` is
+prelude and adds this crate's broker (`NatsBroker`), its subscription descriptors (`CoreSubject`,
+`JetStreamSubject`) and its publish policies under uniform mount-site names - `Publish` is
 whatever plain publishing is on this transport, here Core NATS. A single-file service like the one
 above is both, so it takes the broker prelude; the snippets below continue that file.
 

@@ -140,6 +140,20 @@ impl IncomingMessage for NatsMessage {
         }
     }
 
+    /// How many times the server has delivered this message, counting this one.
+    ///
+    /// A `JetStream` consumer keeps that count and reports it on every delivery, so a cap
+    /// declared at the mount site counts the server's own redeliveries - an `ack_wait` that ran
+    /// out, a negative acknowledgement - and not only the copies this process published. Core
+    /// NATS neither stores a message nor redelivers one, so a core delivery has no count and the
+    /// framework's retry-count header is the whole tally.
+    fn redelivery_count(&self) -> Option<u64> {
+        match self {
+            Self::Core(_) => None,
+            Self::JetStream(m) => m.info().map(|info| info.delivered.unsigned_abs()),
+        }
+    }
+
     /// Whether this delivery can honor a native delayed redelivery.
     ///
     /// `true` for every `JetStream` delivery: the protocol carries the delay in the negative

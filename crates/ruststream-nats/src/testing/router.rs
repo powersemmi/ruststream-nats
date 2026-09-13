@@ -33,6 +33,10 @@ pub(crate) struct Delivery {
     pub(crate) subject: String,
     pub(crate) payload: Bytes,
     pub(crate) headers: HeaderMap,
+    /// How many times this message has been handed to its subscription, counting this one. A
+    /// `JetStream` consumer keeps such a count on the server, so the stand-in keeps one too and a
+    /// declared cap reads the same number in process as it does against a stream.
+    pub(crate) delivered: u64,
 }
 
 pub(crate) type DeliverySender = mpsc::UnboundedSender<Delivery>;
@@ -191,6 +195,7 @@ impl SubjectRouter {
             subject,
             payload,
             headers,
+            delivered: 1,
         };
         for tx in to_notify {
             let sent = tx.send(delivery.clone());

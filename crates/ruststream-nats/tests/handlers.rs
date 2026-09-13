@@ -463,6 +463,50 @@ async fn a_capped_pattern_takes_its_destination_from_the_mount_site() {
     tb.shutdown().await.expect("shutdown");
 }
 
+/// The same handler on a stream consumer, where the server holds the message and counts its own
+/// redeliveries.
+#[subscriber(JetStreamSubject::new("js.capped", "ORDERS").durable("worker"))]
+async fn never_ready_stream(order: &Order) -> HandlerOutcome {
+    let _ = order.id;
+    HandlerOutcome::retry_after(RETRY_DELAY)
+}
+
+/// A consumer takes the delay in its negative acknowledgement, so nothing is published back to the
+/// subject and the cap counts the server's own deliveries rather than copies. The delivery that
+/// reaches the cap is the one that leaves for the dead-letter subject.
+#[tokio::test(start_paused = true)]
+async fn a_capped_consumer_counts_the_deliveries_the_server_made() {
+    let app =
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
+            b.include(never_ready_stream)
+                .max_attempts(nonzero!(2u32))
+                .dead_letter("js.dead");
+        });
+    let tb = TestApp::start(app).await.expect("start");
+
+    tb.message(&Order { id: 11 })
+        .to("js.capped")
+        .publish()
+        .await
+        .expect("publish");
+    tb.advance(RETRY_DELAY).await.expect("advance");
+
+    tb.broker::<NatsTestBroker>()
+        .subscriber("js.capped")
+        .assert_called(2);
+    // Held by the consumer, not republished: the subject saw the test's own publish and nothing
+    // else.
+    tb.broker::<NatsTestBroker>()
+        .published::<Order>("js.capped")
+        .assert_called_once();
+    tb.broker::<NatsTestBroker>()
+        .published::<Order>("js.dead")
+        .assert_called_once()
+        .with(&Order { id: 11 });
+
+    tb.shutdown().await.expect("shutdown");
+}
+
 /// A pattern that names nowhere for its copies is refused at startup, so the service says so
 /// instead of dropping every delayed message once it is running.
 #[tokio::test(start_paused = true)]

@@ -239,6 +239,11 @@ async fn a_nacked_delivery_returns_with_its_delivery_count_raised() {
         let mut stream = std::pin::pin!(consumer.stream());
         let first = next_delivery(&mut stream, WAIT).await;
         assert_eq!(first.payload(), b"retry-me");
+        assert_eq!(
+            first.redelivery_count(),
+            Some(1),
+            "a first delivery counts as one attempt",
+        );
         first.nack(true).await.expect("nack failed");
 
         let again = next_delivery(&mut stream, WAIT).await;
@@ -251,6 +256,13 @@ async fn a_nacked_delivery_returns_with_its_delivery_count_raised() {
             keys::DELIVERED.get(&JetStreamContext::build(&again)),
             Some(2),
             "the server must report the redelivery as the second attempt",
+        );
+        // The same number the framework reads to enforce a declared cap, so a cap on a consumer
+        // counts what the server did and not only what this process republished.
+        assert_eq!(
+            again.redelivery_count(),
+            Some(2),
+            "the count a declared cap reads must be the server's own",
         );
         again.ack().await.expect("ack failed");
     }
@@ -390,6 +402,11 @@ async fn a_core_delivery_reports_that_it_cannot_be_acknowledged() {
         let mut stream = std::pin::pin!(subscriber.stream());
         let msg = next_delivery(&mut stream, WAIT).await;
         assert!(!msg.supports_nack_after());
+        assert_eq!(
+            msg.redelivery_count(),
+            None,
+            "core NATS redelivers nothing, so it counts nothing",
+        );
         assert!(
             matches!(msg.ack().await, Err(AckError::Unsupported)),
             "core NATS has no acknowledgement, and the delivery must report that",

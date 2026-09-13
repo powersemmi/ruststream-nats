@@ -203,11 +203,21 @@ impl IncomingMessage for NatsTestMessage {
         ready(Ok(()))
     }
 
+    /// The count a `JetStream` consumer keeps on the server: `1` on the first delivery, one more
+    /// on every redelivery. A Core subscription has none, exactly as a core delivery has none.
+    fn redelivery_count(&self) -> Option<u64> {
+        match self.model {
+            DeliveryModel::Core => None,
+            DeliveryModel::JetStream => self.delivery.as_ref().map(|delivery| delivery.delivered),
+        }
+    }
+
     fn nack(mut self, requeue: bool) -> impl Future<Output = Result<(), AckError>> {
-        let delivery = self
+        let mut delivery = self
             .delivery
             .take()
             .expect("NatsTestMessage ack/nack invoked twice");
+        delivery.delivered += 1;
         if requeue {
             let sent = self.requeue.send(delivery);
             // The requeue bypasses fanout, so count the re-enqueue here to balance this message's
@@ -240,10 +250,11 @@ impl IncomingMessage for NatsTestMessage {
     /// stream sequence and delivery count intact) is a `JetStream` behaviour and is asserted
     /// against a real server.
     fn nack_after(mut self, delay: Duration) -> impl Future<Output = Result<(), AckError>> {
-        let delivery = self
+        let mut delivery = self
             .delivery
             .take()
             .expect("NatsTestMessage ack/nack invoked twice");
+        delivery.delivered += 1;
         if matches!(self.model, DeliveryModel::Core) {
             return ready(Err(AckError::Unsupported));
         }

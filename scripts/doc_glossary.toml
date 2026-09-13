@@ -295,6 +295,23 @@ ru = "инбокс"
 ru_match = "инбокс"
 zh = "inbox"
 
+# Where a delivery goes when its attempts run out. The core's translated guides call it this,
+# and the crate's pages say the same thing about the same mechanism.
+[[term]]
+en = "dead letter"
+en_match = "dead[- ]letter"
+ru = "мёртвые письма"
+ru_match = "м[ёе]ртв\\w* пис(ьм|ем)"
+zh = "死信"
+
+# NATS's load balancing: the server hands each message to one member of the group.
+[[term]]
+en = "queue group"
+en_match = "queue groups?"
+ru = "очередь"
+ru_match = "очеред"
+zh = "队列"
+
 [[term]]
 en = "wildcard"
 en_match = "wildcards?"

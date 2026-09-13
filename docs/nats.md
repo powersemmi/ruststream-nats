@@ -66,6 +66,13 @@ Mount it inside `with_broker`:
 --8<-- "crates/ruststream-nats/examples/nats_core.rs:app"
 ```
 
+`CoreSubject` is the same subscription with the settings Core NATS has, which is one: a queue group
+that hands each message to one member instead of all of them. Reading many subjects at once is
+`CoreWildcard::new("orders.*")`, which takes the same queue group and accepts the `*` and `>`
+wildcards. The two are separate types because a pattern cannot be published to, and that is what
+decides where a delayed retry goes; see [Acknowledgement and delayed
+retry](#acknowledgement-and-delayed-retry).
+
 ## JetStream durable consumer
 
 To consume from JetStream instead, name the source in the `#[subscriber(..)]` attribute with
@@ -126,25 +133,51 @@ server holds the message for that long and then redelivers it on the same consum
 sequence and its delivery count intact.
 
 Core NATS has no acknowledgement at all: a core delivery returns `AckError::Unsupported`, and a
-`retry_after` there falls back to the runtime's deferred re-publish. The registration names the
-publisher that copy goes out through, one call per mount: `b.include(reconcile).out_retry(Publish)`.
-Where it lands is the subscription's own answer, the subject it reads: the subject itself for a Core
-subscription, the consumer's filter for a JetStream one. Nothing else is wired.
+`retry_after` there becomes a copy - once the delay is over, the framework publishes the message
+again.
 
-Bind the position wherever a Core handler defers. Left unbound, the runtime has only an immediate
-requeue to fall back on, and Core NATS does not have one either, so the message is gone and the log
-says so.
+How many deliveries one message gets, and where it goes when they run out, is declared at the mount
+site:
 
-The retry position is an `Out` slot like any other, so the steps after it are the slot steps:
-`.transform(..)` stamps every deferred copy, `.map_publisher(..)` sets what the publisher itself
-carries. The copy travels as the bytes the delivery arrived with, so a codec named there encodes
-nothing, and the runtime raises the `x-ruststream-retry-count` header on it before it goes out.
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_retry.rs:declaration"
+```
 
-A wildcard is the exception. `orders.*` matches on delivery and is refused on publish, so a
-subscription opened on a pattern reports no address, and a registration bound with `out_retry` over
-one refuses to start rather than sending copies into nothing. Give such a handler a concrete subject,
-or read it through JetStream, where `retry_after` is the server's own delayed negative
-acknowledgement.
+`max_attempts(n)` counts the first delivery. On a JetStream consumer the number read is the
+server's own, so an `ack_wait` that ran out counts as an attempt; on a Core subject the framework
+counts the copies it published, in the `x-ruststream-retry-count` header. `dead_letter(subject)` is
+where a spent delivery is published, payload and headers as it arrived.
+
+NATS has no dead-letter mechanism of its own. JetStream's `max_deliver` caps deliveries but has
+nowhere to send the last one, so this crate does not map the declaration onto it, and the
+framework's own path applies to both models.
+
+Where a copy goes is the one thing the three subscriptions answer differently:
+
+| Subscription | Reads | Where a copy goes |
+| --- | --- | --- |
+| `CoreSubject` | one subject | that subject |
+| `CoreWildcard` | many subjects | the subject the mount site names |
+| `JetStreamSubject` | a stream, through a consumer | nowhere: the server holds the message |
+
+A pattern is matched on delivery and refused on publish, so a `CoreWildcard` subscription cannot say
+where a copy reaches it again. The mount site says it:
+
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_retry.rs:wildcard"
+```
+
+`.to(subject)` is one fixed subject; a transform declaring `Names` picks one per delivery, from the
+delivery it is a copy of. A registration over a pattern that names neither refuses to start, so the
+service reports it instead of losing every delayed message once it is running.
+
+`out_retry(policy)` names the publisher a copy leaves through, and is only needed where the copies
+need a publisher of their own: without it they go out through the broker's plain publisher. The
+position is an `Out` slot, so the steps after it are the slot steps: `.transform(..)` stamps every
+copy and `.map_publisher(..)` sets what the publisher itself carries. The copy travels as the bytes
+the delivery arrived with, so a codec named there encodes nothing. On a JetStream consumer there
+are no copies at all, and `out_retry` there only names the publisher a spent delivery leaves
+through.
 
 ## Publishing
 
@@ -240,20 +273,62 @@ An incoming request carries its reply inbox in the well-known `reply-to` header,
 reads `ctx.headers().reply_to()` and publishes the answer to that subject through an injected
 publisher.
 
+## The AsyncAPI document
+
+`asyncapi gen` writes the document a service publishes, and the `asyncapi` feature is what lets
+this crate fill in the parts only NATS knows:
+
+```toml
+ruststream-nats = { version = "0.7", features = ["asyncapi"] }
+```
+
+The AsyncAPI specification's `nats` binding has exactly one field: the queue group, on the receive
+operation. A subscription that joins one reports it, and a subscription outside a group leaves the
+document alone rather than adding an empty object:
+
+```rust
+--8<-- "crates/ruststream-nats/tests/asyncapi_nats.rs:queue_group"
+```
+
+Everything a JetStream consumer is configured with has no field in that binding, and the protocol
+keys are a closed list, so it travels under `x-ruststream-jetstream` on the channel. An extension is
+not a binding and carries no `bindingVersion`:
+
+```rust
+--8<-- "crates/ruststream-nats/tests/asyncapi_nats.rs:consumer"
+```
+
+A publisher that requires a stream (`JetStreamPublish::default().expect_stream("ORDERS")`) reports
+that stream under the same key.
+
+A reply says where a client reads the subject an answer goes to. NATS carries a request's inbox in a
+protocol field, which this crate surfaces as the `reply-to` header, so that is the runtime
+expression the document reports - and the channel then carries no address of its own, because the
+address is per request:
+
+```rust
+--8<-- "crates/ruststream-nats/tests/asyncapi_nats.rs:reply_address"
+```
+
+Two things are deliberately absent. Credentials: a password written into `nats://svc:secret@host`
+stops at the connection, and the server the document reports is the host and port alone. The version
+of the NATS client protocol: the server announces it once connected, and the document is built
+before anything is dialled, so it is read from `ConnectedNatsBroker::server_spec` instead.
+
 ## Capabilities
 
 Which of the framework's optional capability traits this broker implements natively:
 
 | Capability | Native | Notes |
 | --- | --- | --- |
-| `Subscribe` | yes | Subscribes by subject through `CoreSubject`; `JetStreamSubject` reads one through a JetStream consumer instead. |
+| `Subscribe` | yes | Subscribes by subject through `CoreSubject`, so a bare `#[subscriber("orders.created")]` is one subject. `CoreWildcard` reads a pattern and `JetStreamSubject` reads a stream through a consumer. |
 | `BatchSubscriber` | yes | On JetStream one batch is one pull `fetch` of up to the mount site's `batch(n)`, bounded by `pull_expires`. Core NATS has no batch on the wire, so the framework's `BufferedSubscriber` adapter assembles one on the client. See [Batches](#batches). |
 | `TransactionalPublisher` | no | Neither model has a multi-message transaction; a JetStream publish is acknowledged one message at a time. |
 | `OwnedTransactions` | no | Same reason: there is no transaction to own. |
 | `RequestReply` | yes | `NatsPublisher` publishes with a native reply inbox and returns the reply. See [Request-reply](#request-reply). |
 | `Partitioned` | yes | NATS has no native partition, so the sender sets the key in the `nats-partition-key` header, and the runtime's `workers(n, by_key)` lanes read it from there. |
 | `Seekable` + `Positioned` | no | `deliver_policy` chooses where a newly created JetStream consumer starts; a live subscription is not repositioned. |
-| `DescribeServer` | yes | Reports the host and port of every configured address, so a credential written into a URL does not reach the AsyncAPI document. |
+| `DescribeServer` | yes | Reports the host and port of every configured address, so a credential written into a URL does not reach the AsyncAPI document. See [The AsyncAPI document](#the-asyncapi-document). |
 
 ## Testing
 
@@ -295,10 +370,12 @@ server:
 - A handler that binds native `JetStream` metadata with a `ruststream_nats::context` key mounts,
   and every key reads `None`, exactly as on a core delivery.
 - A delayed retry takes the path its own model takes. A delivery through a `JetStreamSubject`
-  holds the message back itself; one on a Core subject has no acknowledgement to hold it with, so
-  the copy leaves through the registration's `out_retry` publisher, with the transforms bound
-  there, exactly as it does against a server. Either way the timer belongs to the harness, so
-  `tb.advance(delay)` fires it under a paused clock.
+  holds the message back itself and counts its own deliveries, so a declared cap reads the same
+  number here as against a server; one on a Core subject has no acknowledgement to hold it with,
+  so the copy goes out through the registration's retry publisher, with the transforms bound
+  there. Either way the timer belongs to the harness, so `tb.advance(delay)` fires it under a
+  paused clock, and a spent delivery lands on the declared dead-letter subject where
+  `tb.published::<T>(..)` reads it.
 
 `JetStream` semantics themselves (the durable's cursor and its resume, `ack_wait` redelivery,
 retention, what the metadata and the server-side delay actually do) are not simulated; test them

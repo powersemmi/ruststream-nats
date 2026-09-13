@@ -50,3 +50,6 @@ name = "nats_jetstream"
 
 [[example]]
 name = "nats_request_reply"
+
+[[example]]
+name = "nats_retry"

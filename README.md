@@ -25,12 +25,13 @@
 
 ## Features
 
-- **Core NATS and JetStream, one subject type each.** `CoreSubject` subscribes to a subject and load-balances it across a queue group; `JetStreamSubject` reads one through a pull consumer (durable name, filter subject, ack wait, max ack pending, deliver policy, fetch window). Each setting lives on the one model that has it, so asking Core NATS for a durable name does not compile.
+- **Core NATS and JetStream, a type per subscription.** `CoreSubject` subscribes to one subject and `CoreWildcard` to a pattern, both load-balanced across a queue group; `JetStreamSubject` reads a stream through a pull consumer (durable name, filter subject, ack wait, max ack pending, deliver policy, fetch window). Each setting lives on the one model that has it, so asking Core NATS for a durable name does not compile.
 - **Batches on either transport.** A handler taking `&[T]` names one number at the mount site, the batch size (`b.include(archive.batch(nonzero!(6)))`); omitting it on a batch handler is a compile error that says so. On JetStream that number is the pull request's batch size; on Core NATS, which has no wire-level batch, the batches are assembled on the client. Either way the body sees the batch the subscription delivered, never a slice of it, and the mount reads the same.
 - **A typed lifecycle.** `NatsBroker::new(url)` is synchronous and does no I/O, so the broker composes with `#[ruststream::app]`; the runtime dials once at startup through the consuming `connect`, which yields the `ConnectedNatsBroker` that carries the whole subscribe and publish surface. `shutdown` consumes that in turn, so a publish or subscribe after shutdown does not compile. Client tuning (credentials, TLS) rides `NatsBroker::with_options`; an already-connected client plugs in via `ConnectedNatsBroker::from_client`.
 - **Publishing split by transport.** `NatsPublish` pairs into the Core NATS publisher (fire-and-forget, plus `RequestReply`) and is the broker's default policy, so a reply left unnamed goes out over Core NATS; `JetStreamPublish` pairs into the JetStream publisher, which awaits the stream's acknowledgement and names the stream its subject must be served by.
 - **Per-message JetStream settings on the publish builder.** A deduplication id and the three position expectations describe one message, not a publisher, so `message_id`, `expect_last_sequence`, `expect_last_subject_sequence` and `expect_last_message_id` are steps on the publish the body writes. They reach the server as its own protocol fields, never as headers a handler has to parse back. Core NATS has no per-message setting, so those steps are not in scope on a Core publisher.
-- **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively, delayed redelivery included: a handler's `HandlerOutcome::retry_after(delay)` becomes JetStream's own delayed negative acknowledgement, so the server holds the message and redelivers it with its stream sequence and delivery count intact - no re-publish, no copy. Core NATS has no acknowledgement at all, so a core delivery reports `AckError::Unsupported`, and a delayed retry falls back to the framework's deferred re-publish: the registration names the publisher that copy leaves through with `.out_retry(..)`, and a subscription on a concrete subject tells it where to send the copy.
+- **Acknowledgement that matches the transport.** JetStream deliveries ack/nack natively, delayed redelivery included: a handler's `HandlerOutcome::retry_after(delay)` becomes JetStream's own delayed negative acknowledgement, so the server holds the message and redelivers it with its stream sequence and delivery count intact - no re-publish, no copy. Core NATS has no acknowledgement at all, so a core delivery reports `AckError::Unsupported` and a delayed retry becomes a copy the framework publishes. One subject is a destination, so it takes that copy itself; a pattern is refused on publish, so the mount site names where the copies go and a registration that names nowhere refuses to start. How many deliveries one message gets and where a spent one is published are declared at the mount site (`.max_attempts(n).dead_letter("subject")`), and on a consumer the count read is JetStream's own.
+- **A document that says what NATS knows.** With the `asyncapi` feature a subscription reports its queue group, which is the whole of the specification's `nats` binding, and a consumer reports its stream, durable name, filter, ack window, in-flight cap and deliver policy under `x-ruststream-jetstream`. A reply reports the header a client reads its address from. Credentials in a configuration URL never reach any of it.
 - **In-process test broker.** The `testing` feature ships `NatsTestBroker`, a handler-stub transport that follows the same ladder and reproduces Core routing with real subject wildcards (no server, no JetStream simulation). A service mounts on it and runs under the `TestApp` harness, and it answers the way the real transport does, which the crate's own tests hold it to.
 
 ## Install
@@ -44,6 +45,8 @@ serde = { version = "1", features = ["derive"] }
 [dev-dependencies]
 ruststream-nats = { version = "0.7", features = ["testing"] }
 ```
+
+Add the `asyncapi` feature to fill the generated document with NATS's own vocabulary.
 
 ## Scaffold
 
@@ -96,7 +99,7 @@ Two vocabularies, one per file. A **handler file** names capabilities and import
 (`Out<impl Publisher>`, `Out<impl RequestReply>`) and never says which broker fills it. A **routes
 file** names policies and imports `ruststream_nats::prelude::*`, which re-exports the framework
 prelude and adds this crate's broker (`NatsBroker`), its subscription descriptors (`CoreSubject`,
-`JetStreamSubject`) and its publish policies under uniform mount-site names - `Publish` is
+`CoreWildcard`, `JetStreamSubject`) and its publish policies under uniform mount-site names - `Publish` is
 whatever plain publishing is on this transport, here Core NATS. A single-file service like the one
 above is both, so it takes the broker prelude; the snippets below continue that file.
 
@@ -124,8 +127,8 @@ use ruststream_nats::NatsError;
 
 // One mount verb names every publish position: `.out_reply(..)` for the value a replying
 // handler returns, `.out(Marker, ..)` for an injected publisher's own slot, `.out_retry(..)`
-// for the deferred copy of a delayed retry. A reply position left unnamed takes the broker's
-// default policy, which here is the Core NATS one.
+// for the copy of a delayed retry. Every position left unnamed takes the broker's default
+// policy, which here is the Core NATS one.
 b.include(confirm).out_reply(Publish);
 
 // Core NATS: fire-and-forget, and the RequestReply capability.
@@ -205,7 +208,7 @@ tb.broker::<NatsTestBroker>()
     .assert_called_once();
 ```
 
-Delayed redelivery is in reach too, on the path its own model takes: a JetStream delivery holds the message back itself, a Core one sends the deferred copy through the `.out_retry(..)` publisher, exactly as each does on a server. The timer belongs to the harness either way, so `tb.advance(delay)` fires the retry under a paused clock instead of waiting.
+Delayed redelivery is in reach too, on the path its own model takes: a JetStream delivery holds the message back itself and counts its own deliveries, a Core one comes back as a published copy, exactly as each does on a server. The timer belongs to the harness either way, so `tb.advance(delay)` fires the retry under a paused clock instead of waiting, and a declared cap sends the spent delivery to the dead-letter subject where a test can read it.
 
 JetStream-specific behaviour (durable consumers, the wire's own acknowledgement, redelivery timing) is covered by the env-gated integration suite instead: `just test-brokers` spins up `nats:2-alpine` with JetStream and runs the live tests plus the framework conformance suite against it.
 

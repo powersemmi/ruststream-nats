@@ -62,6 +62,11 @@ NatsBroker::new(url)      只有配置，同步，没有 I/O
 --8<-- "crates/ruststream-nats/examples/nats_core.rs:app"
 ```
 
+`CoreSubject` 是同一个订阅，带上 Core NATS 有的那些设置，而它只有一个：一个队列，把每条消息交给
+其中一个成员，而不是所有成员。要一次读许多 subject，就写 `CoreWildcard::new("orders.*")`：同样的
+队列，外加 `*` 和 `>` 通配符。它们是两个类型，因为通配符不能发布，而这正好决定延迟重试去哪里；
+参见[确认与延迟重试](#acknowledgement-and-delayed-retry)。
+
 ## JetStream 持久化消费者 { #jetstream-durable-consumer }
 
 要改为从 JetStream 消费，就在 `#[subscriber(..)]` 属性里用 `JetStreamSubject` 写出来源：要读的
@@ -116,21 +121,47 @@ NATS 的负载均衡是 `CoreSubject::queue_group`。两个类型没有共同的
 确认本身，于是服务器把这条消息押住这么久，再在同一个消费者上重新投递它，它的流序号和投递次数都
 保持原样。
 
-Core NATS 根本没有确认：一次 core 投递返回 `AckError::Unsupported`，那里的 `retry_after` 退回到
-运行时的延迟重新发布。这份副本从哪个发布者出去，由注册自己写明，一个挂载写一次：
-`b.include(reconcile).out_retry(Publish)`。它落到哪里则由订阅回答，就是它读取的 subject：Core
-订阅回答 subject 本身，JetStream 订阅回答消费者的过滤条件。除此之外没有别的接线。
+Core NATS 根本没有确认：一次 core 投递返回 `AckError::Unsupported`，那里的 `retry_after` 变成一份
+副本 - 延迟过去之后，框架把消息重新发布一次。
 
-只要 Core 的处理器会推迟一条消息，就把这个位置接上。不接的话，运行时只剩下立刻重新入队这一条
-退路，而 Core NATS 连这条也没有，于是消息就没了，日志会这么写。
+一条消息一共能被投递几次、次数用完之后它去哪里，都在挂载点声明：
 
-重试位置和别的 `Out` 槽位一样，所以跟在它后面的就是槽位的那些步骤：`.transform(..)` 给每份延迟
-副本盖上标记，`.map_publisher(..)` 决定发布者自己带什么。副本带的是这次投递到达时的那串字节，
-因此这里写下的编解码器什么也不编码；运行时在它出去之前把 `x-ruststream-retry-count` 头加一。
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_retry.rs:declaration"
+```
 
-通配符是例外。`orders.*` 在投递时匹配，在发布时服务器拒绝它，因此按模式打开的订阅报不出地址；在
-这样的订阅之上用 `out_retry` 绑定的注册会拒绝启动，而不是把副本发往不存在的地方。给这样的处理器
-一个具体的 subject，或者改用 JetStream 读它：在那里 `retry_after` 就是服务器自己的延迟否定确认。
+`max_attempts(n)` 把第一次投递也算进去。在 JetStream 消费者上读的是服务器自己的计数，因此超时的
+`ack_wait` 也算一次；在 Core subject 上，框架数的是它自己发布的副本，记在
+`x-ruststream-retry-count` 消息头里。`dead_letter(subject)` 是用完次数的那次投递被发布到哪里，
+消息体和消息头都按到达时的样子。
+
+NATS 自己没有死信机制。JetStream 的 `max_deliver` 能限制投递次数，却没有地方送走最后一次，因此这
+个 crate 不把声明映射到它上面，两种模型都走框架自己的这条路。
+
+副本去哪里，是这三种订阅唯一回答得不一样的地方：
+
+| 订阅 | 读什么 | 副本去哪里 |
+| --- | --- | --- |
+| `CoreSubject` | 一个 subject | 就是这个 subject |
+| `CoreWildcard` | 许多 subject | 挂载点写明的那个 subject |
+| `JetStreamSubject` | 通过消费者读一条流 | 哪里都不去：消息由服务器押着 |
+
+通配符在投递时匹配，在发布时服务器拒绝它，因此 `CoreWildcard` 订阅说不出副本怎样才能再回到它那
+里。这件事由挂载点来说：
+
+```rust
+--8<-- "crates/ruststream-nats/examples/nats_retry.rs:wildcard"
+```
+
+`.to(subject)` 是一个固定的 subject；声明 `Names` 的转换则按每次投递来挑，根据它所复制的那次投递。
+按通配符注册而两者都不写，启动就会被拒绝：服务跑起来之前就说出来，而不是上线之后丢掉每一条延迟
+消息。
+
+`out_retry(策略)` 写明副本从哪个发布者出去，只有副本需要自己的发布者时才用得上：不写它，副本就走
+Broker 普通的发布者。这个位置是一个 `Out` 槽位，所以跟在它后面的就是槽位的那些步骤：
+`.transform(..)` 给每份副本盖上标记，`.map_publisher(..)` 决定发布者自己带什么。副本带的是这次
+投递到达时的那串字节，因此这里写下的编解码器什么也不编码。在 JetStream 消费者上根本没有副本，
+`out_retry` 在那里只写明用完次数的那次投递从哪个发布者出去。
 
 ## 发布 { #publishing }
 
@@ -219,20 +250,57 @@ use ruststream_nats::prelude::*;
 进来的请求把自己的回复 inbox 放在众所周知的 `reply-to` 消息头里，因此应答方读
 `ctx.headers().reply_to()`，通过注入的发布者把答复发布到那个 subject。
 
+## AsyncAPI 文档 { #the-asyncapi-document }
+
+`asyncapi gen` 写出服务要发布的那份文档，而 `asyncapi` feature 让这个 crate 把只有 NATS 知道的那
+部分填进去：
+
+```toml
+ruststream-nats = { version = "0.7", features = ["asyncapi"] }
+```
+
+AsyncAPI 规范里 `nats` 绑定只有一个字段：接收操作上的队列。加入队列的订阅会报出它；不在队列里的
+订阅则不动这份文档，而不是添一个空对象：
+
+```rust
+--8<-- "crates/ruststream-nats/tests/asyncapi_nats.rs:queue_group"
+```
+
+JetStream 消费者的那些设置在这个绑定里都没有字段，而协议键是一份封闭的清单，因此它们放在 channel
+上的 `x-ruststream-jetstream` 里。扩展不是绑定，不带 `bindingVersion`：
+
+```rust
+--8<-- "crates/ruststream-nats/tests/asyncapi_nats.rs:consumer"
+```
+
+要求某条流的发布者（`JetStreamPublish::default().expect_stream("ORDERS")`）在同一个键下报出这条流。
+
+应答说明客户端从哪里读到答案要发往的 subject。NATS 把请求的 inbox 带在一个协议字段里，这个 crate
+把它显示成 `reply-to` 消息头，于是文档报出的就是这个表达式；channel 本身这时没有地址，因为地址是
+每个请求各自的：
+
+```rust
+--8<-- "crates/ruststream-nats/tests/asyncapi_nats.rs:reply_address"
+```
+
+有两样东西是故意不在这里的。凭据：写进 `nats://svc:secret@host` 的密码到连接为止，文档里的服务器
+只有主机和端口。NATS 客户端协议的版本：服务器在连上之后才报出它，而文档在拨号之前就已经建好，
+因此它从 `ConnectedNatsBroker::server_spec` 读。
+
 ## 各项能力 { #capabilities }
 
 框架的可选能力 trait 里，这个 Broker 原生实现了哪些：
 
 | 能力 | 原生 | 说明 |
 | --- | --- | --- |
-| `Subscribe` | 是 | 通过 `CoreSubject` 按 subject 订阅；`JetStreamSubject` 改为通过 JetStream 消费者来读它。 |
+| `Subscribe` | 是 | 通过 `CoreSubject` 按 subject 订阅，因此光写 `#[subscriber("orders.created")]` 就是一个 subject。`CoreWildcard` 读通配符，`JetStreamSubject` 通过消费者读一条流。 |
 | `BatchSubscriber` | 是 | 在 JetStream 上，一个批是一次 pull `fetch`，最多取到挂载点写的 `batch(n)`，并受 `pull_expires` 限制。Core NATS 的协议里没有批，因此框架的 `BufferedSubscriber` 适配器在客户端把批攒出来。参见[批](#batches)。 |
 | `TransactionalPublisher` | 否 | 两种模型都没有跨多条消息的事务；JetStream 的发布一条一条确认。 |
 | `OwnedTransactions` | 否 | 同样的原因：没有事务可以拥有。 |
 | `RequestReply` | 是 | `NatsPublisher` 发布时带上原生的回复 inbox，并把回复返回。参见[请求-响应](#request-reply)。 |
 | `Partitioned` | 是 | NATS 没有原生的分区，因此发送方把键写进 `nats-partition-key` 消息头，运行时 `workers(n, by_key)` 的各个工作分区从那里读它。 |
 | `Seekable` + `Positioned` | 否 | `deliver_policy` 决定新建的 JetStream 消费者从哪里开始；活动的订阅不重新定位。 |
-| `DescribeServer` | 是 | 报告每个配置地址的主机和端口，因此写进 URL 的凭据不会进入 AsyncAPI 文档。 |
+| `DescribeServer` | 是 | 报告每个配置地址的主机和端口，因此写进 URL 的凭据不会进入 AsyncAPI 文档。参见 [AsyncAPI 文档](#the-asyncapi-document)。 |
 
 ## 测试 { #testing }
 
@@ -267,10 +335,11 @@ use ruststream_nats::prelude::*;
 
 - 用 `ruststream_nats::context` 的键绑定 `JetStream` 原生元数据的处理器可以挂载，每个键都读到
   `None`，和在一次 core 投递上完全一样。
-- 延迟重试走它这个模型该走的那条路。经由 `JetStreamSubject` 的投递自己把消息押住；Core subject
-  上的投递没有确认可以押住它，于是副本从注册在 `out_retry` 上的发布者出去，连同绑在那里的
-  transform 一起，和面对服务器时完全一样。两种情况下计时器都归测试套件所有，因此
-  `tb.advance(delay)` 在暂停的时钟下触发这次重试。
+- 延迟重试走它这个模型该走的那条路。经由 `JetStreamSubject` 的投递自己把消息押住，也自己数投递
+  次数，因此声明的上限在这里读到的数字和面对服务器时一样；Core subject 上的投递没有确认可以押住
+  它，于是副本从这次注册的重试发布者出去，连同绑在那里的 transform 一起。两种情况下计时器都归
+  测试套件所有，因此 `tb.advance(delay)` 在暂停的时钟下触发这次重试，而用完次数的那次投递会落到
+  声明的死信 subject 上，由 `tb.published::<T>(..)` 读出来。
 
 `JetStream` 本身的语义（持久化消费者的游标和它的恢复、`ack_wait` 的重新投递、保留策略，以及元数据
 和服务端延迟真正做的事）不做模拟；这些要对着真实服务器测试，用 `NATS_TEST_URL` 开启。共用一个

@@ -20,6 +20,7 @@ use crate::{
         publisher::NatsTestPublishPolicy,
         router::{DeliveryGroup, SubjectRouter},
         subject::{SubjectPattern, validate_concrete_subject},
+        subscriber::DeliveryModel,
     },
 };
 
@@ -166,6 +167,7 @@ impl ConnectedNatsTestBroker {
             return ready(Err(err));
         }
         let group = delivery_group(&source);
+        let model = delivery_model(&source);
         let subject = source.into_subject();
         if let Err(err) = self.state.ensure_live(&subject) {
             return ready(Err(err));
@@ -184,6 +186,7 @@ impl ConnectedNatsTestBroker {
             id,
             rx,
             requeue,
+            model,
             self.state.coordinator(),
         )))
     }
@@ -322,6 +325,15 @@ ruststream::register_testable_broker!(ConnectedNatsTestBroker);
 ///
 /// One descriptor type per delivery model, so a queue group and a durable name cannot both be
 /// present and the two arms cannot disagree.
+/// Which delivery model `source` describes, so a delivery answers about its own settlement the
+/// way the real transport answers.
+fn delivery_model<S: NatsSubscription>(source: &S) -> DeliveryModel {
+    match source.plan() {
+        SubscriptionPlan::Core { .. } => DeliveryModel::Core,
+        SubscriptionPlan::JetStream { .. } => DeliveryModel::JetStream,
+    }
+}
+
 fn delivery_group<S: NatsSubscription>(source: &S) -> Option<DeliveryGroup> {
     match source.plan() {
         SubscriptionPlan::Core { queue_group } => queue_group.map(|name| DeliveryGroup::Queue {

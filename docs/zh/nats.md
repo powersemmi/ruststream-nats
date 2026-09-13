@@ -267,8 +267,10 @@ use ruststream_nats::prelude::*;
 
 - 用 `ruststream_nats::context` 的键绑定 `JetStream` 原生元数据的处理器可以挂载，每个键都读到
   `None`，和在一次 core 投递上完全一样。
-- `HandlerOutcome::retry_after(delay)` 变成一次延迟重新投递，计时器由测试套件掌管，因此
-  `tb.advance(delay)` 在暂停的时钟下触发它。
+- 延迟重试走它这个模型该走的那条路。经由 `JetStreamSubject` 的投递自己把消息押住；Core subject
+  上的投递没有确认可以押住它，于是副本从注册在 `out_retry` 上的发布者出去，连同绑在那里的
+  transform 一起，和面对服务器时完全一样。两种情况下计时器都归测试套件所有，因此
+  `tb.advance(delay)` 在暂停的时钟下触发这次重试。
 
 `JetStream` 本身的语义（持久化消费者的游标和它的恢复、`ack_wait` 的重新投递、保留策略，以及元数据
 和服务端延迟真正做的事）不做模拟；这些要对着真实服务器测试，用 `NATS_TEST_URL` 开启。共用一个

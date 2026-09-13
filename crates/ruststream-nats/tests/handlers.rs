@@ -17,6 +17,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+// The derive and the value a transform reads share the name in different namespaces: the derive
+// on the types below is the macro the prelude carries, the value here is the type.
+use ruststream::runtime::{Outgoing, RETRY_COUNT_HEADER, SlotContext};
 use ruststream::testing::{Outcome, TestApp};
 use ruststream_nats::PARTITION_KEY_HEADER;
 use ruststream_nats::context::keys::{Delivered, StreamSequence};
@@ -303,17 +306,38 @@ async fn defer_once(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> Handl
     }
 }
 
+/// The header the retry transform stamps on a deferred copy, so a redelivery is recognisable
+/// downstream.
+const LEFT_THROUGH: &str = "x-left-through";
+
+/// A transform on the retry position. It states no NATS setting of its own, so it is written
+/// generic over the options type and mounts over either publish surface.
+struct DeferredStamp;
+
+impl<Options> PublishTransform<ForSlot, Options> for DeferredStamp {
+    type Destination = Reads;
+
+    fn apply(&self, out: &mut Outgoing<'_>, _options: &mut Option<Options>, cx: &SlotContext<'_>) {
+        out.headers_mut().insert(LEFT_THROUGH, cx.slot().to_owned());
+    }
+}
+
+/// A Core subject has no acknowledgement to carry a delay, so the deferred copy is the whole
+/// mechanism: `out_retry` names the publisher it leaves through, and the transform there reaches
+/// it like any other slot publish.
 #[tokio::test(start_paused = true)]
-async fn a_deferred_retry_comes_back_once_the_delay_has_passed() {
+async fn a_deferred_retry_comes_back_through_the_publisher_the_mount_named() {
     let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
         .on_startup(|()| async { Ok::<_, Infallible>(Attempts::default()) })
         .with_broker(NatsTestBroker::new(), |b| {
-            b.include(defer_once);
+            b.include(defer_once)
+                .out_retry(Publish)
+                .transform(DeferredStamp);
         });
     let tb = TestApp::start(app).await.expect("start");
 
-    // The publish records the immediate delayed-nack settlement and returns; the redelivery is
-    // still pending on the broker's timer.
+    // The publish records the deferring settlement and returns; the copy is still pending on the
+    // delay.
     tb.message(&Order { id: 5 })
         .to("orders.deferred")
         .publish()
@@ -324,12 +348,21 @@ async fn a_deferred_retry_comes_back_once_the_delay_has_passed() {
         .assert_called_once()
         .settled(HandlerOutcome::retry_after(RETRY_DELAY));
 
-    // Advancing past the delay fires the redelivery and drives it to settle.
+    // Advancing past the delay sends the copy and drives the redelivery to settle.
     tb.advance(RETRY_DELAY).await.expect("advance");
     tb.broker::<NatsTestBroker>()
         .subscriber("orders.deferred")
         .assert_called(2)
         .settled(HandlerOutcome::ack());
+
+    // The copy went out through the retry position: the subject saw the test's own publish and
+    // then the deferred one, which carries the transform's stamp and the raised retry count.
+    tb.broker::<NatsTestBroker>()
+        .published::<Order>("orders.deferred")
+        .assert_called(2)
+        .with(&Order { id: 5 })
+        .with_header(LEFT_THROUGH, "Retry")
+        .with_header(RETRY_COUNT_HEADER, "1");
 
     tb.shutdown().await.expect("shutdown");
 }

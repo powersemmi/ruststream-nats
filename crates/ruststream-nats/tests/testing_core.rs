@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use ruststream::{
-    BatchSubscriber, Broker, ConnectedBroker, DescribeServer, HeaderMap, IncomingMessage,
+    AckError, BatchSubscriber, Broker, ConnectedBroker, DescribeServer, HeaderMap, IncomingMessage,
     OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, nonzero,
     testing::expect_published,
 };
@@ -326,6 +326,59 @@ async fn nack_requeue_redelivers_to_same_subscriber() {
         .expect("ok");
     assert_eq!(second.payload(), b"once");
     second.ack().await.expect("ack");
+}
+
+// The runtime chooses between the native delay and its own deferred re-publish on what the
+// delivery reports, so the stand-in reports what the transport reports: a JetStream consumer
+// carries the delay in its negative acknowledgement, a Core subject has no acknowledgement to
+// carry it. Claiming it on a Core subject would let a service that never binds `.out_retry(..)`
+// pass here and lose the message against a server.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_core_delivery_reports_no_native_delayed_redelivery() {
+    let broker = connected().await;
+    let mut subscriber = broker
+        .subscribe_with(CoreSubject::new("orders.core"))
+        .await
+        .expect("subscribe");
+    let publisher = broker.publisher(NatsPublish);
+
+    publisher
+        .publish(OutgoingMessage::new("orders.core", b"once"), None)
+        .await
+        .expect("publish");
+
+    let mut stream = Box::pin(subscriber.stream());
+    let msg = next_message(&mut stream).await;
+    assert!(!msg.supports_nack_after());
+    let err = msg
+        .nack_after(Duration::from_secs(1))
+        .await
+        .expect_err("a Core delivery cannot hold a message back");
+    assert!(matches!(err, AckError::Unsupported));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jetstream_delivery_reports_the_native_delayed_redelivery() {
+    let broker = connected().await;
+    let mut subscriber = broker
+        .subscribe_with(JetStreamSubject::new("orders.durable", "ORDERS").durable("worker"))
+        .await
+        .expect("subscribe");
+    let publisher = broker.publisher(NatsPublish);
+
+    publisher
+        .publish(OutgoingMessage::new("orders.durable", b"once"), None)
+        .await
+        .expect("publish");
+
+    let mut stream = Box::pin(subscriber.stream());
+    let msg = next_message(&mut stream).await;
+    assert!(msg.supports_nack_after());
+    msg.nack_after(Duration::from_millis(1))
+        .await
+        .expect("a JetStream delivery holds the message back itself");
+
+    assert_eq!(next_payload(&mut stream).await, b"once");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

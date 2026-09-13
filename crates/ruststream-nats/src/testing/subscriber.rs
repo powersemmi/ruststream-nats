@@ -26,12 +26,25 @@ use crate::{
     },
 };
 
+/// Which of the two NATS delivery models opened a subscription.
+///
+/// The in-process transport is one Core subject-matching fabric, but what a delivery can be
+/// settled with is not the fabric's business: a `JetStream` consumer is answered by a server that
+/// acknowledges, a Core subject by one that has no acknowledgement at all. The stand-in therefore
+/// answers per model, the way [`NatsMessage`](crate::NatsMessage) does on a real connection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeliveryModel {
+    Core,
+    JetStream,
+}
+
 /// Subscriber returned by [`crate::testing::ConnectedNatsTestBroker::subscribe_with`].
 pub struct NatsTestSubscriber {
     state: Arc<TestBrokerState>,
     id: SubscriptionId,
     rx: DeliveryReceiver,
     requeue: DeliverySender,
+    model: DeliveryModel,
     /// A clone of the broker's harness coordinator, threaded into each yielded message so a requeue
     /// re-counts and a consumed delivery decrements. `None` outside a harness run.
     coordinator: Option<Coordinator>,
@@ -49,6 +62,7 @@ impl NatsTestSubscriber {
         id: SubscriptionId,
         rx: DeliveryReceiver,
         requeue: DeliverySender,
+        model: DeliveryModel,
         coordinator: Option<Coordinator>,
     ) -> Self {
         Self {
@@ -56,6 +70,7 @@ impl NatsTestSubscriber {
             id,
             rx,
             requeue,
+            model,
             coordinator,
         }
     }
@@ -73,6 +88,7 @@ impl Subscriber for NatsTestSubscriber {
 
     fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
         let requeue = self.requeue.clone();
+        let model = self.model;
         let coordinator = self.coordinator.clone();
         // Poll the receiver in place rather than wrapping it in an owning stream, so `stream`
         // can be called again after the returned stream is dropped (the runtime and the
@@ -83,6 +99,7 @@ impl Subscriber for NatsTestSubscriber {
                     Ok(NatsTestMessage::new(
                         delivery,
                         requeue.clone(),
+                        model,
                         coordinator.clone(),
                     ))
                 })
@@ -99,6 +116,7 @@ impl Subscriber for NatsTestSubscriber {
 pub struct NatsTestMessage {
     delivery: Option<Delivery>,
     requeue: DeliverySender,
+    model: DeliveryModel,
     /// A clone of the broker's harness coordinator. When set, this delivery is counted in flight
     /// and is decremented once when the message is consumed or dropped (see the `Drop` impl).
     /// `None` outside a harness run and for request-reply inbox replies (not dispatch-driven).
@@ -132,11 +150,13 @@ impl NatsTestMessage {
     pub(crate) fn new(
         delivery: Delivery,
         requeue: DeliverySender,
+        model: DeliveryModel,
         coordinator: Option<Coordinator>,
     ) -> Self {
         Self {
             delivery: Some(delivery),
             requeue,
+            model,
             coordinator,
         }
     }
@@ -144,7 +164,7 @@ impl NatsTestMessage {
     /// Builds a message with no coordinator: a request-reply inbox reply, consumed by the requester
     /// rather than a dispatch loop, so it is never counted in flight.
     pub(crate) fn from_delivery(delivery: Delivery, requeue: DeliverySender) -> Self {
-        Self::new(delivery, requeue, None)
+        Self::new(delivery, requeue, DeliveryModel::Core, None)
     }
 
     /// Returns the subject this message was published to.
@@ -201,12 +221,16 @@ impl IncomingMessage for NatsTestMessage {
         ready(Ok(()))
     }
 
-    /// The real broker answers `true` for a `JetStream` delivery, so the transport answers `true`
-    /// too: the runtime picks between the native delay and its own deferred re-publish on this
-    /// flag, and a transport that under-reported it would send a handler's `retry_after` down a
-    /// different path in tests than in production.
+    /// The answer the real broker gives for the model this subscription was opened on: `true`
+    /// through a `JetStream` consumer, whose negative acknowledgement carries the delay, `false`
+    /// on a Core subject, which has no acknowledgement at all.
+    ///
+    /// The runtime picks between the native delay and its own deferred re-publish on this flag, so
+    /// claiming it for a Core subscription would take a handler's `retry_after` down one path in
+    /// process and the other one against a server, and would pass a service that binds no
+    /// `.out_retry(..)` and loses the message in production.
     fn supports_nack_after(&self) -> bool {
-        true
+        matches!(self.model, DeliveryModel::JetStream)
     }
 
     /// Delayed redelivery: the message returns to the same subscription's queue once `delay` has
@@ -220,6 +244,9 @@ impl IncomingMessage for NatsTestMessage {
             .delivery
             .take()
             .expect("NatsTestMessage ack/nack invoked twice");
+        if matches!(self.model, DeliveryModel::Core) {
+            return ready(Err(AckError::Unsupported));
+        }
         let requeue = self.requeue.clone();
         if let Some(coordinator) = self.coordinator.clone() {
             let counter = coordinator.clone();
@@ -252,13 +279,14 @@ impl BatchSubscriber for NatsTestSubscriber {
     ) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
         let limit = size.get();
         let requeue = self.requeue.clone();
+        let model = self.model;
         let coordinator = self.coordinator.clone();
         futures::stream::poll_fn(move |cx| {
             let first = match self.rx.poll_recv(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Ready(Some(d)) => {
-                    NatsTestMessage::new(d, requeue.clone(), coordinator.clone())
+                    NatsTestMessage::new(d, requeue.clone(), model, coordinator.clone())
                 }
             };
             let mut batch = vec![first];
@@ -268,6 +296,7 @@ impl BatchSubscriber for NatsTestSubscriber {
                         batch.push(NatsTestMessage::new(
                             d,
                             requeue.clone(),
+                            model,
                             coordinator.clone(),
                         ));
                     }

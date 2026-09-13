@@ -294,8 +294,11 @@ server:
 
 - A handler that binds native `JetStream` metadata with a `ruststream_nats::context` key mounts,
   and every key reads `None`, exactly as on a core delivery.
-- `HandlerOutcome::retry_after(delay)` becomes a delayed redelivery whose timer the harness owns,
-  so `tb.advance(delay)` fires it under a paused clock.
+- A delayed retry takes the path its own model takes. A delivery through a `JetStreamSubject`
+  holds the message back itself; one on a Core subject has no acknowledgement to hold it with, so
+  the copy leaves through the registration's `out_retry` publisher, with the transforms bound
+  there, exactly as it does against a server. Either way the timer belongs to the harness, so
+  `tb.advance(delay)` fires it under a paused clock.
 
 `JetStream` semantics themselves (the durable's cursor and its resume, `ack_wait` redelivery,
 retention, what the metadata and the server-side delay actually do) are not simulated; test them

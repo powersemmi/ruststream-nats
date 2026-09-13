@@ -35,7 +35,7 @@ pub use jetstream::{
 pub use message::{CoreMessage, JetStreamMessage, NatsMessage, PARTITION_KEY_HEADER};
 pub use publisher::{NatsPublish, NatsPublishPolicy, NatsPublisher};
 pub use subject::{
-    CoreSubject, DeliverPolicy, JetStreamSubject, NatsSubscription, NonZeroDuration,
+    CoreSubject, CoreWildcard, DeliverPolicy, JetStreamSubject, NatsSubscription, NonZeroDuration,
 };
 pub use subscriber::NatsSubscriber;
 

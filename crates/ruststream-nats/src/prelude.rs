@@ -1,7 +1,7 @@
 //! The imports a mount site on NATS writes every time, in one glob.
 //!
-//! The broker, the two subjects ([`CoreSubject`] over Core NATS, [`JetStreamSubject`] through a
-//! pull consumer), the publish policies ([`Publish`] is plain Core NATS, [`JetStreamPublish`]
+//! The broker, the three subscription descriptors ([`CoreSubject`] for one Core NATS subject,
+//! [`CoreWildcard`] for a pattern, [`JetStreamSubject`] for a pull consumer), the publish policies ([`Publish`] is plain Core NATS, [`JetStreamPublish`]
 //! waits for the stream's acknowledgement), the [`RequestReply`] capability, and the whole core
 //! prelude.
 //!
@@ -48,8 +48,8 @@ pub use ruststream::RequestReply;
 // stay at the crate root, for prose and for a file that wants to say NATS out loud.
 pub use crate::NatsPublish as Publish;
 pub use crate::{
-    CoreSubject, JetStreamOptions, JetStreamPublish, JetStreamPublishSteps, JetStreamSubject,
-    NatsBroker, NonZeroDuration,
+    CoreSubject, CoreWildcard, JetStreamOptions, JetStreamPublish, JetStreamPublishSteps,
+    JetStreamSubject, NatsBroker, NonZeroDuration,
 };
 
 // `Partitioned` is kept out on purpose: the core also surfaces `partition_key` as a defaulted

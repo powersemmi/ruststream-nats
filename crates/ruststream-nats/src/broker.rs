@@ -13,8 +13,7 @@ use async_nats::jetstream;
 use async_nats::jetstream::consumer::{PullConsumer, pull::Config as ConsumerConfig};
 use async_nats::{Client, ConnectOptions};
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, RedeliveryAddress, ServerSpec,
-    Subscribe,
+    AddressedCopies, Broker, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe,
 };
 
 use crate::{
@@ -365,16 +364,17 @@ impl ConnectedBroker for ConnectedNatsBroker {
 impl Subscribe for ConnectedNatsBroker {
     type Subscriber = NatsSubscriber;
 
+    /// A NATS subject is subscribed to and published to under one name, so a bare
+    /// `#[subscriber("orders.created")]` is a destination a copy of a delivery reaches: the
+    /// framework publishes a deferred retry back to the name itself and the mount site owes
+    /// nothing.
+    ///
+    /// A pattern is the exception, and it is not reachable from here: the by-name form takes one
+    /// subject, and `CoreWildcard::new("orders.*")` is the descriptor that reads many.
+    type Copies = AddressedCopies;
+
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.subscribe_with(CoreSubject::new(name)).await
-    }
-
-    /// A NATS subject is subscribed to and published to under one name, so `#[subscriber("name")]`
-    /// composes with [`out_retry`](ruststream::runtime::Mounting::out_retry) here. A wildcard
-    /// pattern is the exception and reports nothing; see
-    /// [`NatsSubscription::redelivery_subject`](crate::NatsSubscription::redelivery_subject).
-    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
-        CoreSubject::new(name).redelivery_subject()
     }
 }
 

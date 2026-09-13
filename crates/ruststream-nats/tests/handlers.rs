@@ -19,7 +19,7 @@ use std::time::Duration;
 
 // The derive and the value a transform reads share the name in different namespaces: the derive
 // on the types below is the macro the prelude carries, the value here is the type.
-use ruststream::runtime::{Outgoing, RETRY_COUNT_HEADER, SlotContext};
+use ruststream::runtime::{Outgoing, PublishContext, RETRY_COUNT_HEADER};
 use ruststream::testing::{Outcome, TestApp};
 use ruststream_nats::PARTITION_KEY_HEADER;
 use ruststream_nats::context::keys::{Delivered, StreamSequence};
@@ -310,15 +310,21 @@ async fn defer_once(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> Handl
 /// downstream.
 const LEFT_THROUGH: &str = "x-left-through";
 
-/// A transform on the retry position. It states no NATS setting of its own, so it is written
-/// generic over the options type and mounts over either publish surface.
+/// A transform on the retry position, which reads the delivery being retried. It states no NATS
+/// setting of its own, so it is written generic over the options type and mounts over either
+/// publish surface.
 struct DeferredStamp;
 
-impl<Options> PublishTransform<ForSlot, Options> for DeferredStamp {
+impl<Cx, Options> PublishTransform<ForReply<Cx>, Options> for DeferredStamp {
     type Destination = Reads;
 
-    fn apply(&self, out: &mut Outgoing<'_>, _options: &mut Option<Options>, cx: &SlotContext<'_>) {
-        out.headers_mut().insert(LEFT_THROUGH, cx.slot().to_owned());
+    fn apply(
+        &self,
+        out: &mut Outgoing<'_>,
+        _options: &mut Option<Options>,
+        cx: &PublishContext<'_, Cx>,
+    ) {
+        out.headers_mut().insert(LEFT_THROUGH, cx.name().to_owned());
     }
 }
 
@@ -361,10 +367,119 @@ async fn a_deferred_retry_comes_back_through_the_publisher_the_mount_named() {
         .published::<Order>("orders.deferred")
         .assert_called(2)
         .with(&Order { id: 5 })
-        .with_header(LEFT_THROUGH, "Retry")
+        .with_header(LEFT_THROUGH, "orders.deferred")
         .with_header(RETRY_COUNT_HEADER, "1");
 
     tb.shutdown().await.expect("shutdown");
+}
+
+// ------------------------------------------------------------------- capping the retries
+
+/// Never ready: every delivery asks to come back later, so only the declared cap ends the circle.
+#[subscriber("orders.capped")]
+async fn never_ready(order: &Order) -> HandlerOutcome {
+    let _ = order.id;
+    HandlerOutcome::retry_after(RETRY_DELAY)
+}
+
+/// The same handler over a pattern, which reads many subjects and addresses none of them.
+#[subscriber(CoreWildcard::new("wild.*"))]
+async fn never_ready_wild(order: &Order) -> HandlerOutcome {
+    let _ = order.id;
+    HandlerOutcome::retry_after(RETRY_DELAY)
+}
+
+/// A Core subject is a destination of its own, so the declaration is the whole mount: the copies
+/// go back to the subject the delivery came from, and the delivery that reaches the cap leaves for
+/// the dead-letter subject instead.
+#[tokio::test(start_paused = true)]
+async fn a_capped_subject_sends_a_spent_delivery_to_the_dead_letter_subject() {
+    let app =
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
+            b.include(never_ready)
+                .max_attempts(nonzero!(2u32))
+                .dead_letter("orders.dead");
+        });
+    let tb = TestApp::start(app).await.expect("start");
+
+    tb.message(&Order { id: 7 })
+        .to("orders.capped")
+        .publish()
+        .await
+        .expect("publish");
+    tb.advance(RETRY_DELAY).await.expect("advance");
+
+    // Two deliveries, which is the cap, and no third copy on the subject.
+    tb.broker::<NatsTestBroker>()
+        .subscriber("orders.capped")
+        .assert_called(2);
+    tb.broker::<NatsTestBroker>()
+        .published::<Order>("orders.capped")
+        .assert_called(2);
+
+    // The spent delivery left for the declared destination, carrying its payload and the count it
+    // reached.
+    tb.broker::<NatsTestBroker>()
+        .published::<Order>("orders.dead")
+        .assert_called_once()
+        .with(&Order { id: 7 })
+        .with_header(RETRY_COUNT_HEADER, "2");
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+/// A pattern names no destination of its own, so the mount site names where a copy goes. The cap
+/// and the dead-letter subject read exactly as they do over one subject; the dead-letter subject
+/// is outside the pattern, or the spent delivery would arrive back at the handler that gave up on
+/// it.
+#[tokio::test(start_paused = true)]
+async fn a_capped_pattern_takes_its_destination_from_the_mount_site() {
+    let app =
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
+            b.include(never_ready_wild)
+                .max_attempts(nonzero!(2u32))
+                .dead_letter("dead.wild")
+                .out_retry(Publish)
+                .to("wild.one");
+        });
+    let tb = TestApp::start(app).await.expect("start");
+
+    tb.message(&Order { id: 9 })
+        .to("wild.one")
+        .publish()
+        .await
+        .expect("publish");
+    tb.advance(RETRY_DELAY).await.expect("advance");
+
+    tb.broker::<NatsTestBroker>()
+        .subscriber("wild.*")
+        .assert_called(2);
+    tb.broker::<NatsTestBroker>()
+        .published::<Order>("dead.wild")
+        .assert_called_once()
+        .with(&Order { id: 9 })
+        .with_header(RETRY_COUNT_HEADER, "2");
+
+    tb.shutdown().await.expect("shutdown");
+}
+
+/// A pattern that names nowhere for its copies is refused at startup, so the service says so
+/// instead of dropping every delayed message once it is running.
+#[tokio::test(start_paused = true)]
+async fn a_pattern_with_no_named_destination_refuses_to_start() {
+    let app =
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
+            b.include(never_ready_wild);
+        });
+
+    let Err(err) = TestApp::start(app).await else {
+        panic!("a wildcard subscription with no retry destination must not start");
+    };
+    let message = err.to_string();
+    assert!(
+        message.contains("wild.*"),
+        "the refusal must name the subscription it is about, got: {message}",
+    );
 }
 
 // --------------------------------------------------------------------- answering a request

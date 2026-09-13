@@ -16,8 +16,8 @@ use ruststream::{
     testing::expect_published,
 };
 use ruststream_nats::{
-    CoreSubject, JetStreamOptions, JetStreamPublish, JetStreamSubject, NatsError, NatsPublish,
-    PARTITION_KEY_HEADER,
+    CoreSubject, CoreWildcard, JetStreamOptions, JetStreamPublish, JetStreamSubject, NatsError,
+    NatsPublish, PARTITION_KEY_HEADER,
     testing::{ConnectedNatsTestBroker, NatsTestBroker, NatsTestMessage},
 };
 
@@ -220,11 +220,11 @@ async fn publisher_errors_after_shutdown() {
 async fn wildcard_subscription_receives_matching_subjects() {
     let broker = connected().await;
     let mut star_sub = broker
-        .subscribe_with(CoreSubject::new("orders.*"))
+        .subscribe_with(CoreWildcard::new("orders.*"))
         .await
         .expect("subscribe *");
     let mut tail_sub = broker
-        .subscribe_with(CoreSubject::new(">"))
+        .subscribe_with(CoreWildcard::new(">"))
         .await
         .expect("subscribe >");
     let publisher = broker.publisher(NatsPublish);

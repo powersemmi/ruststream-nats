@@ -6,15 +6,19 @@ use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, RawMessage,
-    RedeliveryAddress, ServerSpec, Subscribe, SubscriptionSource,
+    AddressedCopies, Broker, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies,
+    OutgoingMessage, RawMessage, RedeliveryAddress, RedeliveryAddressed, ServerSpec, Subscribe,
+    SubscriptionSource,
     testing::{Coordinator, TestableBroker},
 };
 
 use crate::{
     NatsPublish,
     error::NatsError,
-    subject::{CoreSubject, JetStreamSubject, NatsSubscription, SubscriptionPlan},
+    subject::{
+        CoreSubject, CoreWildcard, JetStreamSubject, NatsSubscription, SubscriptionPlan,
+        publish_destination,
+    },
     testing::{
         NatsTestSubscriber,
         publisher::NatsTestPublishPolicy,
@@ -234,19 +238,18 @@ impl ConnectedBroker for ConnectedNatsTestBroker {
 impl Subscribe for ConnectedNatsTestBroker {
     type Subscriber = NatsTestSubscriber;
 
+    // The answer the real broker gives, so a registration that starts in process starts against a
+    // server too.
+    type Copies = AddressedCopies;
+
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.subscribe_with(CoreSubject::new(name)).await
-    }
-
-    // The answer the real broker gives, so an `out_retry` mount that starts in process starts
-    // against a server too.
-    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
-        CoreSubject::new(name).redelivery_subject()
     }
 }
 
 impl SubscriptionSource<ConnectedNatsTestBroker> for CoreSubject {
     type Subscriber = NatsTestSubscriber;
+    type Copies = AddressedCopies;
 
     fn name(&self) -> &str {
         NatsSubscription::subject(self)
@@ -258,12 +261,30 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for CoreSubject {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+}
 
+impl RedeliveryAddressed<ConnectedNatsTestBroker> for CoreSubject {
     fn redelivery_address(
         &self,
         _connected: &ConnectedNatsTestBroker,
-    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
-        ready(Ok(self.redelivery_subject()))
+    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> + Send {
+        ready(publish_destination(NatsSubscription::subject(self)))
+    }
+}
+
+impl SubscriptionSource<ConnectedNatsTestBroker> for CoreWildcard {
+    type Subscriber = NatsTestSubscriber;
+    type Copies = NamedCopies;
+
+    fn name(&self) -> &str {
+        NatsSubscription::subject(self)
+    }
+
+    async fn subscribe(
+        self,
+        connected: &ConnectedNatsTestBroker,
+    ) -> Result<Self::Subscriber, NatsError> {
+        connected.subscribe_with(self).await
     }
 }
 
@@ -271,6 +292,7 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for CoreSubject {
 // drives routing here, so a handler bound to a durable consumer is testable without a server.
 impl SubscriptionSource<ConnectedNatsTestBroker> for JetStreamSubject {
     type Subscriber = NatsTestSubscriber;
+    type Copies = AddressedCopies;
 
     fn name(&self) -> &str {
         NatsSubscription::subject(self)
@@ -282,12 +304,16 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for JetStreamSubject {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+}
 
+impl RedeliveryAddressed<ConnectedNatsTestBroker> for JetStreamSubject {
     fn redelivery_address(
         &self,
         _connected: &ConnectedNatsTestBroker,
-    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
-        ready(Ok(self.redelivery_subject()))
+    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> + Send {
+        ready(Ok(RedeliveryAddress::new(
+            self.consumer_filter().to_owned(),
+        )))
     }
 }
 

@@ -1,5 +1,5 @@
-//! The subject a service subscribes to: [`CoreSubject`] over Core NATS, [`JetStreamSubject`]
-//! through a `JetStream` pull consumer.
+//! The subject a service subscribes to: [`CoreSubject`] and [`CoreWildcard`] over Core NATS,
+//! [`JetStreamSubject`] through a `JetStream` pull consumer.
 //!
 //! They are the crate's [`SubscriptionSource`]s: the value a `#[subscriber(..)]` handler carries,
 //! and the value the runtime resolves once against the connected broker at startup.
@@ -8,6 +8,11 @@
 //! NATS only and a durable name describes a `JetStream` consumer, so each is a method on one type
 //! and absent from the other. Naming the wrong one is a compile error rather than a service that
 //! starts and then refuses its own subscription.
+//!
+//! Core NATS then splits once more, over the one property a retry depends on: one subject is a
+//! destination a copy of a delivery can be published to, a pattern is not. [`CoreSubject`] carries
+//! the first and answers the framework with its own subject; [`CoreWildcard`] carries the second
+//! and leaves the mount site to name where a copy goes.
 
 use std::future::{Future, ready};
 use std::num::NonZeroU64;
@@ -15,7 +20,9 @@ use std::time::Duration;
 
 pub use async_nats::jetstream::consumer::DeliverPolicy;
 use ruststream::runtime::IntoSource;
-use ruststream::{RedeliveryAddress, SubscriptionSource};
+use ruststream::{
+    AddressedCopies, NamedCopies, RedeliveryAddress, RedeliveryAddressed, SubscriptionSource,
+};
 
 use self::sealed::Sealed;
 use crate::{ConnectedNatsBroker, error::NatsError, subscriber::NatsSubscriber};
@@ -128,13 +135,14 @@ mod sealed {
     }
 }
 
-/// A NATS subscription descriptor: [`CoreSubject`] or [`JetStreamSubject`].
+/// A NATS subscription descriptor: [`CoreSubject`], [`CoreWildcard`] or [`JetStreamSubject`].
 ///
 /// Sealed, because the two delivery models NATS has are the two this crate ships.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not describe a NATS subscription",
     label = "not a subscription descriptor",
-    note = "use `CoreSubject::new(subject)` for Core NATS, or \
+    note = "use `CoreSubject::new(subject)` for one Core NATS subject, \
+            `CoreWildcard::new(pattern)` for a Core NATS pattern, or \
             `JetStreamSubject::new(subject, stream)` for a JetStream pull consumer"
 )]
 pub trait NatsSubscription: Sealed {
@@ -157,47 +165,54 @@ pub trait NatsSubscription: Sealed {
         }
         Ok(())
     }
-
-    /// Where a publisher reaches this subscription again, which on NATS is the subject it reads.
-    ///
-    /// The framework publishes a deferred `retry_after` copy here when the transport cannot hold
-    /// the message back itself, which on NATS is every Core subscription.
-    ///
-    /// A wildcard is not an answer: `orders.*` matches on delivery and is refused on publish, so a
-    /// subscription opened on a pattern reports nothing rather than an address the deferred copy
-    /// would bounce off. A registration that binds `out_retry` over such a subscription then
-    /// refuses to start, and the error names it.
-    #[must_use]
-    fn redelivery_subject(&self) -> Option<RedeliveryAddress> {
-        concrete_address(self.subject())
-    }
 }
 
-/// The subject as a publish destination, or `None` when nothing can be published there.
+/// Whether `subject` carries a NATS wildcard: `*` for one token, `>` for the rest of them.
 ///
-/// A NATS subject names one destination only when every token is literal. `*` matches one token
-/// and `>` matches the rest, and the server rejects a publish to either.
-fn concrete_address(subject: &str) -> Option<RedeliveryAddress> {
-    let publishable = !subject.is_empty()
-        && subject
-            .split('.')
-            .all(|token| !token.is_empty() && token != "*" && token != ">");
-    publishable.then(|| RedeliveryAddress::new(subject.to_owned()))
+/// The server matches a wildcard on delivery and refuses it on publish, so a subject that carries
+/// one is a subscription pattern and not a destination.
+fn has_wildcard(subject: &str) -> bool {
+    subject.split('.').any(|token| token == "*" || token == ">")
 }
 
-/// A subject subscribed to over Core NATS.
+/// The subject as a publish destination.
+///
+/// # Errors
+///
+/// Returns [`NatsError::InvalidOptions`] when the subject is empty or carries a wildcard.
+pub(crate) fn publish_destination(subject: &str) -> Result<RedeliveryAddress, NatsError> {
+    if subject.is_empty() {
+        return Err(NatsError::InvalidOptions(
+            "subject must be non-empty".into(),
+        ));
+    }
+    if has_wildcard(subject) {
+        return Err(NatsError::InvalidOptions(format!(
+            "`{subject}` is a subscription pattern, and a NATS server refuses a publish to `*` \
+             or `>`. Subscribe to a pattern with `CoreWildcard`, which leaves the mount site to \
+             name where a retry copy goes"
+        )));
+    }
+    Ok(RedeliveryAddress::new(subject.to_owned()))
+}
+
+/// One subject subscribed to over Core NATS.
 ///
 /// Core NATS delivers to whoever is subscribed at that moment and stores nothing, so the only
 /// setting it has is the queue group that load-balances a subject across several subscribers.
-/// Reading a stream instead is [`JetStreamSubject`].
+/// Reading a stream instead is [`JetStreamSubject`]; reading many subjects at once is
+/// [`CoreWildcard`].
+///
+/// The subject is one destination, so a delayed redelivery needs nothing from the mount site: the
+/// framework publishes its copy back to this very subject.
 ///
 /// # Examples
 ///
 /// ```
 /// use ruststream_nats::CoreSubject;
 ///
-/// let plain = CoreSubject::new("orders.*");
-/// let balanced = CoreSubject::new("orders.*").queue_group("workers");
+/// let plain = CoreSubject::new("orders.created");
+/// let balanced = CoreSubject::new("orders.created").queue_group("workers");
 /// # let _ = (plain, balanced);
 /// ```
 ///
@@ -207,7 +222,7 @@ fn concrete_address(subject: &str) -> Option<RedeliveryAddress> {
 /// use ruststream_nats::CoreSubject;
 ///
 /// // `durable` names a JetStream consumer, and Core NATS has none.
-/// let bad = CoreSubject::new("orders.*").durable("worker-1");
+/// let bad = CoreSubject::new("orders.created").durable("worker-1");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
@@ -245,9 +260,80 @@ impl Sealed for CoreSubject {
     }
 }
 
+/// A pattern subscribed to over Core NATS: `orders.*`, `orders.>`, `>`.
+///
+/// The same subscription as [`CoreSubject`], on many subjects instead of one. That is the whole
+/// difference between the two types, and it is the difference that matters to a retry: a pattern
+/// is matched on delivery and refused on publish, so this subscription cannot say where a copy of
+/// a delivery would reach it again. The mount site says it instead, with
+/// `.out_retry(Publish).to("orders.created")` or with a transform that reads the delivery and
+/// names its own subject; a registration that says neither refuses to start.
+///
+/// # Examples
+///
+/// ```
+/// use ruststream_nats::CoreWildcard;
+///
+/// let all = CoreWildcard::new("orders.>");
+/// let balanced = CoreWildcard::new("orders.*").queue_group("workers");
+/// # let _ = (all, balanced);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
+pub struct CoreWildcard {
+    subject: String,
+    queue_group: Option<String>,
+}
+
+impl CoreWildcard {
+    /// Subscribes to the pattern `subject` over Core NATS.
+    pub fn new(subject: impl Into<String>) -> Self {
+        Self {
+            subject: subject.into(),
+            queue_group: None,
+        }
+    }
+
+    /// Load-balances the pattern across a queue group, exactly as
+    /// [`CoreSubject::queue_group`] does for one subject.
+    pub fn queue_group(mut self, name: impl Into<String>) -> Self {
+        self.queue_group = Some(name.into());
+        self
+    }
+}
+
+impl Sealed for CoreWildcard {
+    fn plan(&self) -> SubscriptionPlan<'_> {
+        SubscriptionPlan::Core {
+            queue_group: self.queue_group.as_deref(),
+        }
+    }
+
+    fn into_subject(self) -> String {
+        self.subject
+    }
+}
+
+impl NatsSubscription for CoreWildcard {
+    fn subject(&self) -> &str {
+        &self.subject
+    }
+}
+
 impl NatsSubscription for CoreSubject {
     fn subject(&self) -> &str {
         &self.subject
+    }
+
+    /// A wildcard belongs to [`CoreWildcard`], so it is refused here rather than opened as a
+    /// subscription this type promises to address.
+    ///
+    /// The subject is a string the caller supplies, often from configuration, so the two forms
+    /// cannot be told apart while the crate compiles. The subscription refuses to open instead,
+    /// which is a service that does not start rather than one that starts and loses a delayed
+    /// message.
+    fn ensure_subject(&self) -> Result<(), NatsError> {
+        publish_destination(self.subject()).map(|_| ())
     }
 }
 
@@ -350,6 +436,12 @@ impl JetStreamSubject {
         self.pull_expires = Some(expires);
         self
     }
+
+    /// The subjects the consumer actually reads: the filter where one is set, the subject
+    /// otherwise.
+    pub(crate) fn consumer_filter(&self) -> &str {
+        self.filter_subject.as_deref().unwrap_or(&self.subject)
+    }
 }
 
 impl Sealed for JetStreamSubject {
@@ -375,13 +467,6 @@ impl Sealed for JetStreamSubject {
 impl NatsSubscription for JetStreamSubject {
     fn subject(&self) -> &str {
         &self.subject
-    }
-
-    /// The consumer reads its filter, so that is where a publish reaches it. The filter defaults
-    /// to the subject; a narrower one set with [`filter_subject`](Self::filter_subject) is what a
-    /// deferred copy has to carry to arrive.
-    fn redelivery_subject(&self) -> Option<RedeliveryAddress> {
-        concrete_address(self.filter_subject.as_deref().unwrap_or(&self.subject))
     }
 }
 
@@ -414,8 +499,19 @@ impl IntoSource for JetStreamSubject {
     }
 }
 
+impl IntoSource for CoreWildcard {
+    type Source = Self;
+
+    fn into_source(self) -> Self {
+        self
+    }
+}
+
 impl SubscriptionSource<ConnectedNatsBroker> for CoreSubject {
     type Subscriber = NatsSubscriber;
+    // One subject, published to and subscribed to under one name, so the framework's deferred
+    // copy needs nothing from the mount site.
+    type Copies = AddressedCopies;
 
     fn name(&self) -> &str {
         NatsSubscription::subject(self)
@@ -427,19 +523,39 @@ impl SubscriptionSource<ConnectedNatsBroker> for CoreSubject {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+}
 
-    /// The descriptor knows the subject, so the answer needs no connection and the future is
-    /// ready.
+/// The subject itself, so the answer needs no connection and the future is ready.
+impl RedeliveryAddressed<ConnectedNatsBroker> for CoreSubject {
     fn redelivery_address(
         &self,
         _connected: &ConnectedNatsBroker,
-    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
-        ready(Ok(self.redelivery_subject()))
+    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> + Send {
+        ready(publish_destination(NatsSubscription::subject(self)))
+    }
+}
+
+impl SubscriptionSource<ConnectedNatsBroker> for CoreWildcard {
+    type Subscriber = NatsSubscriber;
+    // A pattern reads many subjects and names none of them.
+    type Copies = NamedCopies;
+
+    fn name(&self) -> &str {
+        NatsSubscription::subject(self)
+    }
+
+    async fn subscribe(
+        self,
+        connected: &ConnectedNatsBroker,
+    ) -> Result<Self::Subscriber, NatsError> {
+        connected.subscribe_with(self).await
     }
 }
 
 impl SubscriptionSource<ConnectedNatsBroker> for JetStreamSubject {
     type Subscriber = NatsSubscriber;
+    // The consumer reads its filter subject, and a publish there reaches it.
+    type Copies = AddressedCopies;
 
     fn name(&self) -> &str {
         NatsSubscription::subject(self)
@@ -451,14 +567,23 @@ impl SubscriptionSource<ConnectedNatsBroker> for JetStreamSubject {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+}
 
-    /// See [`CoreSubject`]'s answer: the consumer's filter is a publish destination too, and the
-    /// descriptor carries it.
+/// The consumer's filter subject, which defaults to the subject the descriptor names.
+///
+/// A `JetStream` consumer holds a delivery itself and takes the delay in its negative
+/// acknowledgement, so the framework publishes no copy here and this address is what the
+/// conformance suite checks rather than what a running service uses. A consumer filtering a
+/// pattern reports that pattern, which is not a publish destination; nothing publishes to it, and
+/// a `.to(name)` at the mount site overrides it.
+impl RedeliveryAddressed<ConnectedNatsBroker> for JetStreamSubject {
     fn redelivery_address(
         &self,
         _connected: &ConnectedNatsBroker,
-    ) -> impl Future<Output = Result<Option<RedeliveryAddress>, NatsError>> + Send {
-        ready(Ok(self.redelivery_subject()))
+    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> + Send {
+        ready(Ok(RedeliveryAddress::new(
+            self.consumer_filter().to_owned(),
+        )))
     }
 }
 
@@ -470,7 +595,7 @@ mod tests {
 
     #[test]
     fn a_plain_subscription_is_core_without_a_queue_group() {
-        let opts = CoreSubject::new("orders.*");
+        let opts = CoreSubject::new("orders.created");
         opts.ensure_subject().expect("core ok");
         assert!(matches!(
             opts.plan(),
@@ -480,7 +605,7 @@ mod tests {
 
     #[test]
     fn a_queue_group_reaches_the_broker() {
-        let opts = CoreSubject::new("orders.*").queue_group("workers");
+        let opts = CoreSubject::new("orders.created").queue_group("workers");
         assert!(matches!(
             opts.plan(),
             SubscriptionPlan::Core {
@@ -514,17 +639,32 @@ mod tests {
     }
 
     // What a reported address promises is that a publish there arrives, so a pattern the server
-    // would refuse a publish to must report nothing rather than a subject the deferred copy would
-    // bounce off. `conformance::harness::lifecycle` holds the positive half of that promise.
+    // would refuse a publish to has no business being one. `CoreSubject` carries the subject that
+    // is a destination, and refuses to open on anything else.
     #[test]
     fn only_a_concrete_subject_is_a_redelivery_address() {
         assert_eq!(
-            CoreSubject::new("orders.created").redelivery_subject(),
-            Some(RedeliveryAddress::new("orders.created"))
+            publish_destination("orders.created").expect("a literal subject is a destination"),
+            RedeliveryAddress::new("orders.created")
         );
-        assert_eq!(CoreSubject::new("orders.*").redelivery_subject(), None);
-        assert_eq!(CoreSubject::new("orders.>").redelivery_subject(), None);
-        assert_eq!(CoreSubject::new("").redelivery_subject(), None);
+        for pattern in ["orders.*", "orders.>", ">", ""] {
+            assert!(
+                CoreSubject::new(pattern).ensure_subject().is_err(),
+                "`{pattern}` is not a destination, so CoreSubject must refuse it"
+            );
+            assert!(publish_destination(pattern).is_err());
+        }
+    }
+
+    // A pattern is the other type's business, and it opens on exactly what Core NATS accepts.
+    #[test]
+    fn a_pattern_opens_as_a_wildcard_subscription() {
+        for pattern in ["orders.*", "orders.>", ">", "orders.created"] {
+            CoreWildcard::new(pattern)
+                .ensure_subject()
+                .expect("a pattern is what this descriptor is for");
+        }
+        assert!(CoreWildcard::new("").ensure_subject().is_err());
     }
 
     // A JetStream consumer reads its filter, so a narrower filter is the address, not the subject
@@ -534,12 +674,12 @@ mod tests {
         assert_eq!(
             JetStreamSubject::new("orders.*", "ORDERS")
                 .filter_subject("orders.created")
-                .redelivery_subject(),
-            Some(RedeliveryAddress::new("orders.created"))
+                .consumer_filter(),
+            "orders.created"
         );
         assert_eq!(
-            JetStreamSubject::new("orders.*", "ORDERS").redelivery_subject(),
-            None
+            JetStreamSubject::new("orders.*", "ORDERS").consumer_filter(),
+            "orders.*"
         );
     }
 

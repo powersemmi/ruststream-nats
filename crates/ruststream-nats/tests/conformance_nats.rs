@@ -29,9 +29,11 @@
 
 #![cfg(feature = "testing")]
 
+use async_nats::jetstream::stream::Config as StreamConfig;
 use ruststream::conformance::{capabilities, harness};
+use ruststream::{Broker, ConnectedBroker};
 use ruststream_nats::testing::NatsTestBroker;
-use ruststream_nats::{CoreSubject, NatsBroker, NatsPublish};
+use ruststream_nats::{CoreSubject, JetStreamSubject, NatsBroker, NatsPublish};
 
 mod live;
 
@@ -66,6 +68,79 @@ async fn passes_lifecycle() {
         |connected| connected.publisher(NatsPublish),
     )
     .await;
+}
+
+// A descriptor that addresses its own retry copies promises that a publish to the address it
+// reports arrives at the subscription that reported it. On NATS that address is the subject a Core
+// subscription reads and the filter a consumer reads, and this is what holds both to the promise.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_broker_reports_a_reachable_subject() {
+    harness::redelivery_address(
+        NatsTestBroker::new,
+        |subject| CoreSubject::new(subject),
+        |connected| connected.publisher(NatsPublish),
+    )
+    .await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reports_a_reachable_subject() {
+    let Some(url) = nats_url() else {
+        return;
+    };
+    harness::redelivery_address(
+        || NatsBroker::new(url.clone()),
+        |subject| CoreSubject::new(subject),
+        |connected| connected.publisher(NatsPublish),
+    )
+    .await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_broker_reports_a_reachable_consumer_filter() {
+    harness::redelivery_address(
+        NatsTestBroker::new,
+        |subject| JetStreamSubject::new(subject, "CONFORMANCE"),
+        |connected| connected.publisher(NatsPublish),
+    )
+    .await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reports_a_reachable_consumer_filter() {
+    let Some(url) = nats_url() else {
+        return;
+    };
+    // The consumer reads a stream, so the stream has to exist before the suite opens one. It
+    // captures the whole prefix the suite draws its unique subject from.
+    let stream = format!("RS_CONF_REDELIVERY_{}", std::process::id());
+    let connected = NatsBroker::new(url.clone())
+        .connect()
+        .await
+        .expect("connect failed");
+    connected
+        .jetstream()
+        .create_stream(StreamConfig {
+            name: stream.clone(),
+            subjects: vec!["conformance.redelivery.>".to_owned()],
+            ..Default::default()
+        })
+        .await
+        .expect("create_stream failed");
+
+    harness::redelivery_address(
+        || NatsBroker::new(url.clone()),
+        |subject| JetStreamSubject::new(subject, stream.clone()),
+        |connected| connected.publisher(NatsPublish),
+    )
+    .await;
+
+    let _ = connected.jetstream().delete_stream(&stream).await;
+    connected.shutdown().await.expect("shutdown failed");
 }
 
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]

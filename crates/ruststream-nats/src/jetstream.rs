@@ -15,11 +15,17 @@ use async_nats::jetstream::message::PublishMessage;
 use bytes::Bytes;
 #[cfg(feature = "testing")]
 use ruststream::HeaderMap;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::{PublishBuilder, PublishSink};
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
+#[cfg(feature = "asyncapi")]
+use serde::Serialize;
 
 use crate::broker::{ConnectedNatsBroker, NatsConnection};
 use crate::publisher::NatsPublishPolicy;
+#[cfg(feature = "asyncapi")]
+use crate::subject::JETSTREAM_EXTENSION;
 use crate::{convert::headers_to_nats, error::NatsError};
 
 /// The acknowledgement a `JetStream` stream returns for an accepted publish.
@@ -262,6 +268,35 @@ impl PublishPolicy<ConnectedNatsBroker> for JetStreamPublish {
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(self.bind(connected)))
     }
+
+    /// The stream this publisher requires its subject to be served by, where it states one.
+    ///
+    /// That is the one thing the policy knows about the channel, and the `nats` binding has no
+    /// field for it, so it travels under this crate's extension key. A publisher that states no
+    /// stream contributes nothing.
+    ///
+    /// There is no reply address here: on a `JetStream` delivery the protocol's reply field is the
+    /// acknowledgement inbox, not a request's, so a request is answered over Core NATS and
+    /// [`NatsPublish`](crate::NatsPublish) is what reports it.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        self.stream
+            .as_deref()
+            .map(|stream| JetStreamPublishChannel {
+                expected_stream: stream,
+            })
+            .and_then(|body| Binding::extension(JETSTREAM_EXTENSION, &body).ok())
+            .map(|binding| Bindings::new().with(binding))
+            .unwrap_or_default()
+    }
+}
+
+/// The stream a publisher requires, under this crate's extension key.
+#[cfg(feature = "asyncapi")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JetStreamPublishChannel<'a> {
+    expected_stream: &'a str,
 }
 
 impl NatsPublishPolicy for JetStreamPublish {

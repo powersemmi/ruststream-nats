@@ -216,11 +216,17 @@ impl ConnectedNatsBroker {
     }
 
     /// The coordinates the server announced on this connection, which may differ from the
-    /// configured address (a cluster route, a discovered peer).
+    /// configured address (a cluster route, a discovered peer), together with the version of the
+    /// NATS client protocol it speaks.
+    ///
+    /// The protocol version is a fact of the live connection, so it is here rather than on
+    /// [`NatsBroker::describe_server`], which answers before anything is dialled and is what the
+    /// generated `AsyncAPI` document takes its server from.
     #[must_use]
     pub fn server_spec(&self) -> ServerSpec {
         let info = self.connection.client().server_info();
         ServerSpec::new(format!("{}:{}", info.host, info.port), "nats")
+            .protocol_version(info.proto.to_string())
     }
 
     /// A `JetStream` context on this connection, for stream and consumer administration

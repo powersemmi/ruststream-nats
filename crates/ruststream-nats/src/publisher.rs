@@ -9,6 +9,8 @@ use bytes::Bytes;
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
 
 use crate::broker::{ConnectedNatsBroker, NatsConnection};
+#[cfg(feature = "asyncapi")]
+use crate::message::REPLY_ADDRESS_LOCATION;
 use crate::{convert::headers_to_nats, error::NatsError};
 
 use self::sealed::Sealed;
@@ -63,6 +65,17 @@ impl PublishPolicy<ConnectedNatsBroker> for NatsPublish {
         connected: &ConnectedNatsBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(self.bind(connected)))
+    }
+
+    /// Where a client reads the subject an answer goes to.
+    ///
+    /// A NATS request carries its inbox in a protocol field, which this crate surfaces as the
+    /// `reply-to` header, so that is the runtime expression the document reports for a reply this
+    /// policy publishes. The `nats` binding has nothing else for a publisher: its one field is a
+    /// queue group, which belongs to a subscription.
+    #[cfg(feature = "asyncapi")]
+    fn reply_address_location(&self) -> Option<&'static str> {
+        Some(REPLY_ADDRESS_LOCATION)
     }
 }
 

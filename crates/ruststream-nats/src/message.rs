@@ -54,7 +54,7 @@ impl CoreMessage {
         // authoritative: it overrides a literal `reply-to` header if both are present.
         // JetStream deliveries are excluded on purpose - there `reply` is the ack inbox.
         if let Some(reply) = inner.reply.as_ref() {
-            headers.insert("reply-to", reply.as_str().to_owned());
+            headers.insert(REPLY_TO_HEADER, reply.as_str().to_owned());
         }
         Self { inner, headers }
     }
@@ -91,6 +91,19 @@ impl JetStreamMessage {
         self.inner.info().ok()
     }
 }
+
+/// The header this crate surfaces a request's wire-level reply subject under.
+///
+/// NATS carries the inbox in a protocol field rather than a header, so a handler that answers a
+/// request reads it here. The generated `AsyncAPI` document names the same header as the runtime
+/// expression a client reads a reply address from.
+pub(crate) const REPLY_TO_HEADER: &str = "reply-to";
+
+/// The same header, as the runtime expression an `AsyncAPI` document reports a reply address at.
+/// The specification spells the pointer out, so the header name is repeated here rather than
+/// composed.
+#[cfg(feature = "asyncapi")]
+pub(crate) const REPLY_ADDRESS_LOCATION: &str = "$message.header#/reply-to";
 
 fn empty_headers() -> &'static HeaderMap {
     static EMPTY: OnceLock<HeaderMap> = OnceLock::new();

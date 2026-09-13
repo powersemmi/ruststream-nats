@@ -19,10 +19,15 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 pub use async_nats::jetstream::consumer::DeliverPolicy;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::IntoSource;
 use ruststream::{
     AddressedCopies, NamedCopies, RedeliveryAddress, RedeliveryAddressed, SubscriptionSource,
 };
+
+#[cfg(feature = "asyncapi")]
+use serde::Serialize;
 
 use self::sealed::Sealed;
 use crate::{ConnectedNatsBroker, error::NatsError, subscriber::NatsSubscriber};
@@ -246,6 +251,12 @@ impl CoreSubject {
         self.queue_group = Some(name.into());
         self
     }
+
+    /// The queue group this subscription joins, if any.
+    #[cfg(feature = "asyncapi")]
+    pub(crate) fn group(&self) -> Option<&str> {
+        self.queue_group.as_deref()
+    }
 }
 
 impl Sealed for CoreSubject {
@@ -299,6 +310,12 @@ impl CoreWildcard {
     pub fn queue_group(mut self, name: impl Into<String>) -> Self {
         self.queue_group = Some(name.into());
         self
+    }
+
+    /// The queue group this subscription joins, if any.
+    #[cfg(feature = "asyncapi")]
+    pub(crate) fn group(&self) -> Option<&str> {
+        self.queue_group.as_deref()
     }
 }
 
@@ -442,6 +459,83 @@ impl JetStreamSubject {
     pub(crate) fn consumer_filter(&self) -> &str {
         self.filter_subject.as_deref().unwrap_or(&self.subject)
     }
+
+    /// What this consumer is, in `JetStream`'s own words.
+    ///
+    /// The `nats` binding has one field and it belongs to a Core NATS queue group, so everything
+    /// a stream consumer is configured with goes under an extension of this crate's own. Every
+    /// value is the descriptor's; nothing here waits for a connection.
+    #[cfg(feature = "asyncapi")]
+    fn consumer_bindings(&self) -> Bindings {
+        let body = JetStreamChannel {
+            stream: &self.stream,
+            durable: self.durable.as_deref(),
+            filter_subject: self.consumer_filter(),
+            ack_wait_seconds: self
+                .ack_wait
+                .map_or(DEFAULT_ACK_WAIT, NonZeroDuration::get)
+                .as_secs_f64(),
+            max_ack_pending: self.max_ack_pending.unwrap_or(DEFAULT_MAX_ACK_PENDING),
+            deliver_policy: deliver_policy_name(self.deliver_policy.unwrap_or(DeliverPolicy::All)),
+        };
+        Binding::extension(JETSTREAM_EXTENSION, &body)
+            .map(|binding| Bindings::new().with(binding))
+            .unwrap_or_default()
+    }
+}
+
+/// The extension key the `JetStream` consumer settings travel under.
+///
+/// The specification's `nats` binding declares its channel object empty, and the protocol keys are
+/// a closed list, so a stream, a durable name and an ack window have no lawful binding field. An
+/// `x-` extension sits at the same level and carries no `bindingVersion`.
+#[cfg(feature = "asyncapi")]
+pub(crate) const JETSTREAM_EXTENSION: &str = "x-ruststream-jetstream";
+
+/// The whole `nats` binding, version 0.1.0: the queue group of a Core NATS subscription, on the
+/// `receive` operation. A subscription outside a group contributes nothing rather than an empty
+/// object.
+#[cfg(feature = "asyncapi")]
+fn core_operation_bindings(queue_group: Option<&str>) -> Bindings {
+    queue_group
+        .map(|queue| NatsOperation { queue })
+        .and_then(|body| Binding::new("nats", "0.1.0", &body).ok())
+        .map(|binding| Bindings::new().with(binding))
+        .unwrap_or_default()
+}
+
+/// The name `JetStream` gives a delivery policy on the wire.
+#[cfg(feature = "asyncapi")]
+fn deliver_policy_name(policy: DeliverPolicy) -> &'static str {
+    match policy {
+        DeliverPolicy::All => "all",
+        DeliverPolicy::Last => "last",
+        DeliverPolicy::New => "new",
+        DeliverPolicy::ByStartSequence { .. } => "by_start_sequence",
+        DeliverPolicy::ByStartTime { .. } => "by_start_time",
+        DeliverPolicy::LastPerSubject => "last_per_subject",
+    }
+}
+
+/// The queue group, which is the whole `nats` binding.
+#[cfg(feature = "asyncapi")]
+#[derive(Serialize)]
+struct NatsOperation<'a> {
+    queue: &'a str,
+}
+
+/// What a `JetStream` consumer is configured with, under this crate's extension key.
+#[cfg(feature = "asyncapi")]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JetStreamChannel<'a> {
+    stream: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    durable: Option<&'a str>,
+    filter_subject: &'a str,
+    ack_wait_seconds: f64,
+    max_ack_pending: i64,
+    deliver_policy: &'static str,
 }
 
 impl Sealed for JetStreamSubject {
@@ -523,6 +617,11 @@ impl SubscriptionSource<ConnectedNatsBroker> for CoreSubject {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+
+    #[cfg(feature = "asyncapi")]
+    fn operation_bindings(&self) -> Bindings {
+        core_operation_bindings(self.group())
+    }
 }
 
 /// The subject itself, so the answer needs no connection and the future is ready.
@@ -550,6 +649,11 @@ impl SubscriptionSource<ConnectedNatsBroker> for CoreWildcard {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+
+    #[cfg(feature = "asyncapi")]
+    fn operation_bindings(&self) -> Bindings {
+        core_operation_bindings(self.group())
+    }
 }
 
 impl SubscriptionSource<ConnectedNatsBroker> for JetStreamSubject {
@@ -566,6 +670,11 @@ impl SubscriptionSource<ConnectedNatsBroker> for JetStreamSubject {
         connected: &ConnectedNatsBroker,
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        self.consumer_bindings()
     }
 }
 

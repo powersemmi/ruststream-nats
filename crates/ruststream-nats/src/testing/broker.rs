@@ -12,6 +12,11 @@ use ruststream::{
     testing::{Coordinator, TestableBroker},
 };
 
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
+
+#[cfg(feature = "asyncapi")]
+use crate::ConnectedNatsBroker;
 use crate::{
     NatsPublish,
     error::NatsError,
@@ -261,6 +266,12 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for CoreSubject {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+
+    // The production answer, so a document built over the test broker says what the service ships.
+    #[cfg(feature = "asyncapi")]
+    fn operation_bindings(&self) -> Bindings {
+        SubscriptionSource::<ConnectedNatsBroker>::operation_bindings(self)
+    }
 }
 
 impl RedeliveryAddressed<ConnectedNatsTestBroker> for CoreSubject {
@@ -286,6 +297,11 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for CoreWildcard {
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
     }
+
+    #[cfg(feature = "asyncapi")]
+    fn operation_bindings(&self) -> Bindings {
+        SubscriptionSource::<ConnectedNatsBroker>::operation_bindings(self)
+    }
 }
 
 // A JetStream source resolves against the in-process transport too: only the subject pattern
@@ -303,6 +319,11 @@ impl SubscriptionSource<ConnectedNatsTestBroker> for JetStreamSubject {
         connected: &ConnectedNatsTestBroker,
     ) -> Result<Self::Subscriber, NatsError> {
         connected.subscribe_with(self).await
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        SubscriptionSource::<ConnectedNatsBroker>::channel_bindings(self)
     }
 }
 

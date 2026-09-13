@@ -370,7 +370,7 @@ impl Subscribe for ConnectedNatsBroker {
     }
 
     /// A NATS subject is subscribed to and published to under one name, so `#[subscriber("name")]`
-    /// composes with [`retry_via`](ruststream::runtime::BrokerScope::retry_via) here. A wildcard
+    /// composes with [`out_retry`](ruststream::runtime::Mounting::out_retry) here. A wildcard
     /// pattern is the exception and reports nothing; see
     /// [`NatsSubscription::redelivery_subject`](crate::NatsSubscription::redelivery_subject).
     fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {

@@ -86,7 +86,7 @@ async fn confirm(order: &Order) -> Confirmation {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0"))
         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
-            b.include(confirm).out(Reply, Publish);
+            b.include(confirm).out_reply(Publish);
         })
 }
 ```
@@ -122,10 +122,11 @@ use std::time::Duration;
 use ruststream::OutgoingMessage;
 use ruststream_nats::NatsError;
 
-// One mount verb names every publish position: `Reply` for the value a replying handler
-// returns, an Out slot's own marker for an injected publisher. A reply position with no
-// `.out(Reply, ..)` takes the broker's default policy, which here is the Core NATS one.
-b.include(confirm).out(Reply, Publish);
+// One mount verb names every publish position: `.out_reply(..)` for the value a replying
+// handler returns, `.out(Marker, ..)` for an injected publisher's own slot, `.out_retry(..)`
+// for the deferred copy of a delayed retry. A reply position left unnamed takes the broker's
+// default policy, which here is the Core NATS one.
+b.include(confirm).out_reply(Publish);
 
 // Core NATS: fire-and-forget, and the RequestReply capability.
 b.after_startup(Publish, async move |publisher| -> Result<(), NatsError> {
@@ -184,7 +185,7 @@ use ruststream_nats::prelude::*;
 use ruststream_nats::testing::NatsTestBroker;
 
 // A policy names its own broker, so the test mounts `confirm` without one and its reply takes
-// the test broker's default publisher - the same position `.out(Reply, Publish)` fills in
+// the test broker's default publisher - the same position `.out_reply(Publish)` fills in
 // production.
 let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
     .with_broker(NatsTestBroker::new(), |b| {

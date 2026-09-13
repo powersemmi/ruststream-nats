@@ -117,12 +117,19 @@ NATS 的负载均衡是 `CoreSubject::queue_group`。两个类型没有共同的
 保持原样。
 
 Core NATS 根本没有确认：一次 core 投递返回 `AckError::Unsupported`，那里的 `retry_after` 退回到
-运行时的延迟重新发布。这条退路需要一个地方来送那份副本，而订阅回答的是它读取的 subject：Core
-订阅回答 subject 本身，JetStream 订阅回答消费者的过滤条件。因此 `BrokerScope::retry_via` 在这个
-Broker 上不用额外接线就能用。
+运行时的延迟重新发布。这份副本从哪个发布者出去，由注册自己写明，一个挂载写一次：
+`b.include(reconcile).out_retry(Publish)`。它落到哪里则由订阅回答，就是它读取的 subject：Core
+订阅回答 subject 本身，JetStream 订阅回答消费者的过滤条件。除此之外没有别的接线。
+
+只要 Core 的处理器会推迟一条消息，就把这个位置接上。不接的话，运行时只剩下立刻重新入队这一条
+退路，而 Core NATS 连这条也没有，于是消息就没了，日志会这么写。
+
+重试位置和别的 `Out` 槽位一样，所以跟在它后面的就是槽位的那些步骤：`.transform(..)` 给每份延迟
+副本盖上标记，`.map_publisher(..)` 决定发布者自己带什么。副本带的是这次投递到达时的那串字节，
+因此这里写下的编解码器什么也不编码；运行时在它出去之前把 `x-ruststream-retry-count` 头加一。
 
 通配符是例外。`orders.*` 在投递时匹配，在发布时服务器拒绝它，因此按模式打开的订阅报不出地址；在
-这样的订阅之上用 `retry_via` 接线的作用域会拒绝启动，而不是把副本发往不存在的地方。给这样的处理器
+这样的订阅之上用 `out_retry` 绑定的注册会拒绝启动，而不是把副本发往不存在的地方。给这样的处理器
 一个具体的 subject，或者改用 JetStream 读它：在那里 `retry_after` 就是服务器自己的延迟否定确认。
 
 ## 发布 { #publishing }
@@ -130,7 +137,7 @@ Broker 上不用额外接线就能用。
 你写下哪个发布策略，就选定了哪种传输：
 
 - `NatsPublish` 构造 `NatsPublisher`：Core NATS 的普通发布，发完即忘，同一个活值上还带
-  `RequestReply` 能力。它也是这个 Broker 默认的发布策略，因此没有写 `.out(Reply, ..)` 的应答处理器
+  `RequestReply` 能力。它也是这个 Broker 默认的发布策略，因此没有写 `.out_reply(..)` 的应答处理器
   就通过它回复。crate 的 prelude 把它叫作 `Publish`。
 - `JetStreamPublish` 构造 `JetStreamPublisher`：每次发布都等流的确认，因此流拒绝掉的消息会返回
   错误，而不是悄悄丢掉。`publish_ack` 返回确认本身：流、序号，以及去重窗口是否认出了这条消息。
@@ -245,7 +252,7 @@ use ruststream_nats::prelude::*;
   了；服务器自己挑成员，两者共同的性质是这一组对每条消息只看见一次。
 - 发布策略就是生产用的那两个。`NatsPublish` 和 `JetStreamPublish` 在测试 Broker 上同样构造出
   发布者，`NatsPublish` 也是它的默认策略，因此路由文件原样挂载：
-  `b.include(confirm).out(Reply, Publish)` 和
+  `b.include(confirm).out_reply(Publish)` 和
   `b.include(audit).out(Audit, JetStreamPublish::default())` 在两个 Broker 上说的是同一件事。没有
   测试传输自己的策略需要换进来。每个活值带的能力和它的生产对应物完全一样 - Core 是 `Publisher`
   和 `RequestReply`，`JetStream` 只有 `Publisher` - 因此在这里能编译的槽位，对着服务器也能编译。

@@ -126,15 +126,25 @@ server holds the message for that long and then redelivers it on the same consum
 sequence and its delivery count intact.
 
 Core NATS has no acknowledgement at all: a core delivery returns `AckError::Unsupported`, and a
-`retry_after` there falls back to the runtime's deferred re-publish. That fallback needs somewhere
-to send the copy, and a subscription answers with the subject it reads: the subject itself for a
-Core subscription, the consumer's filter for a JetStream one. So `BrokerScope::retry_via` works on
-this broker with no extra wiring.
+`retry_after` there falls back to the runtime's deferred re-publish. The registration names the
+publisher that copy goes out through, one call per mount: `b.include(reconcile).out_retry(Publish)`.
+Where it lands is the subscription's own answer, the subject it reads: the subject itself for a Core
+subscription, the consumer's filter for a JetStream one. Nothing else is wired.
+
+Bind the position wherever a Core handler defers. Left unbound, the runtime has only an immediate
+requeue to fall back on, and Core NATS does not have one either, so the message is gone and the log
+says so.
+
+The retry position is an `Out` slot like any other, so the steps after it are the slot steps:
+`.transform(..)` stamps every deferred copy, `.map_publisher(..)` sets what the publisher itself
+carries. The copy travels as the bytes the delivery arrived with, so a codec named there encodes
+nothing, and the runtime raises the `x-ruststream-retry-count` header on it before it goes out.
 
 A wildcard is the exception. `orders.*` matches on delivery and is refused on publish, so a
-subscription opened on a pattern reports no address, and a scope wired with `retry_via` over one
-refuses to start rather than sending copies into nothing. Give such a handler a concrete subject, or
-read it through JetStream, where `retry_after` is the server's own delayed negative acknowledgement.
+subscription opened on a pattern reports no address, and a registration bound with `out_retry` over
+one refuses to start rather than sending copies into nothing. Give such a handler a concrete subject,
+or read it through JetStream, where `retry_after` is the server's own delayed negative
+acknowledgement.
 
 ## Publishing
 
@@ -142,7 +152,7 @@ Naming a publish policy picks the transport:
 
 - `NatsPublish` constructs `NatsPublisher`: plain Core NATS publishing, fire-and-forget, with the
   `RequestReply` capability on the same live value. It is also the broker's default publish policy,
-  so a replying handler mounted without an `.out(Reply, ..)` replies through it. The crate prelude
+  so a replying handler mounted without an `.out_reply(..)` replies through it. The crate prelude
   carries it as `Publish`.
 - `JetStreamPublish` constructs `JetStreamPublisher`: every publish waits for the stream's
   acknowledgement, so a message the stream refuses returns an error instead of dropping silently.
@@ -267,7 +277,7 @@ server:
   is that the group sees each message once.
 - The publish policies are the production ones. `NatsPublish` and `JetStreamPublish` pair against
   the test broker as well, and `NatsPublish` is its default policy, so a routes file mounts
-  unchanged: `b.include(confirm).out(Reply, Publish)` and `b.include(audit).out(Audit,
+  unchanged: `b.include(confirm).out_reply(Publish)` and `b.include(audit).out(Audit,
   JetStreamPublish::default())` say the same thing on both brokers. There is no policy of the test
   transport's own to swap in. Each live form carries exactly the capabilities its production
   counterpart carries - `Publisher` and `RequestReply` for Core, `Publisher` alone for

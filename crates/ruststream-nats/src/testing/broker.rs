@@ -235,7 +235,7 @@ impl Subscribe for ConnectedNatsTestBroker {
         self.subscribe_with(CoreSubject::new(name)).await
     }
 
-    // The answer the real broker gives, so a `retry_via` mount that starts in process starts
+    // The answer the real broker gives, so an `out_retry` mount that starts in process starts
     // against a server too.
     fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
         CoreSubject::new(name).redelivery_subject()

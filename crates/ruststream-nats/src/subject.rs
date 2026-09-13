@@ -165,7 +165,7 @@ pub trait NatsSubscription: Sealed {
     ///
     /// A wildcard is not an answer: `orders.*` matches on delivery and is refused on publish, so a
     /// subscription opened on a pattern reports nothing rather than an address the deferred copy
-    /// would bounce off. An application that wires `retry_via` over such a subscription then
+    /// would bounce off. A registration that binds `out_retry` over such a subscription then
     /// refuses to start, and the error names it.
     #[must_use]
     fn redelivery_subject(&self) -> Option<RedeliveryAddress> {

@@ -142,10 +142,8 @@ fn app() -> impl App {
             // The reply position takes a policy like any other slot. Naming the JetStream one
             // sends these confirmations into a stream that acknowledges them, while the rest of
             // the service keeps publishing over Core NATS.
-            b.include(confirm).out(
-                Reply,
-                JetStreamPublish::default().expect_stream("CONFIRMATIONS"),
-            );
+            b.include(confirm)
+                .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"));
             // --8<-- [end:reply_mount]
 
             // --8<-- [start:options_mount]

@@ -532,7 +532,7 @@ async fn a_reply_with_no_declared_destination_lands_where_the_mount_names() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_position_bound_to_the_production_policy_answers_in_process() {
     let tb = TestApp::start(app(|b| {
-        b.include(issue_receipt).out(Reply, Publish);
+        b.include(issue_receipt).out_reply(Publish);
     }))
     .await
     .expect("start");

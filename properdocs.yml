@@ -73,6 +73,13 @@ hooks:
 
 plugins:
   - search
+  # The guide moved into the crate's own reference on docs.rs, so the pages it left behind
+  # redirect to the section that took each topic over.
+  - redirects:
+      redirect_maps:
+        nats.md: https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html
+        ru/nats.md: https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html
+        zh/nats.md: https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html
   # Versioned docs are published with `mike` (see the Docs workflow and the version switcher).
   # Each translation is a tree of its own under `docs/<locale>/`, mirroring the English paths.
   # English stays at the docs root: a file outside a locale folder is the default language.
@@ -95,7 +102,6 @@ plugins:
           build: true
           nav_translations:
             Home: Главная
-            Guide: Руководство
             RustStream docs: Документация RustStream
             API reference: Справочник API
         - locale: zh
@@ -103,7 +109,6 @@ plugins:
           build: true
           nav_translations:
             Home: 首页
-            Guide: 指南
             RustStream docs: RustStream 文档
             API reference: API 参考
 
@@ -116,7 +121,5 @@ extra:
 
 nav:
   - Home: index.md
-  - Guide:
-      - nats.md
   - RustStream docs: https://powersemmi.github.io/ruststream/
   - API reference: https://docs.rs/ruststream-nats

@@ -26,17 +26,35 @@ A service mounts its handlers on a `NatsBroker`:
 --8<-- "crates/ruststream-nats/examples/nats_core.rs:app"
 ```
 
+## What the crate offers
+
+The crate reference is the textbook for all of it, and each topic is one section of it:
+
+- [Three subscription descriptors](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#the-subscription-descriptors),
+  one per form a NATS subscription takes: one subject, a pattern, and a JetStream pull consumer.
+- [Two publish policies](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#publishing):
+  plain Core NATS, and one that waits for the stream to acknowledge the message.
+- The [deduplication id and the stream expectations](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#what-one-jetstream-message-states-about-itself)
+  one JetStream publish states about itself.
+- [Acknowledgement and delayed redelivery](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#acknowledgement-and-delayed-retry),
+  which a JetStream consumer settles on the server and a Core subject does not settle at all.
+- The [AsyncAPI document](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#the-asyncapi-document)
+  the crate fills in, and the [in-process transport](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#testing)
+  a test runs against.
+
 ## Where to go next
 
 <div class="grid cards" markdown>
 
-- :material-transit-connection-variant: **[NATS guide](nats.md)** - Core subscriptions, JetStream, request/reply, and testing.
-- :material-book-open-variant: **[RustStream docs](https://powersemmi.github.io/ruststream/)** - the framework itself: subscribers, routing, codecs, middleware, the CLI.
-- :material-language-rust: **[API reference](https://docs.rs/ruststream-nats)** - the crate's rustdoc on docs.rs.
+- :material-transit-connection-variant: **[NATS reference](https://docs.rs/ruststream-nats)** - the crate itself: descriptors, policies, per-message settings, testing.
+- :material-book-open-variant: **[RustStream docs](https://powersemmi.github.io/ruststream/)** - installation, the tutorial, the list of brokers.
+- :material-language-rust: **[Framework reference](https://docs.rs/ruststream)** - subscribers, routing, codecs, middleware, the CLI.
 
 </div>
 
 ## How this site relates to the RustStream docs
 
-This site covers what is specific to NATS. Everything else lives in the
-[RustStream documentation](https://powersemmi.github.io/ruststream/).
+This page is where NATS starts; what it is made of is in the
+[crate reference](https://docs.rs/ruststream-nats). The framework itself is documented with the
+core crate, and its entry pages are on the
+[RustStream site](https://powersemmi.github.io/ruststream/).

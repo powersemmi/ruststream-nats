@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Documentation
-    url: https://powersemmi.github.io/ruststream/latest/brokers/nats/
-    about: The NATS broker guide - check here before opening an issue.
+    url: https://docs.rs/ruststream-nats
+    about: The NATS crate reference - check here before opening an issue.

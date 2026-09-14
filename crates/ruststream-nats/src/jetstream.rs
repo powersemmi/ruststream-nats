@@ -279,7 +279,7 @@ impl PublishPolicy<ConnectedNatsBroker> for JetStreamPublish {
     /// acknowledgement inbox, not a request's, so a request is answered over Core NATS and
     /// [`NatsPublish`](crate::NatsPublish) is what reports it.
     #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self) -> Bindings {
+    fn channel_bindings(&self, _channel: &str) -> Bindings {
         self.stream
             .as_deref()
             .map(|stream| JetStreamPublishChannel {

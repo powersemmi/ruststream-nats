@@ -99,8 +99,8 @@ settings, so a setting on the wrong model does not compile.
 `JetStreamSubject` is a subscription source in its own right, so the macro-free path takes it as it
 stands: `subscriber(JetStreamSubject::new("orders.*", "ORDERS"), body)` builds the same
 definition. See
-[Subscribers](https://powersemmi.github.io/ruststream/latest/guides/subscribers/) in the framework
-docs for the body contract there.
+[Subscribers](https://docs.rs/ruststream/latest/ruststream/runtime/index.html#subscribers) in the framework
+reference for the body contract there.
 
 ### Batches
 
@@ -342,8 +342,8 @@ The `testing` feature ships `NatsTestBroker`: an in-process transport with real 
 matching (`*` and `>` wildcards), header propagation and request-reply, with no `nats-server` and no
 docker. It drives the `TestApp` harness: publish input through the same builder a service publishes
 through, and the harness reports what the handler received, what it published and how the delivery
-settled. See
-[Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
+settled. The harness and its assertions are described in the framework reference, under
+[`ruststream::testing`](https://docs.rs/ruststream/latest/ruststream/testing/index.html).
 
 Six NATS-specific things hold in process, so a handler that uses them is testable without a
 server:

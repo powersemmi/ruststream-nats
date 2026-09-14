@@ -91,8 +91,8 @@ NATS 的负载均衡是 `CoreSubject::queue_group`。两个类型没有共同的
 
 `JetStreamSubject` 本身就是一个订阅来源，所以不用宏的那条路径原样接受它：
 `subscriber(JetStreamSubject::new("orders.*", "ORDERS"), body)` 构造出同一个定义。那条路径上主体
-的契约，参见框架文档里的
-[订阅者](https://powersemmi.github.io/ruststream/latest/guides/subscribers/)。
+的契约，参见框架参考里的
+[订阅者](https://docs.rs/ruststream/latest/ruststream/runtime/index.html#subscribers)。
 
 ### 批 { #batches }
 
@@ -313,8 +313,8 @@ JetStream 消费者的那些设置在这个绑定里都没有字段，而协议�
 `testing` feature 带来 `NatsTestBroker`：一个进程内传输，有真正的 NATS subject 匹配（`*` 和 `>`
 通配符）、消息头传递和请求-响应，不需要 `nats-server`，也不需要 docker。它驱动 `TestApp` 测试
 套件：用服务发布时的同一个构建器发布输入，套件报告处理器收到了什么、发布了什么，以及这次投递
-怎样结算。参见
-[用 `TestApp` 对服务做单元测试](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp)。
+怎样结算。这套测试套件和它的断言，参见框架参考里的
+[`ruststream::testing`](https://docs.rs/ruststream/latest/ruststream/testing/index.html) 模块。
 
 有六件 NATS 特有的事在进程内照样成立，因此用到它们的处理器不需要服务器也能测：
 

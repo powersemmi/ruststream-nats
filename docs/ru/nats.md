@@ -99,7 +99,7 @@ NatsBroker::new(url)      только конфигурация, синхрон�
 `JetStreamSubject` - самостоятельный источник подписки, поэтому путь без макросов принимает его как
 есть: `subscriber(JetStreamSubject::new("orders.*", "ORDERS"), body)` строит то же самое
 определение. Контракт тела на этом пути описан в разделе
-[Подписчики](https://powersemmi.github.io/ruststream/latest/guides/subscribers/) документации
+[Подписчики](https://docs.rs/ruststream/latest/ruststream/runtime/index.html#subscribers) справочника
 фреймворка.
 
 ### Пакеты {#batches}
@@ -343,8 +343,8 @@ ruststream-nats = { version = "0.7", features = ["asyncapi"] }
 субъектов NATS (шаблоны `*` и `>`), передачей заголовков и запросом-ответом, без `nats-server` и
 без docker. На нём работает обвязка `TestApp`: публикуйте вход тем же билдером, которым публикует
 сервис, и обвязка сообщит, что получил обработчик, что он опубликовал и чем завершилась доставка.
-См.
-[Юнит-тестирование сервиса через `TestApp`](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
+Обвязка и её проверки описаны в справочнике фреймворка, в модуле
+[`ruststream::testing`](https://docs.rs/ruststream/latest/ruststream/testing/index.html).
 
 Шесть особенностей NATS сохраняются внутри процесса, поэтому обработчик, который ими пользуется,
 тестируется без сервера:

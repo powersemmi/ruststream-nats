@@ -273,7 +273,13 @@ JetStream 消费者的那些设置在这个绑定里都没有字段，而协议�
 --8<-- "crates/ruststream-nats/tests/asyncapi_nats.rs:consumer"
 ```
 
-要求某条流的发布者（`JetStreamPublish::default().expect_stream("ORDERS")`）在同一个键下报出这条流。
+要求某条流的发布者（`JetStreamPublish::default().expect_stream("ORDERS")`）在同一个键下报出这条流，
+并在旁边写明这条流必须承载哪个 subject。这个 subject 就是挂载点解析出的目的地，于是这条要求读起来是
+一句完整的话，而不是读者自己拼起来的两半：
+
+```rust
+--8<-- "crates/ruststream-nats/tests/asyncapi_nats.rs:publish_stream"
+```
 
 应答说明客户端从哪里读到答案要发往的 subject。NATS 把请求的 inbox 带在一个协议字段里，这个 crate
 把它显示成 `reply-to` 消息头，于是文档报出的就是这个表达式；channel 本身这时没有地址，因为地址是

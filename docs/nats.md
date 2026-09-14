@@ -299,7 +299,13 @@ not a binding and carries no `bindingVersion`:
 ```
 
 A publisher that requires a stream (`JetStreamPublish::default().expect_stream("ORDERS")`) reports
-that stream under the same key.
+that stream under the same key, next to the subject the stream has to serve. The subject is the
+destination the mount site resolved, so the requirement reads as one statement instead of two halves
+a reader has to join:
+
+```rust
+--8<-- "crates/ruststream-nats/tests/asyncapi_nats.rs:publish_stream"
+```
 
 A reply says where a client reads the subject an answer goes to. NATS carries a request's inbox in a
 protocol field, which this crate surfaces as the `reply-to` header, so that is the runtime

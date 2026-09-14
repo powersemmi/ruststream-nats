@@ -15,8 +15,12 @@ use std::{
 };
 
 use bytes::Bytes;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply};
 
+#[cfg(feature = "asyncapi")]
+use crate::broker::ConnectedNatsBroker;
 use crate::{
     JetStreamOptions, JetStreamPublish, NatsPublish,
     error::NatsError,
@@ -88,6 +92,12 @@ impl PublishPolicy<ConnectedNatsTestBroker> for NatsPublish {
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(self.bind(connected)))
     }
+
+    // The production answer, so a document built over the test broker says what the service ships.
+    #[cfg(feature = "asyncapi")]
+    fn reply_address_location(&self) -> Option<&'static str> {
+        PublishPolicy::<ConnectedNatsBroker>::reply_address_location(self)
+    }
 }
 
 impl NatsTestPublishPolicy for NatsPublish {
@@ -104,6 +114,12 @@ impl PublishPolicy<ConnectedNatsTestBroker> for JetStreamPublish {
         connected: &ConnectedNatsTestBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(self.bind(connected)))
+    }
+
+    // The production answer, over the destination the mount site resolved.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        PublishPolicy::<ConnectedNatsBroker>::channel_bindings(self, channel)
     }
 }
 

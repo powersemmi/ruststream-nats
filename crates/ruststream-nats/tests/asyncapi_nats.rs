@@ -12,6 +12,7 @@ use ruststream::nonzero;
 use ruststream::runtime::{Names, Outgoing, PublishContext};
 use ruststream_nats::DeliverPolicy;
 use ruststream_nats::prelude::*;
+use ruststream_nats::testing::NatsTestBroker;
 use serde::{Deserialize, Serialize};
 
 /// The message the handlers below carry. No declared destination: each mount names one.
@@ -146,7 +147,9 @@ fn a_reply_reports_the_header_its_address_travels_in() {
 }
 // --8<-- [end:reply_address]
 
-/// A publisher that requires a stream says which one; one that requires nothing says nothing.
+// --8<-- [start:publish_stream]
+/// A publisher that requires a stream says which one, and which subject that stream has to serve;
+/// one that requires nothing says nothing.
 #[test]
 fn a_jetstream_publisher_reports_the_stream_it_requires() {
     let app = RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(
@@ -163,6 +166,70 @@ fn a_jetstream_publisher_reports_the_stream_it_requires() {
     let channel = &document["channels"]["orders.answers"]["bindings"]["x-ruststream-jetstream"];
 
     assert_eq!(channel["expectedStream"], "RECEIPTS");
+    // The destination the mount site resolved, which the channel also reports as its address.
+    assert_eq!(channel["subject"], "orders.answers");
+}
+// --8<-- [end:publish_stream]
+
+/// A transform free to name the destination per delivery does not change what the stream is
+/// required to serve: the binding reports the name the mount site declared as the fallback.
+#[test]
+fn a_redirected_reply_still_names_the_subject_its_stream_serves() {
+    let app = RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(
+        NatsBroker::new("nats://nats.example.com:4222"),
+        |b| {
+            b.include(answer)
+                .out_reply(JetStreamPublish::default().expect_stream("RECEIPTS"))
+                .transform(ReplyTo);
+        },
+    );
+    let json = build_spec(&app)
+        .to_json()
+        .expect("the document must serialize");
+    let document: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let channel = &document["channels"]["orders.answers"];
+
+    assert_eq!(
+        channel["bindings"]["x-ruststream-jetstream"]["subject"],
+        "orders.answers"
+    );
+}
+
+/// The in-process broker answers the production answer, so a document built over the test broker
+/// describes the service that ships.
+#[test]
+fn the_test_broker_describes_the_publisher_the_service_ships() {
+    let app =
+        RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(NatsTestBroker::new(), |b| {
+            b.include(answer)
+                .out_reply(JetStreamPublish::default().expect_stream("RECEIPTS"));
+        });
+    let json = build_spec(&app)
+        .to_json()
+        .expect("the document must serialize");
+    let document: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    let channel = &document["channels"]["orders.answers"]["bindings"]["x-ruststream-jetstream"];
+
+    assert_eq!(channel["expectedStream"], "RECEIPTS");
+    assert_eq!(channel["subject"], "orders.answers");
+}
+
+/// The Core NATS reply address is the test broker's answer too.
+#[test]
+fn the_test_broker_reports_the_header_a_reply_address_travels_in() {
+    let app =
+        RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(NatsTestBroker::new(), |b| {
+            b.include(answer).out_reply(Publish).transform(ReplyTo);
+        });
+    let json = build_spec(&app)
+        .to_json()
+        .expect("the document must serialize");
+    let document: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+    assert_eq!(
+        document["operations"]["receive_orders_asks"]["reply"]["address"]["location"],
+        "$message.header#/reply-to"
+    );
 }
 
 /// The scan the framework ships for exactly this mistake: a password in a configuration URL must

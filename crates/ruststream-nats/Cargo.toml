@@ -53,3 +53,6 @@ name = "nats_request_reply"
 
 [[example]]
 name = "nats_retry"
+
+[package.metadata.docs.rs]
+all-features = true

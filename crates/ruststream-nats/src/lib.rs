@@ -1,17 +1,4 @@
-//! `NATS` / `JetStream` broker implementation for `RustStream`.
-//!
-//! The lifecycle is the framework's ladder of consuming transitions: [`NatsBroker::new`] captures
-//! the address synchronously, [`Broker::connect`](ruststream::Broker::connect) dials and yields a
-//! [`ConnectedNatsBroker`], and
-//! [`ConnectedBroker::shutdown`](ruststream::ConnectedBroker::shutdown) drains it into a
-//! [`ClosedNatsBroker`]. Subscriptions and publishers exist only from the connected form.
-//!
-//! Publishing splits by transport rather than by flag: [`NatsPublish`] pairs into the Core NATS
-//! [`NatsPublisher`] (fire-and-forget, plus request/reply), and [`JetStreamPublish`] pairs into
-//! the [`JetStreamPublisher`], which awaits the stream's acknowledgement. What one `JetStream`
-//! message states about itself - a deduplication id, an expected position in the stream - travels
-//! in [`JetStreamOptions`], written by the [`JetStreamPublishSteps`] steps on the publish builder.
-
+#![doc = include_str!("README.md")]
 #![forbid(unsafe_code)]
 
 mod broker;

@@ -143,6 +143,21 @@ impl JetStreamFixture {
             .expect("publish failed");
     }
 
+    /// How many messages the stream holds, which is what a refused publish must leave unchanged
+    /// and a recognised duplicate must not grow.
+    async fn stream_messages(&self) -> u64 {
+        self.connected
+            .jetstream()
+            .get_stream(&self.stream)
+            .await
+            .expect("get_stream failed")
+            .info()
+            .await
+            .expect("stream info failed")
+            .state
+            .messages
+    }
+
     async fn teardown(self) {
         let _ = self.connected.jetstream().delete_stream(&self.stream).await;
         self.connected.shutdown().await.expect("shutdown failed");
@@ -186,6 +201,213 @@ async fn the_stream_checks_the_expectations_a_publish_states() {
     assert!(
         matches!(err, NatsError::JetStream(_)),
         "the stream's refusal must surface as a JetStream error, got: {err}",
+    );
+
+    fx.teardown().await;
+}
+
+// A deduplication id is the one publish option whose effect the stream stores: inside the
+// stream's duplicate window a repeat of the same id is recognised, answered with the sequence the
+// original took, and not appended. The stream's own message count is what proves the second
+// publish added nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_repeated_message_id_is_stored_once_inside_the_deduplication_window() {
+    let Some(fx) = JetStreamFixture::open("dedup").await else {
+        return;
+    };
+    let publisher = fx.connected.publisher(JetStreamPublish::default());
+    let tagged = JetStreamOptions {
+        message_id: Some("order-7".into()),
+        ..JetStreamOptions::default()
+    };
+
+    let first = publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"order 7"),
+            Some(&tagged),
+        )
+        .await
+        .expect("the first publish is accepted");
+    assert!(!first.duplicate, "nothing has carried this id yet");
+    assert_eq!(first.sequence, 1);
+
+    let repeat = publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"order 7 again"),
+            Some(&tagged),
+        )
+        .await
+        .expect("a duplicate is acknowledged rather than refused");
+    assert!(
+        repeat.duplicate,
+        "the stream must recognise the repeated id as a duplicate",
+    );
+    assert_eq!(
+        repeat.sequence, first.sequence,
+        "a duplicate is answered with the sequence the original took",
+    );
+    assert_eq!(
+        fx.stream_messages().await,
+        1,
+        "the repeat was not appended, so the stream still holds one message",
+    );
+
+    // Another id is another message, which is what keeps the assertion above about the id rather
+    // than about the payload.
+    let other = publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"order 8"),
+            Some(&JetStreamOptions {
+                message_id: Some("order-8".into()),
+                ..JetStreamOptions::default()
+            }),
+        )
+        .await
+        .expect("a fresh id is accepted");
+    assert!(!other.duplicate);
+    assert_eq!(fx.stream_messages().await, 2);
+
+    fx.teardown().await;
+}
+
+// The two expectations that hold an optimistic-concurrency chain together, each against the
+// stream state only a server keeps: the value that holds is appended after, and the value that
+// moved under the writer is refused without writing anything.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expected_subject_sequence_is_checked_against_the_subject() {
+    let Some(fx) = JetStreamFixture::open("subjectseq").await else {
+        return;
+    };
+    let publisher = fx.connected.publisher(JetStreamPublish::default());
+
+    publisher
+        .publish_ack(OutgoingMessage::new(fx.subject.as_str(), b"first"), None)
+        .await
+        .expect("the opening publish states nothing");
+
+    let ack = publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"second"),
+            Some(&JetStreamOptions {
+                expect_last_subject_sequence: Some(1),
+                ..JetStreamOptions::default()
+            }),
+        )
+        .await
+        .expect("the subject is where the writer believes it is");
+    assert_eq!(ack.sequence, 2);
+
+    // The subject has moved to 2, so the same expectation is now stale.
+    let err = publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"stale"),
+            Some(&JetStreamOptions {
+                expect_last_subject_sequence: Some(1),
+                ..JetStreamOptions::default()
+            }),
+        )
+        .await
+        .expect_err("a stale subject sequence must be refused");
+    assert!(
+        matches!(err, NatsError::JetStream(_)),
+        "the stream's refusal must surface as a JetStream error, got: {err}",
+    );
+    assert_eq!(
+        fx.stream_messages().await,
+        2,
+        "a refused publish writes nothing",
+    );
+
+    fx.teardown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expected_last_message_id_is_checked_against_the_stream() {
+    let Some(fx) = JetStreamFixture::open("lastid").await else {
+        return;
+    };
+    let publisher = fx.connected.publisher(JetStreamPublish::default());
+
+    publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"first"),
+            Some(&JetStreamOptions {
+                message_id: Some("id-1".into()),
+                ..JetStreamOptions::default()
+            }),
+        )
+        .await
+        .expect("the opening publish only tags itself");
+
+    publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"second"),
+            Some(&JetStreamOptions {
+                message_id: Some("id-2".into()),
+                expect_last_message_id: Some("id-1".into()),
+                ..JetStreamOptions::default()
+            }),
+        )
+        .await
+        .expect("the chain holds, so the message is appended");
+
+    // `id-1` is no longer the last id, so a writer still chaining off it must be refused.
+    let err = publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"stale"),
+            Some(&JetStreamOptions {
+                message_id: Some("id-3".into()),
+                expect_last_message_id: Some("id-1".into()),
+                ..JetStreamOptions::default()
+            }),
+        )
+        .await
+        .expect_err("a stale last message id must be refused");
+    assert!(
+        matches!(err, NatsError::JetStream(_)),
+        "the stream's refusal must surface as a JetStream error, got: {err}",
+    );
+    assert_eq!(
+        fx.stream_messages().await,
+        2,
+        "a refused publish writes nothing",
+    );
+
+    fx.teardown().await;
+}
+
+// The publisher's own declaration, which is what keeps a misrouted subject from being written
+// silently: the stream that serves the subject accepts, and any other name is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publisher_requiring_another_stream_is_refused() {
+    let Some(fx) = JetStreamFixture::open("wrongstream").await else {
+        return;
+    };
+
+    fx.connected
+        .publisher(JetStreamPublish::default().expect_stream(fx.stream.clone()))
+        .publish_ack(OutgoingMessage::new(fx.subject.as_str(), b"routed"), None)
+        .await
+        .expect("the stream that serves the subject accepts the publish");
+
+    let elsewhere = format!("{}_ELSEWHERE", fx.stream);
+    let err = fx
+        .connected
+        .publisher(JetStreamPublish::default().expect_stream(elsewhere))
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"misrouted"),
+            None,
+        )
+        .await
+        .expect_err("a subject served by another stream must be refused");
+    assert!(
+        matches!(err, NatsError::JetStream(_)),
+        "the stream's refusal must surface as a JetStream error, got: {err}",
+    );
+    assert_eq!(
+        fx.stream_messages().await,
+        1,
+        "the refused publish did not land in the stream that does serve the subject",
     );
 
     fx.teardown().await;

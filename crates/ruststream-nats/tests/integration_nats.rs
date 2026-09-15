@@ -27,8 +27,8 @@ use async_nats::jetstream::stream::Config as StreamConfig;
 use futures::{Stream, StreamExt};
 use ruststream::{
     AckError, Broker, BuildContext, ConnectedBroker, DescribeServer, Field, HeaderMap,
-    IncomingMessage, OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber,
-    SubscriptionSource,
+    IncomingMessage, OutgoingMessage, Partitioned, Publisher, RequestReply, RetryDeclaration,
+    Subscribe, Subscriber, SubscriptionSource, nonzero,
 };
 use ruststream_nats::context::{JetStreamContext, keys};
 use ruststream_nats::{
@@ -1229,4 +1229,46 @@ async fn a_jetstream_delivery_carries_the_metadata_every_context_key_reads() {
     drop(core);
 
     fx.teardown().await;
+}
+
+// A bare `#[subscriber("orders.created")]` reaches the broker through the by-name capability
+// rather than through a descriptor, and on NATS one subject is both ends: the name it is
+// subscribed under is the name a copy of a delivery is published to. So the declaration a mount
+// site makes over a bare name is accepted here, and the subscription the name opens is a real one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bare_name_opens_a_subscription_and_takes_a_retry_declaration() {
+    let Some(connected) = connected_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("byname");
+
+    // What a registration declares with `max_attempts(..)` and `dead_letter(..)` reaches the
+    // broker before the subscription opens. This process publishes the copies on NATS, so the
+    // declaration is taken rather than refused.
+    connected
+        .declare_retry(
+            subject.as_str(),
+            &RetryDeclaration::new()
+                .with_max_attempts(nonzero!(3u32))
+                .with_dead_letter("orders.dead"),
+        )
+        .expect("a NATS subject addresses its own copies, so the declaration holds");
+
+    let mut subscriber = connected
+        .subscribe(subject.as_str())
+        .await
+        .expect("a bare name opens a core subscription");
+    connected
+        .publisher(NatsPublish)
+        .publish(OutgoingMessage::new(subject.as_str(), b"by name"), None)
+        .await
+        .expect("publish failed");
+
+    {
+        let mut stream = std::pin::pin!(subscriber.stream());
+        assert_eq!(next_delivery(&mut stream, WAIT).await.payload(), b"by name");
+    }
+
+    drop(subscriber);
+    connected.shutdown().await.expect("shutdown failed");
 }

@@ -233,6 +233,11 @@ own, the reply inbox, and that arrives as the well-known `reply-to` header.
 A partition key has no native place in either model, so [`PARTITION_KEY_HEADER`] carries it and the
 runtime's `workers(n, by_key)` lanes read it from there. The sender sets it.
 
+Every header is text on this transport: a NATS header name is printable ASCII without a colon, and
+a value is a single line. A header that does not fit fails the publish and names itself, rather
+than travelling as far as the wire and arriving without the part that decides where the message
+goes.
+
 # Publishing
 
 A publish policy is pure declaration, constructible anywhere, and naming one picks the transport:

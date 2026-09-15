@@ -202,8 +202,10 @@ impl IncomingMessage for NatsMessage {
 /// The well-known header key for per-message routing / partitioning.
 ///
 /// Set this header on outgoing messages to control key-based fan-out when the runtime is
-/// configured with `workers(N, by_key)`. The value is opaque bytes; the runtime hashes it to
-/// assign a dispatch lane.
+/// configured with `workers(N, by_key)`. The runtime hashes the value to assign a dispatch lane.
+///
+/// The value is text, because a NATS header is: a key that is not UTF-8, or that carries a
+/// newline, fails the publish rather than arriving without the header that decides its lane.
 pub const PARTITION_KEY_HEADER: &str = "nats-partition-key";
 
 /// `Partitioned` lets the `workers(N, by_key)` runtime feature assign a dispatch lane based on

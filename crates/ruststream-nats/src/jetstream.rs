@@ -365,7 +365,7 @@ impl JetStreamPublisher {
         let mut message = PublishMessage::build().payload(Bytes::copy_from_slice(msg.payload()));
         // The application's headers go on first: `headers` replaces the map, and the protocol
         // fields below are written into it.
-        if let Some(headers) = headers_to_nats(msg.headers()) {
+        if let Some(headers) = headers_to_nats(msg.headers())? {
             message = message.headers(headers);
         }
         message = self.policy.apply(message);

@@ -985,3 +985,74 @@ async fn the_closed_broker_reports_what_the_connection_carried() {
         "the connection was established once and never lost",
     );
 }
+
+// A NATS header is text, and the framework's map is bytes under arbitrary names, so the two do
+// not always meet. What must not happen is the publish going ahead without the header: a routing
+// key that is gone decides a different lane, and nothing downstream can tell. Each shape that has
+// no wire form is refused here, naming itself, and the subject stays empty.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_header_the_protocol_cannot_carry_fails_the_publish() {
+    let Some(connected) = connected_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("badheader");
+
+    let mut subscriber = connected
+        .subscribe_with(CoreSubject::new(subject.clone()))
+        .await
+        .expect("subscribe failed");
+    let publisher = connected.publisher(NatsPublish);
+
+    for (name, value) in [
+        // A value spanning two lines: the protocol frames a header as one.
+        ("x-note", b"line one\r\nline two".to_vec()),
+        // A colon separates a name from its value, so a name cannot hold one.
+        ("x:note", b"fine".to_vec()),
+        // Bytes that are not text at all.
+        (PARTITION_KEY_HEADER, vec![0xff, 0x01]),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(name, value);
+        let err = publisher
+            .publish(
+                OutgoingMessage::new(subject.as_str(), b"unsendable").with_headers(headers),
+                None,
+            )
+            .await
+            .expect_err("a header with no wire form must fail the publish");
+        let message = err.to_string();
+        assert!(
+            message.contains(name),
+            "the refusal must name the header it is about, got: {message}",
+        );
+    }
+
+    {
+        let mut stream = std::pin::pin!(subscriber.stream());
+        assert!(
+            drain(&mut stream).await.is_empty(),
+            "a refused publish puts nothing on the subject",
+        );
+    }
+
+    // The same subject takes the same message once its header is text, so what was refused above
+    // was the header and not the subject.
+    let mut headers = HeaderMap::new();
+    headers.insert("x-note", "one line");
+    publisher
+        .publish(
+            OutgoingMessage::new(subject.as_str(), b"sendable").with_headers(headers),
+            None,
+        )
+        .await
+        .expect("a text header is what NATS carries");
+    {
+        let mut stream = std::pin::pin!(subscriber.stream());
+        let msg = next_delivery(&mut stream, WAIT).await;
+        assert_eq!(msg.payload(), b"sendable");
+        assert_eq!(msg.headers().get_str("x-note"), Some("one line"));
+    }
+
+    drop(subscriber);
+    connected.shutdown().await.expect("shutdown failed");
+}

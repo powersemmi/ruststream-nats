@@ -132,7 +132,7 @@ impl Publisher for NatsPublisher {
         let client = self.client_for(msg.name())?;
         let subject = msg.name().to_owned();
         let payload = Bytes::copy_from_slice(msg.payload());
-        let result = match headers_to_nats(msg.headers()) {
+        let result = match headers_to_nats(msg.headers())? {
             Some(headers) => client.publish_with_headers(subject, headers, payload).await,
             None => client.publish(subject, payload).await,
         };

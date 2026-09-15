@@ -32,8 +32,8 @@ use ruststream::{
 };
 use ruststream_nats::context::{JetStreamContext, keys};
 use ruststream_nats::{
-    ConnectedNatsBroker, CoreSubject, JetStreamOptions, JetStreamPublish, JetStreamSubject,
-    NatsBroker, NatsError, NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
+    ConnectedNatsBroker, CoreSubject, CoreWildcard, JetStreamOptions, JetStreamPublish,
+    JetStreamSubject, NatsBroker, NatsError, NatsMessage, NatsPublish, PARTITION_KEY_HEADER,
 };
 use tokio::time::timeout;
 
@@ -635,6 +635,29 @@ async fn a_core_delivery_reports_that_it_cannot_be_acknowledged() {
         );
     }
 
+    // The same answer on the other two settling calls: a requeue and a rejection are
+    // acknowledgements too, and a transport without one must decline rather than pretend.
+    connected
+        .publisher(NatsPublish)
+        .publish(OutgoingMessage::new(subject.as_str(), b"requeue me"), None)
+        .await
+        .expect("publish failed");
+    connected
+        .publisher(NatsPublish)
+        .publish(OutgoingMessage::new(subject.as_str(), b"reject me"), None)
+        .await
+        .expect("publish failed");
+    {
+        let mut stream = std::pin::pin!(subscriber.stream());
+        for requeue in [true, false] {
+            let msg = next_delivery(&mut stream, WAIT).await;
+            assert!(
+                matches!(msg.nack(requeue).await, Err(AckError::Unsupported)),
+                "core NATS cannot settle a delivery, requeue = {requeue}",
+            );
+        }
+    }
+
     drop(subscriber);
     connected.shutdown().await.expect("shutdown failed");
 }
@@ -832,4 +855,133 @@ async fn jetstream_stream_can_be_reentered() {
 
     drop(consumer);
     fx.teardown().await;
+}
+
+// A request that is heard and left unanswered is the case the crate's own timeout is for: the
+// client would otherwise wait out its own much longer one. The responder here subscribes and
+// never replies, which is what tells this apart from a subject nobody is listening on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_nobody_answers_times_out() {
+    let Some(connected) = connected_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("timeout");
+
+    // Subscribed, so the server has a responder to route to, and silent.
+    let mut silent = connected
+        .subscribe_with(CoreSubject::new(subject.clone()))
+        .await
+        .expect("subscribe failed");
+
+    let err = connected
+        .publisher(NatsPublish)
+        .request(
+            OutgoingMessage::new(subject.as_str(), b"anyone there"),
+            Duration::from_millis(200),
+        )
+        .await
+        .expect_err("an unanswered request must not resolve");
+    assert!(
+        matches!(err, NatsError::RequestTimeout),
+        "the wait must end as a timeout, got: {err}",
+    );
+
+    // The request did reach the responder, so the timeout is about the missing answer and not
+    // about a subject nobody reads.
+    {
+        let mut stream = std::pin::pin!(silent.stream());
+        let heard = next_delivery(&mut stream, WAIT).await;
+        assert_eq!(heard.payload(), b"anyone there");
+    }
+
+    drop(silent);
+    connected.shutdown().await.expect("shutdown failed");
+}
+
+// A pattern reads every subject it matches and nothing else. That is the whole difference between
+// the two Core descriptors, and it is what makes `CoreWildcard` unable to name a redelivery
+// address of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pattern_reads_every_subject_it_matches_and_no_other() {
+    let Some(connected) = connected_or_skip().await else {
+        return;
+    };
+    let base = unique_subject("wild");
+
+    let mut matched = connected
+        .subscribe_with(CoreWildcard::new(format!("{base}.*")))
+        .await
+        .expect("subscribe failed");
+
+    let publisher = connected.publisher(NatsPublish);
+    for (subject, payload) in [
+        (format!("{base}.one"), b"one".as_slice()),
+        (format!("{base}.two"), b"two"),
+        // One token deeper, so `*` must not match it.
+        (format!("{base}.one.deep"), b"deep"),
+        // Another prefix entirely.
+        (format!("{base}x.one"), b"elsewhere"),
+    ] {
+        publisher
+            .publish(OutgoingMessage::new(subject.as_str(), payload), None)
+            .await
+            .expect("publish failed");
+    }
+
+    {
+        let mut stream = std::pin::pin!(matched.stream());
+        let mut seen = drain(&mut stream).await;
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![b"one".to_vec(), b"two".to_vec()],
+            "a single-token pattern reads its own level and nothing below or beside it",
+        );
+    }
+
+    drop(matched);
+    connected.shutdown().await.expect("shutdown failed");
+}
+
+// The terminal witness carries the drained connection's counters, which is what a shutdown log
+// line reports. They are the connection's own totals, so the assertion is that the traffic this
+// test made is in them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_closed_broker_reports_what_the_connection_carried() {
+    let Some(connected) = connected_or_skip().await else {
+        return;
+    };
+    let subject = unique_subject("counters");
+
+    let mut subscriber = connected
+        .subscribe_with(CoreSubject::new(subject.clone()))
+        .await
+        .expect("subscribe failed");
+    connected
+        .publisher(NatsPublish)
+        .publish(OutgoingMessage::new(subject.as_str(), b"counted"), None)
+        .await
+        .expect("publish failed");
+    {
+        let mut stream = std::pin::pin!(subscriber.stream());
+        assert_eq!(next_delivery(&mut stream, WAIT).await.payload(), b"counted");
+    }
+    drop(subscriber);
+
+    let closed = connected.shutdown().await.expect("shutdown failed");
+    assert!(
+        closed.messages_sent() >= 1,
+        "the publish is in the sent total, got {}",
+        closed.messages_sent(),
+    );
+    assert!(
+        closed.messages_received() >= 1,
+        "the delivery is in the received total, got {}",
+        closed.messages_received(),
+    );
+    assert_eq!(
+        closed.connects(),
+        1,
+        "the connection was established once and never lost",
+    );
 }

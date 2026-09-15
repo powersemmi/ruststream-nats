@@ -1116,3 +1116,117 @@ async fn a_jetstream_message_carries_its_application_headers_beside_the_protocol
     drop(consumer);
     fx.teardown().await;
 }
+
+// The native metadata a handler reads through `Ctx<K>` is parsed out of the `JetStream`
+// acknowledgement subject, so a server is the only place it exists at all. Each key is checked
+// against something the server stated independently: the stream and consumer the subscription
+// named, the sequence the publish acknowledgement returned, and the count of what is still
+// waiting. The same keys on a core delivery read nothing, which is what lets one handler mount on
+// both models.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jetstream_delivery_carries_the_metadata_every_context_key_reads() {
+    let Some(fx) = JetStreamFixture::open("metadata").await else {
+        return;
+    };
+
+    let mut consumer = fx
+        .consumer(Some("it-metadata"))
+        .subscribe(&fx.connected)
+        .await
+        .expect("consumer create failed");
+
+    let publisher = fx.connected.publisher(JetStreamPublish::default());
+    let mut sequences = Vec::new();
+    for payload in [b"one".as_slice(), b"two", b"three"] {
+        let ack = publisher
+            .publish_ack(OutgoingMessage::new(fx.subject.as_str(), payload), None)
+            .await
+            .expect("publish failed");
+        sequences.push(ack.sequence);
+    }
+
+    {
+        let mut stream = std::pin::pin!(consumer.stream());
+        let first = next_delivery(&mut stream, WAIT).await;
+        let cx = JetStreamContext::build(&first);
+        assert_eq!(keys::STREAM.get(&cx), Some(fx.stream.as_str()));
+        assert_eq!(keys::CONSUMER.get(&cx), Some("it-metadata"));
+        assert_eq!(
+            keys::STREAM_SEQUENCE.get(&cx),
+            Some(sequences[0]),
+            "the sequence the publish acknowledgement returned is the one the delivery reports",
+        );
+        assert_eq!(keys::CONSUMER_SEQUENCE.get(&cx), Some(1));
+        assert_eq!(keys::DELIVERED.get(&cx), Some(1));
+        assert_eq!(
+            keys::PENDING.get(&cx),
+            Some(2),
+            "two of the three messages are still behind this one",
+        );
+
+        first.ack().await.expect("ack failed");
+        for expected in &sequences[1..] {
+            let msg = next_delivery(&mut stream, WAIT).await;
+            let cx = JetStreamContext::build(&msg);
+            assert_eq!(keys::STREAM_SEQUENCE.get(&cx), Some(*expected));
+            assert_eq!(
+                keys::PENDING.get(&cx),
+                Some(sequences.last().expect("three were published") - expected),
+                "the pending count counts down as the consumer works through the stream",
+            );
+            msg.ack().await.expect("ack failed");
+        }
+
+        // A redelivery moves the consumer's own counters and leaves the stream's alone, which is
+        // what tells the two sequences apart. Nothing else is waiting by now, so the redelivery is
+        // the next delivery.
+        let ack = publisher
+            .publish_ack(OutgoingMessage::new(fx.subject.as_str(), b"four"), None)
+            .await
+            .expect("publish failed");
+        let fourth = next_delivery(&mut stream, WAIT).await;
+        let cx = JetStreamContext::build(&fourth);
+        assert_eq!(keys::STREAM_SEQUENCE.get(&cx), Some(ack.sequence));
+        assert_eq!(keys::CONSUMER_SEQUENCE.get(&cx), Some(4));
+        fourth.nack(true).await.expect("nack failed");
+
+        let again = next_delivery(&mut stream, WAIT).await;
+        let cx = JetStreamContext::build(&again);
+        assert_eq!(
+            keys::STREAM_SEQUENCE.get(&cx),
+            Some(ack.sequence),
+            "a redelivery is the same message, so its place in the stream has not moved",
+        );
+        assert_eq!(keys::CONSUMER_SEQUENCE.get(&cx), Some(5));
+        assert_eq!(keys::DELIVERED.get(&cx), Some(2));
+        again.ack().await.expect("ack failed");
+    }
+    drop(consumer);
+
+    // The same keys on a core delivery, which carries no such metadata at all.
+    let core_subject = unique_subject("metadatacore");
+    let mut core = fx
+        .connected
+        .subscribe_with(CoreSubject::new(core_subject.clone()))
+        .await
+        .expect("subscribe failed");
+    fx.connected
+        .publisher(NatsPublish)
+        .publish(OutgoingMessage::new(core_subject.as_str(), b"plain"), None)
+        .await
+        .expect("publish failed");
+    {
+        let mut stream = std::pin::pin!(core.stream());
+        let msg = next_delivery(&mut stream, WAIT).await;
+        let cx = JetStreamContext::build(&msg);
+        assert_eq!(keys::STREAM.get(&cx), None);
+        assert_eq!(keys::CONSUMER.get(&cx), None);
+        assert_eq!(keys::STREAM_SEQUENCE.get(&cx), None);
+        assert_eq!(keys::CONSUMER_SEQUENCE.get(&cx), None);
+        assert_eq!(keys::DELIVERED.get(&cx), None);
+        assert_eq!(keys::PENDING.get(&cx), None);
+    }
+    drop(core);
+
+    fx.teardown().await;
+}

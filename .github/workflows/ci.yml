@@ -249,9 +249,11 @@ jobs:
           NATS_TEST_URL: nats://127.0.0.1:4222
           RUSTSTREAM_REQUIRE_LIVE: "1"
         run: >-
-          cargo test -p ruststream-nats
+          cargo test -p ruststream-nats --all-features
           --test integration_nats
           --test integration_nats_batch
+          --test integration_nats_consumer
+          --test integration_nats_retry
           -- --test-threads=1
 
       - name: Run NATS conformance suite

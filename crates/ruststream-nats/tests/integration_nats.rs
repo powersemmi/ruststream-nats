@@ -1056,3 +1056,63 @@ async fn a_header_the_protocol_cannot_carry_fails_the_publish() {
     drop(subscriber);
     connected.shutdown().await.expect("shutdown failed");
 }
+
+// A JetStream publish writes the application's headers and the protocol's into one map, so the
+// order they are written in decides whether both survive. The delivery proves the application's
+// half arrived; the stream's answer to a repeat proves the protocol's did.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jetstream_message_carries_its_application_headers_beside_the_protocol_ones() {
+    let Some(fx) = JetStreamFixture::open("bothheaders").await else {
+        return;
+    };
+
+    let mut consumer = fx
+        .consumer(Some("it-headers"))
+        .subscribe(&fx.connected)
+        .await
+        .expect("consumer create failed");
+
+    let mut headers = HeaderMap::new();
+    headers.insert("x-tenant", "acme");
+    let tagged = JetStreamOptions {
+        message_id: Some("order-42".into()),
+        ..JetStreamOptions::default()
+    };
+    let publisher = fx.connected.publisher(JetStreamPublish::default());
+    publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"tagged").with_headers(headers.clone()),
+            Some(&tagged),
+        )
+        .await
+        .expect("publish failed");
+
+    {
+        let mut stream = std::pin::pin!(consumer.stream());
+        let msg = next_delivery(&mut stream, WAIT).await;
+        assert_eq!(msg.payload(), b"tagged");
+        assert_eq!(
+            msg.headers().get_str("x-tenant"),
+            Some("acme"),
+            "the application's header must reach the handler untouched",
+        );
+        msg.ack().await.expect("ack failed");
+    }
+
+    // The deduplication id went out as a protocol field rather than being overwritten by the
+    // application's map, so the stream recognises the repeat.
+    let repeat = publisher
+        .publish_ack(
+            OutgoingMessage::new(fx.subject.as_str(), b"tagged again").with_headers(headers),
+            Some(&tagged),
+        )
+        .await
+        .expect("a duplicate is acknowledged");
+    assert!(
+        repeat.duplicate,
+        "the protocol header survived the application's headers",
+    );
+
+    drop(consumer);
+    fx.teardown().await;
+}

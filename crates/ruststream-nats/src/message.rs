@@ -54,7 +54,7 @@ impl CoreMessage {
         // authoritative: it overrides a literal `reply-to` header if both are present.
         // JetStream deliveries are excluded on purpose - there `reply` is the ack inbox.
         if let Some(reply) = inner.reply.as_ref() {
-            headers.insert("reply-to", reply.as_str().to_owned());
+            headers.insert(REPLY_TO_HEADER, reply.as_str().to_owned());
         }
         Self { inner, headers }
     }
@@ -91,6 +91,19 @@ impl JetStreamMessage {
         self.inner.info().ok()
     }
 }
+
+/// The header this crate surfaces a request's wire-level reply subject under.
+///
+/// NATS carries the inbox in a protocol field rather than a header, so a handler that answers a
+/// request reads it here. The generated `AsyncAPI` document names the same header as the runtime
+/// expression a client reads a reply address from.
+pub(crate) const REPLY_TO_HEADER: &str = "reply-to";
+
+/// The same header, as the runtime expression an `AsyncAPI` document reports a reply address at.
+/// The specification spells the pointer out, so the header name is repeated here rather than
+/// composed.
+#[cfg(feature = "asyncapi")]
+pub(crate) const REPLY_ADDRESS_LOCATION: &str = "$message.header#/reply-to";
 
 fn empty_headers() -> &'static HeaderMap {
     static EMPTY: OnceLock<HeaderMap> = OnceLock::new();
@@ -140,6 +153,20 @@ impl IncomingMessage for NatsMessage {
         }
     }
 
+    /// How many times the server has delivered this message, counting this one.
+    ///
+    /// A `JetStream` consumer keeps that count and reports it on every delivery, so a cap
+    /// declared at the mount site counts the server's own redeliveries - an `ack_wait` that ran
+    /// out, a negative acknowledgement - and not only the copies this process published. Core
+    /// NATS neither stores a message nor redelivers one, so a core delivery has no count and the
+    /// framework's retry-count header is the whole tally.
+    fn redelivery_count(&self) -> Option<u64> {
+        match self {
+            Self::Core(_) => None,
+            Self::JetStream(m) => m.info().map(|info| info.delivered.unsigned_abs()),
+        }
+    }
+
     /// Whether this delivery can honor a native delayed redelivery.
     ///
     /// `true` for every `JetStream` delivery: the protocol carries the delay in the negative
@@ -175,8 +202,10 @@ impl IncomingMessage for NatsMessage {
 /// The well-known header key for per-message routing / partitioning.
 ///
 /// Set this header on outgoing messages to control key-based fan-out when the runtime is
-/// configured with `workers(N, by_key)`. The value is opaque bytes; the runtime hashes it to
-/// assign a dispatch lane.
+/// configured with `workers(N, by_key)`. The runtime hashes the value to assign a dispatch lane.
+///
+/// The value is text, because a NATS header is: a key that is not UTF-8, or that carries a
+/// newline, fails the publish rather than arriving without the header that decides its lane.
 pub const PARTITION_KEY_HEADER: &str = "nats-partition-key";
 
 /// `Partitioned` lets the `workers(N, by_key)` runtime feature assign a dispatch lane based on

@@ -1,5 +1,9 @@
-//! The in-process publish pair: the [`NatsTestPublish`] policy and its live
-//! [`NatsTestPublisher`].
+//! The in-process publish surface: the crate's production policies, paired against the test
+//! broker, and the live publishers they bind to.
+//!
+//! There is no policy of the test transport's own. A routes file names
+//! [`NatsPublish`] or [`JetStreamPublish`] once and mounts unchanged on either ladder, which is
+//! the only way an in-process run can say anything about the wiring a service actually ships.
 
 use std::{
     future::{Future, ready},
@@ -11,9 +15,14 @@ use std::{
 };
 
 use bytes::Bytes;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply};
 
+#[cfg(feature = "asyncapi")]
+use crate::broker::ConnectedNatsBroker;
 use crate::{
+    JetStreamOptions, JetStreamPublish, NatsPublish,
     error::NatsError,
     testing::{
         broker::{ConnectedNatsTestBroker, TestBrokerState, validate_publish_subject},
@@ -22,6 +31,19 @@ use crate::{
         subscriber::NatsTestMessage,
     },
 };
+
+use self::sealed::Sealed;
+
+mod sealed {
+    /// Seals [`NatsTestPublishPolicy`](super::NatsTestPublishPolicy) over the same two policies
+    /// the production trait covers: the in-process transport adds no policy of its own, and the
+    /// synchronous [`publisher`](crate::testing::ConnectedNatsTestBroker::publisher) accessor
+    /// depends on pairing staying synchronous and infallible.
+    pub trait Sealed {}
+
+    impl Sealed for crate::NatsPublish {}
+    impl Sealed for crate::JetStreamPublish {}
+}
 
 static INBOX_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -34,30 +56,34 @@ fn new_inbox_subject() -> String {
     format!("_INBOX.{nanos:x}{seq:x}")
 }
 
-/// The in-process publish policy, mirroring [`NatsPublish`](crate::NatsPublish) on the real
-/// broker.
+/// A publish policy that pairs with the connected test broker without I/O.
+///
+/// The in-process mirror of [`NatsPublishPolicy`](crate::NatsPublishPolicy), over the same
+/// policies: it is what lets
+/// [`ConnectedNatsTestBroker::publisher`](crate::testing::ConnectedNatsTestBroker::publisher) be
+/// synchronous, exactly as the production accessor is.
 ///
 /// # Examples
 ///
 /// ```
-/// use ruststream_nats::testing::NatsTestPublish;
+/// use ruststream::Broker;
+/// use ruststream_nats::NatsPublish;
+/// use ruststream_nats::testing::{NatsTestBroker, NatsTestPublishPolicy};
 ///
-/// let policy = NatsTestPublish;
-/// # let _ = policy;
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// let connected = NatsTestBroker::new().connect().await?;
+/// let publisher = NatsPublish.bind(&connected);
+/// # let _ = publisher;
+/// # Ok(())
+/// # }
 /// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[must_use]
-pub struct NatsTestPublish;
-
-impl NatsTestPublish {
-    /// Pairs the policy with the connected test broker.
+pub trait NatsTestPublishPolicy: PublishPolicy<ConnectedNatsTestBroker> + Sealed {
+    /// Pairs the policy with the connected test broker, producing the live publisher.
     #[must_use]
-    pub fn bind(self, connected: &ConnectedNatsTestBroker) -> NatsTestPublisher {
-        NatsTestPublisher::new(connected.state())
-    }
+    fn bind(self, connected: &ConnectedNatsTestBroker) -> Self::Live;
 }
 
-impl PublishPolicy<ConnectedNatsTestBroker> for NatsTestPublish {
+impl PublishPolicy<ConnectedNatsTestBroker> for NatsPublish {
     type Live = NatsTestPublisher;
 
     fn pair(
@@ -66,13 +92,68 @@ impl PublishPolicy<ConnectedNatsTestBroker> for NatsTestPublish {
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(self.bind(connected)))
     }
+
+    // The production answer, so a document built over the test broker says what the service ships.
+    #[cfg(feature = "asyncapi")]
+    fn reply_address_location(&self) -> Option<&'static str> {
+        PublishPolicy::<ConnectedNatsBroker>::reply_address_location(self)
+    }
 }
 
-/// Publisher returned by
-/// [`ConnectedNatsTestBroker::publisher`](crate::testing::ConnectedNatsTestBroker::publisher).
+impl NatsTestPublishPolicy for NatsPublish {
+    fn bind(self, connected: &ConnectedNatsTestBroker) -> Self::Live {
+        NatsTestPublisher::new(connected.state())
+    }
+}
+
+impl PublishPolicy<ConnectedNatsTestBroker> for JetStreamPublish {
+    type Live = JetStreamTestPublisher;
+
+    fn pair(
+        self,
+        connected: &ConnectedNatsTestBroker,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(self.bind(connected)))
+    }
+
+    // The production answer, over the destination the mount site resolved.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        PublishPolicy::<ConnectedNatsBroker>::channel_bindings(self, channel)
+    }
+}
+
+impl NatsTestPublishPolicy for JetStreamPublish {
+    fn bind(self, connected: &ConnectedNatsTestBroker) -> Self::Live {
+        JetStreamTestPublisher {
+            inner: NatsTestPublisher::new(connected.state()),
+            policy: self,
+        }
+    }
+}
+
+/// The live in-process publisher [`NatsPublish`] pairs into. Cheap to clone.
 ///
-/// Like the real publisher it aliases the transport and may outlive it: after the broker shuts
-/// down every publish reports [`NatsError::Closed`].
+/// Carries the same capabilities as the production [`NatsPublisher`](crate::NatsPublisher):
+/// [`Publisher`] and [`RequestReply`]. Like it, it aliases the transport and may outlive it:
+/// after the broker shuts down every publish reports [`NatsError::Closed`].
+///
+/// # Examples
+///
+/// ```
+/// use ruststream::{Broker, OutgoingMessage, Publisher};
+/// use ruststream_nats::NatsPublish;
+/// use ruststream_nats::testing::NatsTestBroker;
+///
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// let connected = NatsTestBroker::new().connect().await?;
+/// let publisher = connected.publisher(NatsPublish);
+/// publisher
+///     .publish(OutgoingMessage::new("orders.created", b"{}".as_slice()), None)
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct NatsTestPublisher {
     state: Arc<TestBrokerState>,
@@ -93,7 +174,14 @@ impl NatsTestPublisher {
 impl Publisher for NatsTestPublisher {
     type Error = NatsError;
 
-    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
+    /// The same answer the production Core publisher gives: Core NATS has no per-message setting.
+    type Options = ();
+
+    fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> impl Future<Output = Result<(), Self::Error>> {
         if let Err(err) = self.state.ensure_live(msg.name()) {
             return ready(Err(err));
         }
@@ -120,14 +208,15 @@ impl RequestReply for NatsTestPublisher {
     ) -> Result<Self::Reply, Self::Error> {
         let inbox = new_inbox_subject();
         let pattern = SubjectPattern::parse(&inbox).expect("generated inbox subject must parse");
-        let (id, requeue, mut rx) = self.state.router.subscribe(pattern);
+        // The inbox belongs to this requester alone, so it joins no competing set.
+        let (id, requeue, mut rx) = self.state.router.subscribe(pattern, None);
 
         let mut headers = msg.headers().clone();
         headers.insert("reply-to", Bytes::from(inbox.clone()));
         let outgoing =
             OutgoingMessage::new(msg.name(), msg.payload()).with_headers(headers.clone());
 
-        if let Err(err) = self.publish(outgoing).await {
+        if let Err(err) = self.publish(outgoing, None).await {
             self.state.router.unsubscribe(id);
             return Err(err);
         }
@@ -140,5 +229,81 @@ impl RequestReply for NatsTestPublisher {
 
         let delivery = received.ok_or(NatsError::RequestTimeout)?;
         Ok(NatsTestMessage::from_delivery(delivery, requeue))
+    }
+}
+
+/// The live in-process publisher [`JetStreamPublish`] pairs into. Cheap to clone.
+///
+/// It routes what the production [`JetStreamPublisher`](crate::JetStreamPublisher) routes, and it
+/// carries the same capability - [`Publisher`], and only that - so a handler slot that compiles
+/// against one compiles against the other and a routes file moves between the ladders unchanged.
+///
+/// What it does not reproduce is everything a stream owns, because in process there is no stream:
+/// there is one Core subject-matching fabric and this publisher writes into it.
+///
+/// * The stream's acknowledgement. There is no in-process counterpart to
+///   [`JetStreamPublisher::publish_ack`](crate::JetStreamPublisher::publish_ack), so nothing here
+///   invents a stream name, a sequence or a duplicate verdict.
+/// * Whether an expectation holds. The policy's `expect_stream` and every
+///   [`JetStreamOptions`] field reach the message as the protocol headers the real client writes,
+///   so a test reads back what the mount site and the call site asked for. Checking them is the
+///   server's half, and there is no stream in process to check against: a publish that violates
+///   one succeeds here where a server would refuse it, so an optimistic-concurrency chain built
+///   on them proves nothing until it runs against a server. That is what
+///   `the_stream_checks_the_expectations_a_publish_states` in
+///   `tests/integration_nats.rs` covers.
+///
+/// # Examples
+///
+/// ```
+/// use ruststream::{Broker, OutgoingMessage, Publisher};
+/// use ruststream_nats::JetStreamPublish;
+/// use ruststream_nats::testing::NatsTestBroker;
+///
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// let connected = NatsTestBroker::new().connect().await?;
+/// let publisher = connected.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
+/// publisher
+///     .publish(OutgoingMessage::new("orders.created", b"{}".as_slice()), None)
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct JetStreamTestPublisher {
+    inner: NatsTestPublisher,
+    policy: JetStreamPublish,
+}
+
+impl std::fmt::Debug for JetStreamTestPublisher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JetStreamTestPublisher")
+            .field("policy", &self.policy)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Publisher for JetStreamTestPublisher {
+    type Error = NatsError;
+
+    /// The same answer the production `JetStream` publisher gives, so a body bounded on
+    /// `Out<impl Publisher<Options = JetStreamOptions>, _>` mounts on either ladder.
+    type Options = JetStreamOptions;
+
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
+        // The client's own half of a JetStream publish is writing these protocol headers, and
+        // that is exactly what is reproduced here. The server's half, checking them against
+        // stream state, is what no in-process transport can stand in for.
+        let mut headers = msg.headers().clone();
+        self.policy.write_headers(&mut headers);
+        if let Some(options) = options {
+            options.write_headers(&mut headers);
+        }
+        let stamped = OutgoingMessage::new(msg.name(), msg.payload()).with_headers(headers);
+        self.inner.publish(stamped, None).await
     }
 }

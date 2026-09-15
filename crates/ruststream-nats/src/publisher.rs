@@ -9,6 +9,8 @@ use bytes::Bytes;
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
 
 use crate::broker::{ConnectedNatsBroker, NatsConnection};
+#[cfg(feature = "asyncapi")]
+use crate::message::REPLY_ADDRESS_LOCATION;
 use crate::{convert::headers_to_nats, error::NatsError};
 
 use self::sealed::Sealed;
@@ -40,8 +42,8 @@ pub trait NatsPublishPolicy: PublishPolicy<ConnectedNatsBroker> + Sealed {
 /// Core NATS publishing carries no per-publisher options (subject and headers travel with each
 /// message), so the policy is a unit marker. It pairs into [`NatsPublisher`], which also serves
 /// the [`RequestReply`](ruststream::RequestReply) capability, and it is the broker's
-/// [`DefaultPublish`](ruststream::DefaultPublish) policy, so a `publish("subject")` handler
-/// mounted without an explicit publisher replies through it.
+/// [`DefaultPublish`](ruststream::DefaultPublish) policy, so a replying handler mounted without
+/// an explicit publisher replies through it.
 ///
 /// # Examples
 ///
@@ -63,6 +65,17 @@ impl PublishPolicy<ConnectedNatsBroker> for NatsPublish {
         connected: &ConnectedNatsBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(self.bind(connected)))
+    }
+
+    /// Where a client reads the subject an answer goes to.
+    ///
+    /// A NATS request carries its inbox in a protocol field, which this crate surfaces as the
+    /// `reply-to` header, so that is the runtime expression the document reports for a reply this
+    /// policy publishes. The `nats` binding has nothing else for a publisher: its one field is a
+    /// queue group, which belongs to a subscription.
+    #[cfg(feature = "asyncapi")]
+    fn reply_address_location(&self) -> Option<&'static str> {
+        Some(REPLY_ADDRESS_LOCATION)
     }
 }
 
@@ -101,16 +114,25 @@ impl NatsPublisher {
 impl Publisher for NatsPublisher {
     type Error = NatsError;
 
+    /// Core NATS says nothing about a message beyond its subject, its payload and its headers, so
+    /// there is no per-message setting to carry. `JetStream` has four, and they live on
+    /// [`JetStreamOptions`](crate::JetStreamOptions).
+    type Options = ();
+
     /// # Cancel safety
     ///
     /// Core NATS publishing is fire-and-forget: the message is handed to the connection's writer
     /// without waiting for the server. Dropping the future may leave the message either sent or
     /// unsent, with no way to tell which.
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
         let client = self.client_for(msg.name())?;
         let subject = msg.name().to_owned();
         let payload = Bytes::copy_from_slice(msg.payload());
-        let result = match headers_to_nats(msg.headers()) {
+        let result = match headers_to_nats(msg.headers())? {
             Some(headers) => client.publish_with_headers(subject, headers, payload).await,
             None => client.publish(subject, payload).await,
         };

@@ -23,7 +23,7 @@ impl RequestReply for NatsPublisher {
         let client = self.client_for(msg.name())?;
         let subject = msg.name().to_owned();
         let payload = Bytes::copy_from_slice(msg.payload());
-        let headers_owned = headers_to_nats(msg.headers());
+        let headers_owned = headers_to_nats(msg.headers())?;
 
         let fut = async {
             let request = match headers_owned {

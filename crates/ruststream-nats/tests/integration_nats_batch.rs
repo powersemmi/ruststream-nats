@@ -13,8 +13,12 @@ use futures::StreamExt;
 use ruststream::{
     BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, nonzero,
 };
-use ruststream_nats::{ConnectedNatsBroker, NatsBroker, NatsPublish, SubscribeOptions};
+use ruststream_nats::{
+    ConnectedNatsBroker, JetStreamSubject, NatsBroker, NatsPublish, NonZeroDuration,
+};
 use tokio::time::timeout;
+
+mod live;
 
 const WAIT: Duration = Duration::from_secs(2);
 
@@ -32,13 +36,14 @@ struct JetStreamFixture {
 }
 
 /// Connects to the test server and creates a uniquely named stream; `None` skips the test when
-/// `NATS_TEST_URL` is unset or the server is unreachable.
+/// `NATS_TEST_URL` is unset or the server is unreachable. Under `RUSTSTREAM_REQUIRE_LIVE` both of
+/// those are failures instead.
 async fn jetstream_fixture(prefix: &str) -> Option<JetStreamFixture> {
-    let url = std::env::var("NATS_TEST_URL").ok()?;
+    let url = live::url("NATS_TEST_URL")?;
     let connected = match NatsBroker::new(url.as_str()).connect().await {
         Ok(connected) => connected,
         Err(err) => {
-            eprintln!("could not reach NATS at {url}: {err}; skipping");
+            live::unreachable(&url, &err);
             return None;
         }
     };
@@ -62,9 +67,8 @@ async fn jetstream_fixture(prefix: &str) -> Option<JetStreamFixture> {
 }
 
 impl JetStreamFixture {
-    fn consumer_options(&self, expires: Duration) -> SubscribeOptions {
-        SubscribeOptions::new(self.subject.clone())
-            .jetstream(self.stream.clone())
+    fn consumer_options(&self, expires: NonZeroDuration) -> JetStreamSubject {
+        JetStreamSubject::new(self.subject.clone(), self.stream.clone())
             .filter_subject(self.subject.clone())
             .pull_expires(expires)
     }
@@ -87,14 +91,14 @@ async fn the_batch_size_caps_the_pull_batch() {
     let total = 7u8;
     for i in 0..total {
         publisher
-            .publish(OutgoingMessage::new(fx.subject.as_str(), &[i]))
+            .publish(OutgoingMessage::new(fx.subject.as_str(), &[i]), None)
             .await
             .expect("publish failed");
     }
 
     let mut consumer = fx
         .connected
-        .subscribe_with(fx.consumer_options(Duration::from_millis(300)))
+        .subscribe_with(fx.consumer_options(NonZeroDuration::from_millis(nonzero!(300))))
         .await
         .expect("consumer create failed");
 
@@ -136,7 +140,7 @@ async fn batches_skip_empty_fetches() {
 
     let mut consumer = fx
         .connected
-        .subscribe_with(fx.consumer_options(Duration::from_millis(150)))
+        .subscribe_with(fx.consumer_options(NonZeroDuration::from_millis(nonzero!(150))))
         .await
         .expect("consumer create failed");
 
@@ -146,7 +150,7 @@ async fn batches_skip_empty_fetches() {
         // Longer than pull_expires, so the first fetch comes back empty and is retried.
         tokio::time::sleep(Duration::from_millis(400)).await;
         publisher
-            .publish(OutgoingMessage::new(subject.as_str(), b"late"))
+            .publish(OutgoingMessage::new(subject.as_str(), b"late"), None)
             .await
             .expect("publish failed");
     });
@@ -181,13 +185,13 @@ async fn batches_can_be_reentered() {
 
     let publisher = fx.connected.publisher(NatsPublish);
     publisher
-        .publish(OutgoingMessage::new(fx.subject.as_str(), b"one"))
+        .publish(OutgoingMessage::new(fx.subject.as_str(), b"one"), None)
         .await
         .expect("publish failed");
 
     let mut consumer = fx
         .connected
-        .subscribe_with(fx.consumer_options(Duration::from_millis(300)))
+        .subscribe_with(fx.consumer_options(NonZeroDuration::from_millis(nonzero!(300))))
         .await
         .expect("consumer create failed");
 
@@ -206,7 +210,7 @@ async fn batches_can_be_reentered() {
     }
 
     publisher
-        .publish(OutgoingMessage::new(fx.subject.as_str(), b"two"))
+        .publish(OutgoingMessage::new(fx.subject.as_str(), b"two"), None)
         .await
         .expect("publish failed");
     {

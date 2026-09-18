@@ -7,16 +7,19 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::{PullConsumer, pull::Config as ConsumerConfig};
 use async_nats::{Client, ConnectOptions};
-use ruststream::{Broker, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe};
+use ruststream::{
+    AddressedCopies, Broker, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe,
+};
 
 use crate::{
     error::NatsError,
     publisher::{NatsPublish, NatsPublishPolicy},
-    subscribe_options::SubscribeOptions,
+    subject::{CoreSubject, NatsSubscription, SubscriptionPlan},
     subscriber::NatsSubscriber,
 };
 
@@ -135,24 +138,31 @@ impl Broker for NatsBroker {
     }
 }
 
-/// `DescribeServer` reports the configured NATS address, which is what the `AsyncAPI` document
-/// records for the service. The live coordinates the server reports once connected are on
-/// [`ConnectedNatsBroker`].
+/// `DescribeServer` reports the host and port of every configured address, which is what the
+/// `AsyncAPI` document records for the service. The live coordinates the server reports once
+/// connected are on [`ConnectedNatsBroker`].
+///
+/// Credentials are not part of a coordinate. `addrs` goes to the client as written, and the client
+/// accepts `nats://user:password@host` and `nats://token@host`, but the generated document is
+/// published and shared, so what a URL carries to authenticate the connection stops here. The
+/// framework's [`ServerSpec::host_from_url`] does the cutting, once per configured address.
 impl DescribeServer for NatsBroker {
     fn describe_server(&self) -> ServerSpec {
-        let host = self
+        let hosts = self
             .addrs
-            .trim_start_matches("nats://")
-            .trim_start_matches("tls://")
-            .to_owned();
-        ServerSpec::new(host, "nats")
+            .split(',')
+            .map(|addr| ServerSpec::host_from_url(addr.trim()))
+            .filter(|host| !host.is_empty())
+            .collect::<Vec<_>>()
+            .join(",");
+        ServerSpec::new(hosts, "nats")
     }
 }
 
 /// The typed witness that [`Broker::connect`] succeeded: holds the live connection.
 ///
 /// Everything connection-bound hangs off this value: subscriptions ([`Subscribe`],
-/// [`SubscribeOptions`]) and publishers ([`publisher`](Self::publisher)).
+/// [`CoreSubject`]) and publishers ([`publisher`](Self::publisher)).
 /// [`ConnectedBroker::shutdown`] consumes it, so a publish or subscribe after shutdown is a
 /// compile error for the owner of the handle.
 #[derive(Debug)]
@@ -206,11 +216,17 @@ impl ConnectedNatsBroker {
     }
 
     /// The coordinates the server announced on this connection, which may differ from the
-    /// configured address (a cluster route, a discovered peer).
+    /// configured address (a cluster route, a discovered peer), together with the version of the
+    /// NATS client protocol it speaks.
+    ///
+    /// The protocol version is a fact of the live connection, so it is here rather than on
+    /// [`NatsBroker::describe_server`], which answers before anything is dialled and is what the
+    /// generated `AsyncAPI` document takes its server from.
     #[must_use]
     pub fn server_spec(&self) -> ServerSpec {
         let info = self.connection.client().server_info();
         ServerSpec::new(format!("{}:{}", info.host, info.port), "nats")
+            .protocol_version(info.proto.to_string())
     }
 
     /// A `JetStream` context on this connection, for stream and consumer administration
@@ -224,30 +240,55 @@ impl ConnectedNatsBroker {
         &self.connection
     }
 
-    /// Opens a subscription described by `opts`. Selects Core or `JetStream` based on whether
-    /// [`SubscribeOptions::jetstream`] was called.
+    /// Opens the subscription `source` describes: a Core subscription for [`CoreSubject`], a pull
+    /// consumer for [`JetStreamSubject`](crate::JetStreamSubject).
     ///
     /// # Errors
     ///
-    /// Returns [`NatsError::InvalidOptions`] when `opts` mixes Core and `JetStream` fields
-    /// incompatibly, [`NatsError::Subscribe`] when the broker rejects a Core subscription, or
-    /// [`NatsError::JetStream`] when the `JetStream` stream or consumer cannot be resolved.
-    pub async fn subscribe_with(
+    /// Returns [`NatsError::InvalidOptions`] when the subject is empty, [`NatsError::Subscribe`]
+    /// when the broker rejects a Core subscription, or [`NatsError::JetStream`] when the
+    /// `JetStream` stream or consumer cannot be resolved.
+    pub async fn subscribe_with<S: NatsSubscription>(
         &self,
-        opts: SubscribeOptions,
+        source: S,
     ) -> Result<NatsSubscriber, NatsError> {
-        opts.validate()?;
-        if opts.is_jetstream() {
-            self.subscribe_jetstream(opts).await
-        } else {
-            self.subscribe_core(opts).await
+        source.ensure_subject()?;
+        let subject = source.subject();
+        match source.plan() {
+            SubscriptionPlan::Core { queue_group } => {
+                self.subscribe_core(subject, queue_group).await
+            }
+            SubscriptionPlan::JetStream {
+                stream,
+                durable,
+                filter_subject,
+                ack_wait,
+                max_ack_pending,
+                deliver_policy,
+                pull_expires,
+            } => {
+                let consumer_cfg = ConsumerConfig {
+                    durable_name: durable.map(str::to_owned),
+                    filter_subject: filter_subject.to_owned(),
+                    max_ack_pending,
+                    ack_wait,
+                    deliver_policy,
+                    ..Default::default()
+                };
+                self.subscribe_jetstream(subject, stream, consumer_cfg, pull_expires)
+                    .await
+            }
         }
     }
 
-    async fn subscribe_core(&self, opts: SubscribeOptions) -> Result<NatsSubscriber, NatsError> {
-        let client = self.connection.live_client(opts.subject())?;
-        let subject = opts.subject().to_owned();
-        let inner = if let Some(queue) = opts.queue_group_ref() {
+    async fn subscribe_core(
+        &self,
+        subject: &str,
+        queue_group: Option<&str>,
+    ) -> Result<NatsSubscriber, NatsError> {
+        let client = self.connection.live_client(subject)?;
+        let subject = subject.to_owned();
+        let inner = if let Some(queue) = queue_group {
             client
                 .queue_subscribe(subject.clone(), queue.to_owned())
                 .await
@@ -271,27 +312,18 @@ impl ConnectedNatsBroker {
 
     async fn subscribe_jetstream(
         &self,
-        opts: SubscribeOptions,
+        subject: &str,
+        stream_name: &str,
+        consumer_cfg: ConsumerConfig,
+        pull_expires: Duration,
     ) -> Result<NatsSubscriber, NatsError> {
-        let client = self.connection.live_client(opts.subject())?.clone();
+        let client = self.connection.live_client(subject)?.clone();
         let ctx = jetstream::new(client);
-        let stream_name = opts
-            .stream_ref()
-            .expect("validated jetstream option")
-            .to_owned();
         let stream = ctx
-            .get_stream(&stream_name)
+            .get_stream(stream_name)
             .await
             .map_err(|err| NatsError::JetStream(Box::new(err)))?;
 
-        let consumer_cfg = ConsumerConfig {
-            durable_name: opts.durable_ref().map(str::to_owned),
-            filter_subject: opts.filter_subject_or_default(),
-            max_ack_pending: opts.max_ack_pending_or_default(),
-            ack_wait: opts.ack_wait_or_default(),
-            deliver_policy: opts.deliver_policy_or_default(),
-            ..Default::default()
-        };
         let consumer: PullConsumer = stream
             .create_consumer(consumer_cfg)
             .await
@@ -302,11 +334,11 @@ impl ConnectedNatsBroker {
             .map_err(|err| NatsError::JetStream(Box::new(err)))?;
 
         Ok(NatsSubscriber::from_jetstream(
-            opts.subject().to_owned(),
-            stream_name,
+            subject.to_owned(),
+            stream_name.to_owned(),
             messages,
             consumer,
-            opts.pull_expires_or_default(),
+            pull_expires,
         ))
     }
 }
@@ -338,8 +370,17 @@ impl ConnectedBroker for ConnectedNatsBroker {
 impl Subscribe for ConnectedNatsBroker {
     type Subscriber = NatsSubscriber;
 
+    /// A NATS subject is subscribed to and published to under one name, so a bare
+    /// `#[subscriber("orders.created")]` is a destination a copy of a delivery reaches: the
+    /// framework publishes a deferred retry back to the name itself and the mount site owes
+    /// nothing.
+    ///
+    /// A pattern is the exception, and it is not reachable from here: the by-name form takes one
+    /// subject, and `CoreWildcard::new("orders.*")` is the descriptor that reads many.
+    type Copies = AddressedCopies;
+
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
-        self.subscribe_with(SubscribeOptions::new(name)).await
+        self.subscribe_with(CoreSubject::new(name)).await
     }
 }
 
@@ -390,5 +431,77 @@ mod tests {
         let spec = broker.describe_server();
         assert_eq!(spec.protocol, "nats");
         assert_eq!(spec.host.as_deref(), Some("127.0.0.1:4222"));
+    }
+
+    #[test]
+    fn the_host_survives_every_address_shape_the_client_accepts() {
+        for (addr, expected) in [
+            ("nats://127.0.0.1:4222", "127.0.0.1:4222"),
+            ("tls://nats.example.com:4222", "nats.example.com:4222"),
+            // A bare address, which the client also takes.
+            ("nats.example.com:4222", "nats.example.com:4222"),
+            ("nats://nats.example.com", "nats.example.com"),
+            // User and password.
+            (
+                "nats://alice:s3cret@nats.example.com:4222",
+                "nats.example.com:4222",
+            ),
+            // A token: no colon and no user name, so a parse looking for `user:pass` misses it.
+            (
+                "nats://s3cret-token@nats.example.com:4222",
+                "nats.example.com:4222",
+            ),
+            // A password may contain the separator, so inside the authority the last `@` wins.
+            (
+                "nats://alice:p@ss@nats.example.com:4222",
+                "nats.example.com:4222",
+            ),
+            // The authority ends before the path or the query, so an `@` past it separates
+            // nothing. Cutting on `@` first would report a host of `b`.
+            ("nats://nats.example.com:4222/a@b", "nats.example.com:4222"),
+            (
+                "nats://nats.example.com:4222/?token=a@b",
+                "nats.example.com:4222",
+            ),
+            ("nats://nats.example.com:4222#a@b", "nats.example.com:4222"),
+        ] {
+            let spec = NatsBroker::new(addr).describe_server();
+            assert_eq!(spec.host.as_deref(), Some(expected), "parsing {addr}");
+        }
+    }
+
+    #[test]
+    fn a_list_of_addresses_describes_every_host_and_no_credentials() {
+        let spec = NatsBroker::new(
+            "nats://alice:s3cret@one.example.com:4222, nats://tok@two.example.com:4223",
+        )
+        .describe_server();
+        let host = spec.host.expect("a networked broker states its host");
+
+        assert_eq!(host, "one.example.com:4222,two.example.com:4223");
+        assert!(
+            !host.contains('@'),
+            "the userinfo separator is gone: {host}"
+        );
+    }
+
+    /// The document a service generates is meant to be published, so an address that
+    /// authenticates the connection must not describe the server it reaches.
+    #[test]
+    fn an_address_carrying_credentials_describes_a_server_without_them() {
+        for addr in [
+            "nats://alice:s3cret@nats.example.com:4222",
+            "nats://s3cret@nats.example.com:4222",
+        ] {
+            let host = NatsBroker::new(addr)
+                .describe_server()
+                .host
+                .expect("a networked broker states its host");
+
+            assert_eq!(host, "nats.example.com:4222");
+            assert!(!host.contains("s3cret"), "{addr} leaked {host:?}");
+            assert!(!host.contains("alice"), "{addr} leaked {host:?}");
+            assert!(!host.contains('@'), "{addr} leaked {host:?}");
+        }
     }
 }

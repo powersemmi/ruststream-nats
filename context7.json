@@ -1,0 +1,14 @@
+{
+  "rules": [
+    "Import `ruststream_nats::prelude::*` in a routes file, where the broker is already chosen; a handler body imports `ruststream::prelude::*` and bounds its injected slot on a capability (`Out<impl Publisher>`, `Out<impl RequestReply>`), so it names no broker.",
+    "One subscription form is one descriptor: `CoreSubject` for one Core NATS subject (a bare `#[subscriber(\"orders.created\")]` resolves to it), `CoreWildcard` for a `*` or `>` pattern, `JetStreamSubject::new(subject, stream).durable(name)` for a pull consumer; a setting of the other model is not a method on it and does not compile.",
+    "Cap redeliveries at the mount site with `.max_attempts(n).dead_letter(subject)`; NATS has no dead-letter mechanism, so this crate declares nothing to the server and the framework counts the attempts and moves the spent delivery.",
+    "A registration over `CoreWildcard` must say where a delayed copy goes, with `.out_retry(policy).to(subject)` or a transform declaring `Names`, because a NATS server refuses a publish to a pattern; a registration that says neither refuses to start.",
+    "Publish with `Publish` for plain Core NATS, which is also the broker's default policy and the one that carries request-reply, and with `JetStreamPublish::default().expect_stream(\"NAME\")` where the publish must be acknowledged by the stream.",
+    "Write a per-message `JetStream` setting (`message_id`, `expect_last_sequence`, `expect_last_subject_sequence`, `expect_last_message_id`) as a step on the publish builder, with the body's slot bounded `Out<impl Publisher<Options = JetStreamOptions>, Marker>`; never as a header and never by wrapping the publisher.",
+    "Only a `JetStream` delivery settles on the server: a core delivery reports `AckError::Unsupported` and its `retry_after` becomes a copy the framework publishes, which is at-most-once.",
+    "Send a request with `request(msg, timeout)` on the Core publisher, which correlates the reply natively; there is no separate `Request` policy in this prelude, and a responder reads the inbox from the `reply-to` header.",
+    "Read native `JetStream` metadata (stream and consumer sequence, delivery count, pending) by binding a `ruststream_nats::context::keys` key as a `Ctx<K>` parameter; every key reads `None` on a core delivery.",
+    "Test with `ruststream::testing::TestApp` over `ruststream_nats::testing::NatsTestBroker` (feature `testing`), and leave what only a server holds - the publish acknowledgement, the stream expectations, the durable's cursor - to a live suite gated by `NATS_TEST_URL`."
+  ]
+}

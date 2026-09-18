@@ -19,12 +19,16 @@ default = []
 # The in-process test broker (TestableBroker + TestApp support). The conformance harness is a
 # broker-author tool and stays in this repo's dev-dependencies, not in the user-facing feature.
 testing = ["ruststream/testing"]
+# The protocol bindings this crate contributes to a generated AsyncAPI document. Additive: the
+# hooks are gated on the core's own feature, and a binding body is a plain serde struct.
+asyncapi = ["ruststream/asyncapi", "dep:serde"]
 
 [dev-dependencies]
 # The conformance harness drives the testing-feature broker; macros + json power the runnable
 # nats_* examples (the docs site embeds their snippets), and serde decodes their message types.
-ruststream = { workspace = true, features = ["conformance", "testing", "macros", "json"] }
-serde = { version = "1", features = ["derive"] }
+ruststream = { workspace = true, features = ["conformance", "testing", "macros", "json", "asyncapi"] }
+serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 
 [dependencies]
@@ -32,6 +36,7 @@ ruststream = { workspace = true, default-features = false }
 async-nats.workspace = true
 bytes.workspace = true
 futures.workspace = true
+serde = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -45,3 +50,9 @@ name = "nats_jetstream"
 
 [[example]]
 name = "nats_request_reply"
+
+[[example]]
+name = "nats_retry"
+
+[package.metadata.docs.rs]
+all-features = true

@@ -39,9 +39,14 @@
 //! handler itself cannot observe. One acknowledgement out of millions is far below the
 //! run-to-run spread.
 //!
-//! A publisher that never has to wait for its consumer means that consumer was never the limit.
-//! When that holds for both halves the row is reported as broker-bound: what it measures then is
-//! the machine's loopback and the server, not this crate.
+//! A row is reported as broker-bound when the transport makes the consumer wait for the server
+//! often enough to account for half of what a message costs: what such a row measures is the
+//! machine's loopback and the server, not this crate. The waiting is measured rather than
+//! guessed at - a probe outside both halves times a request the client waits for the answer to,
+//! and the count of round trips a delivery costs is this transport's to state. Reading it off
+//! the publisher instead gets it wrong wherever the publisher outruns the consumer by
+//! construction. The probe's median travels with the published numbers, so the sum can be redone
+//! by anyone.
 
 use std::convert::Infallible;
 use std::env;
@@ -105,6 +110,19 @@ const IN_FLIGHT: usize = 32_768;
 const CHECK_EVERY: usize = 512;
 /// How long a run may go without a delivery before it is called stuck.
 const STALL: Duration = Duration::from_secs(30);
+
+/// Round trips the probe takes before it reports a median.
+const PROBE_ROUND_TRIPS: usize = 30_000;
+/// The request the probe waits for an answer to.
+///
+/// The server answers it itself, so nothing of this process sits inside the number - a responder
+/// of our own would have added its own task wakeup to every sample.
+const PROBE_SUBJECT: &str = "$JS.API.INFO";
+/// Messages one pull request asks `JetStream` for, which is what `Consumer::messages` asks for.
+const PULL_BATCH: f64 = 200.0;
+/// The share of the time per message that waiting on the transport has to account for before a
+/// row is called broker-bound.
+const BROKER_BOUND_SHARE: f64 = 0.5;
 
 /// The body size both halves publish and decode, to the byte: the scenario is published under
 /// this number, so the bytes on the wire have to be it.
@@ -527,6 +545,32 @@ async fn delete_stream(ctx: &JetStreamContext, names: &Names) {
 // The run
 // ---------------------------------------------------------------------------------------------
 
+/// How long one round trip to the server takes on this machine, on a connection of its own.
+///
+/// A consumer the transport makes wait for the server once per delivery cannot go faster than
+/// this, however cheap the framework above it is, and a row measured at that ceiling says more
+/// about the transport than about this crate. Measuring the ceiling is what decides that flag:
+/// inferring it from the publisher gets it wrong wherever the publisher outruns the consumer by
+/// construction.
+///
+/// The median over many samples, not the mean: the first call pays for the inbox subscription,
+/// and a scheduler hiccup anywhere in the run would move an average.
+async fn round_trip(url: &str) -> Duration {
+    let client = connect(url).await;
+    let subject = Subject::from(PROBE_SUBJECT);
+    let mut samples = Vec::with_capacity(PROBE_ROUND_TRIPS);
+    for _ in 0..PROBE_ROUND_TRIPS {
+        let start = Instant::now();
+        client
+            .request(subject.clone(), Bytes::new())
+            .await
+            .expect("the server answers its own API");
+        samples.push(start.elapsed());
+    }
+    samples.sort_unstable();
+    samples[samples.len() / 2]
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Scenario {
     Core,
@@ -538,6 +582,20 @@ impl Scenario {
         match self {
             Self::Core => "Core NATS, 512 B JSON",
             Self::JetStream => "JetStream pull consumer, 512 B JSON, ack each",
+        }
+    }
+
+    /// Round trips the transport charges the consumer for one delivery.
+    ///
+    /// Core NATS charges none: the server pushes a match down the subscription and the consumer
+    /// waits for nothing. A `JetStream` pull consumer charges the pull request, which asks for a
+    /// whole batch and is issued again before the current one runs out, so one batch is the
+    /// upper bound on what one delivery costs. Its acknowledgement charges none: the consumer
+    /// sends it and moves on, because settling here is `ack`, not `double_ack`.
+    const fn round_trips_per_delivery(self) -> f64 {
+        match self {
+            Self::Core => 0.0,
+            Self::JetStream => 1.0 / PULL_BATCH,
         }
     }
 
@@ -597,7 +655,13 @@ struct Measured {
     broker_bound: bool,
 }
 
-async fn measure(scenario: Scenario, url: &str, pairs: usize, seconds: f64) -> Measured {
+async fn measure(
+    scenario: Scenario,
+    url: &str,
+    pairs: usize,
+    seconds: f64,
+    round_trip: Duration,
+) -> Measured {
     // The probe is the warm-up as well: its result is thrown away, and the rate it measured sets
     // a count that makes every run below last at least `seconds`.
     let probe = scenario.raw(url, &Names::fresh(), PROBE_MESSAGES).await;
@@ -611,7 +675,9 @@ async fn measure(scenario: Scenario, url: &str, pairs: usize, seconds: f64) -> M
 
     let mut raws = Vec::with_capacity(pairs);
     let mut frameworks = Vec::with_capacity(pairs);
-    let mut throttled = 0;
+    // Kept, and printed, although it decides nothing: a run where neither publisher ever had to
+    // wait is a run where neither consumer was starved, and that is worth seeing.
+    let mut waits = (0, 0);
     for pair in 0..=pairs {
         let raw = scenario.raw(url, &Names::fresh(), messages).await;
         let framework = scenario.framework(url, &Names::fresh(), messages).await;
@@ -625,14 +691,18 @@ async fn measure(scenario: Scenario, url: &str, pairs: usize, seconds: f64) -> M
         );
         raws.push(raw.rate(messages));
         frameworks.push(framework.rate(messages));
-        // Both halves: a publisher that waited for either consumer means that consumer was the
-        // limit, and a row where the framework was the slower one is not a row the broker paced.
-        throttled += raw.throttled + framework.throttled;
+        waits = (waits.0 + raw.throttled, waits.1 + framework.throttled);
     }
 
     let raw = Stats::of(raws);
     let framework = Stats::of(frameworks);
     let difference = (raw.median - framework.median).abs();
+    // What the transport makes the consumer wait for, against what a message costs. The faster
+    // half sets the comparison: a ceiling the raw client already sits on is the transport's, and
+    // the framework above it cannot be what the row is about.
+    let waiting = scenario.round_trips_per_delivery() * round_trip.as_secs_f64();
+    let per_message = 1.0 / raw.median;
+    println!("  publisher waits: raw {}, framework {}", waits.0, waits.1);
     Measured {
         scenario,
         messages,
@@ -645,13 +715,18 @@ async fn measure(scenario: Scenario, url: &str, pairs: usize, seconds: f64) -> M
         } else {
             "measured"
         },
-        // Neither publisher ever waited for its consumer, so neither consumer was the limit.
-        broker_bound: throttled == 0,
+        broker_bound: waiting >= BROKER_BOUND_SHARE * per_message,
     }
 }
 
-fn document(measured: &[Measured]) -> String {
-    let mut out = String::from("{\n  \"scenarios\": [\n");
+fn document(measured: &[Measured], round_trip: Duration) -> String {
+    // The round trip travels with the numbers so a reader can redo the sum behind `broker_bound`
+    // instead of taking the flag on trust.
+    let mut out = format!(
+        "{{\n  \"round_trip\": \"{:.1} us (median of {PROBE_ROUND_TRIPS} request/reply round \
+         trips on one connection)\",\n  \"scenarios\": [\n",
+        round_trip.as_secs_f64() * 1e6
+    );
     for (index, row) in measured.iter().enumerate() {
         let comma = if index + 1 == measured.len() { "" } else { "," };
         write!(
@@ -720,9 +795,16 @@ fn main() {
     let out = env::var("RUSTSTREAM_BENCH_OUT").unwrap_or_else(|_| "bench-paired.json".to_owned());
 
     let runtime = runtime();
+    // Outside both halves and before either: what the transport charges for one round trip is a
+    // property of the server and the machine, not of a scenario.
+    let round_trip = runtime.block_on(round_trip(&url));
+    println!(
+        "round trip: {:.1} us (median of {PROBE_ROUND_TRIPS} request/reply round trips)",
+        round_trip.as_secs_f64() * 1e6
+    );
     let measured: Vec<Measured> = [Scenario::Core, Scenario::JetStream]
         .into_iter()
-        .map(|scenario| runtime.block_on(measure(scenario, &url, pairs, seconds)))
+        .map(|scenario| runtime.block_on(measure(scenario, &url, pairs, seconds, round_trip)))
         .collect();
 
     println!();
@@ -742,6 +824,6 @@ fn main() {
         );
     }
 
-    std::fs::write(&out, document(&measured)).expect("the summary is written");
+    std::fs::write(&out, document(&measured, round_trip)).expect("the summary is written");
     println!("\nwrote {out}");
 }

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Turn a benchmark run into the published results document.
 
-`benches/paired.rs` reports the scenarios it measured and nothing else, because the machine and
-the build are not its to describe. This script reads that summary, adds the environment the run
-was taken in and the versions it was taken against, and writes the document the documentation
-site serves at `benchmarks/results.json`.
+`benches/paired.rs` reports the scenarios it measured, and of the environment only the one field
+it alone can know: the round trip it measured against the live transport. The machine and the
+build are not its to describe. This script reads that summary, adds the environment the run was
+taken in and the versions it was taken against, and writes the document the documentation site
+serves at `benchmarks/results.json`.
 
 The schema is the core's, declared at
 https://powersemmi.github.io/ruststream/latest/benchmarks/#publishing-results. This crate
@@ -98,7 +99,7 @@ def core_version() -> str:
     return match.group(1) if match else "unknown"
 
 
-def environment() -> dict[str, str]:
+def environment(round_trip: str) -> dict[str, str]:
     cpu = lscpu()
     return {
         "cpu": proc_field("/proc/cpuinfo", "model name") or cpu.get("Model name", "unknown"),
@@ -109,6 +110,9 @@ def environment() -> dict[str, str]:
         "memory_speed": "unknown",
         "os": f"Linux {run('uname', '-r').strip()}",
         "broker": broker_image(),
+        # The run measured it, because only the run had the live transport in front of it. It is
+        # published so a reader can redo the sum behind a `broker_bound` flag.
+        "round_trip": round_trip,
         "rustc": run("rustc", "--version").replace("rustc", "").strip().split()[0],
         "profile": PROFILE,
         "features": FEATURES,
@@ -127,7 +131,7 @@ def main() -> int:
         "crate_version": crate_version(),
         "core_version": core_version(),
         "measured_at": date.today().isoformat(),
-        "environment": environment(),
+        "environment": environment(summary["round_trip"]),
         "scenarios": summary["scenarios"],
     }
     out = Path(sys.argv[2])

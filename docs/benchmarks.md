@@ -29,6 +29,13 @@ every JetStream delivery carries an acknowledgement back to the server, and a di
 disappears inside one. A figure below the run-to-run noise would read as precision that was never
 measured, so none is published.
 
+A row marked `broker-bound` is one where the transport makes the consumer wait for the server
+often enough to account for half of what a message costs. There the number says more about the
+server and the loopback than about this crate. Core NATS charges the consumer no round trip per
+delivery: the server pushes a match down the subscription. A JetStream pull consumer charges one
+pull request per batch, and an acknowledgement it sends without waiting for an answer. The round
+trip those are counted against is the probe below the machine, so the sum can be redone.
+
 The machine-readable form of the same run, which the framework's site reads to build its
 cross-broker table, is at
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-nats/latest/benchmarks/results.json).

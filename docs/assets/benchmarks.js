@@ -32,7 +32,7 @@
   const ENVIRONMENT = [
     ["machine", ["cpu", "architecture", "cpu_frequency", "cores", "memory", "memory_speed"]],
     ["os", ["os"]],
-    ["broker", ["broker"]],
+    ["broker", ["broker", "round_trip"]],
     ["build", ["rustc", "profile", "features", "rustflags"]],
   ];
 

@@ -3,22 +3,28 @@
 在 NATS 客户端和你的处理器之间，框架在每条消息上都要花时间：订阅的流、解码、分发、ack。这一页
 说明它花了多少，参照物是同样的活用 `async-nats` 手写一遍。
 
-同一个进程把一个场景跑两遍：一遍是 RustStream 服务，一遍是客户端上的循环。其余一切都保持相同：
-连接选项、订阅、消费者配置、确认的位置、解码成同一个类型、载荷字节、tokio 运行时和构建。这套
-流程属于框架本身，写在
+同一个进程把一个场景跑三遍。**裸**直接驱动 `async-nats`。**适配器**手写驱动这个 crate 自己的
+类型，上面没有处理器，也没有运行时。**服务**是用户会写的那个应用。其余一切都保持相同：连接选项、
+订阅、消费者配置、确认的位置、解码成同一个类型、载荷字节、tokio 运行时和构建。这套流程属于框架
+本身，写在
 [RustStream 基准测试页](https://powersemmi.github.io/ruststream/latest/zh/benchmarks/#methodology)
 上；这一页公布它在这台机器上得出的结果。
+
+由此得到两个差值。适配器对裸客户端，是这个 crate 的消费者和发布者在它们包装的客户端之上的开销：
+这个仓库负责的就是这个数字。服务对裸客户端，是一个完整服务的开销，适配器和运行时加在一起。运行时
+自己的开销就是两列之间的距离，它按 Broker 分别公布，因为运行时占比在不同 Broker 之间有差别，这
+本身就是关于传输和运行时如何相接的事实。
 
 ## 数字 { #the-numbers }
 
 交错配对的中位数，括号里是观察到的离散范围。越大越好。
 
-<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载公布的结果...", "scenario": "场景", "raw": "裸客户端", "framework": "RustStream", "overhead": "开销", "indistinguishable": "无法区分", "brokerBound": "受 Broker 限制", "machine": "机器", "os": "操作系统", "broker": "Broker", "build": "构建", "versions": "版本", "measured": "测量于", "unavailable": "读不到结果。它们公布在 {url}。", "unknownSchema": "公布的结果声明的 schema 是 {schema}，这一页不渲染它。"}'></div>
+<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载公布的结果...", "scenario": "场景", "raw": "裸客户端", "adapter": "ruststream-nats", "framework": "RustStream 服务", "adapterOverhead": "适配器对裸客户端", "overhead": "服务对裸客户端", "indistinguishable": "无法区分", "brokerBound": "受 Broker 限制", "machine": "机器", "os": "操作系统", "broker": "Broker", "build": "构建", "versions": "版本", "measured": "测量于", "unavailable": "读不到结果。它们公布在 {url}。", "unknownSchema": "公布的结果声明的 schema 是 {schema}，这一页不渲染它。"}'></div>
 
 表格由浏览器从上一次运行写下的文档读出，所以这一页上没有任何会过期的副本。
 
-Core NATS 这一行只有框架自身：那里的一次投递就是一次 subject 匹配加一个消息体，服务器不做任何
-确认。RustStream 在它之上加的是订阅的流、解码和分发。
+Core NATS 是这些数字能落在的最薄的底座：那里的一次投递就是一次 subject 匹配加一个消息体，服务器
+不做任何确认，所以每一列相对前一列加了多少，周围没有传输开销遮住。
 
 标为「无法区分」的一行，是两半之间的差值小于各自多次运行之间离散范围的那一行。凡是传输本身比
 分发贵得多的地方，这就是诚实的结果：JetStream 的每次投递都要把一次确认送回服务器，这样大小的

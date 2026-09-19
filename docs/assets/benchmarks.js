@@ -69,32 +69,45 @@
     return median + " (" + number(measurement.min, lang) + "-" + number(measurement.max, lang) + ")";
   }
 
-  function overhead(scenario, labels) {
-    // The honesty rule of the methodology, enforced where it is read: a difference smaller than
-    // the run-to-run spread is a verdict, never a percentage.
-    let value =
-      scenario.verdict === "indistinguishable"
-        ? labels.indistinguishable
-        : (scenario.overhead_percent >= 0 ? "+" : "") + scenario.overhead_percent + "%";
-    if (scenario.broker_bound) {
-      value += " (" + labels.brokerBound + ")";
-    }
-    return value;
-  }
+  // The honesty rule of the methodology, enforced where it is read: a difference smaller than the
+  // run-to-run spread is a verdict, never a percentage. The run decides it and the document
+  // carries the decision, so this only renders it.
+  const overhead = (percent, verdict, labels) =>
+    verdict === "indistinguishable"
+      ? labels.indistinguishable
+      : (percent >= 0 ? "+" : "") + percent + "%";
 
   function scenarios(results, labels, lang) {
     const element = document.createElement("table");
     const head = element.createTHead().insertRow();
-    for (const column of [labels.scenario, labels.raw, labels.framework, labels.overhead]) {
+    const columns = [
+      labels.scenario,
+      labels.raw,
+      labels.adapter,
+      labels.framework,
+      labels.adapterOverhead,
+      labels.overhead,
+    ];
+    for (const column of columns) {
       head.appendChild(text("th", column));
     }
     const body = element.createTBody();
     for (const scenario of results.scenarios) {
       const row = body.insertRow();
-      row.appendChild(text("td", scenario.name));
+      const name = scenario.broker_bound
+        ? scenario.name + " (" + labels.brokerBound + ")"
+        : scenario.name;
+      row.appendChild(text("td", name));
       row.appendChild(text("td", side(scenario.raw, scenario.unit, lang)));
+      row.appendChild(text("td", side(scenario.adapter, scenario.unit, lang)));
       row.appendChild(text("td", side(scenario.framework, scenario.unit, lang)));
-      row.appendChild(text("td", overhead(scenario, labels)));
+      row.appendChild(
+        text(
+          "td",
+          overhead(scenario.adapter_overhead_percent, scenario.adapter_verdict, labels),
+        ),
+      );
+      row.appendChild(text("td", overhead(scenario.overhead_percent, scenario.verdict, labels)));
     }
     return element;
   }

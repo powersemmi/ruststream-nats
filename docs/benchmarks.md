@@ -4,24 +4,32 @@ A framework between the NATS client and your handler costs time on every message
 stream, the decode, the dispatch, the ack. This page says how much, measured against the same work
 written by hand on `async-nats`.
 
-Two binaries in one process run the same scenario: one is a RustStream service, the other a loop on
-the client. Everything else is held equal - the connection options, the subscription, the consumer
-configuration, the position of the ack, the decode into the same type, the payload bytes, the tokio
-runtime and the build. The procedure is the framework's own and is described on the
+One process runs the same scenario three ways. **Raw** drives `async-nats` directly. **Adapter**
+drives this crate's own types by hand, with no handler and no runtime above them. **Service** is the
+application a user writes. Everything else is held equal - the connection options, the subscription,
+the consumer configuration, the position of the ack, the decode into the same type, the payload
+bytes, the tokio runtime and the build. The procedure is the framework's own and is described on the
 [RustStream benchmarks page](https://powersemmi.github.io/ruststream/latest/benchmarks/#methodology);
 this page publishes what it produced here.
+
+Two differences come out of that. Adapter against raw is what this crate's consumer and publisher
+cost over the client they wrap: the number this repository answers for. Service against raw is what
+a whole service costs, adapter and runtime together. What the runtime costs on its own is the
+distance between the two columns, and it is published here per broker because a runtime share that
+differs between brokers is a fact about how the transport and the runtime meet.
 
 ## The numbers
 
 Medians over interleaved pairs, with the observed spread in parentheses. Higher is better.
 
-<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "framework": "RustStream", "overhead": "Overhead", "indistinguishable": "indistinguishable", "brokerBound": "broker-bound", "machine": "Machine", "os": "OS", "broker": "Broker", "build": "Build", "versions": "Versions", "measured": "Measured", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
+<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "adapter": "ruststream-nats", "framework": "RustStream service", "adapterOverhead": "Adapter over raw", "overhead": "Service over raw", "indistinguishable": "indistinguishable", "brokerBound": "broker-bound", "machine": "Machine", "os": "OS", "broker": "Broker", "build": "Build", "versions": "Versions", "measured": "Measured", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
 
 The table is read in your browser from the document the last run wrote, so nothing on this page is
 a copy that could have gone stale.
 
-Core NATS is the framework alone: a delivery there is a subject match and a body, and the server
-settles nothing. What RustStream adds to it is the subscription stream, the decode and the dispatch.
+Core NATS is the thinnest thing the numbers can sit on: a delivery there is a subject match and a
+body, and the server settles nothing, so what each column adds to the one before it is visible
+without a transport cost around it.
 
 A row reported as `indistinguishable` is one whose two halves differ by less than the spread between
 runs of either. That is the honest outcome wherever the transport costs far more than the dispatch:

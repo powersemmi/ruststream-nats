@@ -9,19 +9,32 @@
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-//! What this crate costs over the `async-nats` client it wraps.
+//! What this crate costs over the `async-nats` client it wraps, and what the runtime costs over
+//! this crate.
 //!
-//! One scenario, run twice: once as a `RustStream` service, once as a hand-written loop on the
-//! client. The two halves differ in that and in nothing else - same connection options, same
-//! subscription, same consumer configuration, same ack position, same decode into the same type,
-//! the same payload bytes, the same tokio runtime and the same binary. The procedure the numbers
-//! follow is the framework's own, published at
+//! One scenario, run three ways. **Raw** drives the client directly. **Adapter** drives this
+//! crate's own types by hand - the broker, the subscription descriptor, the `Subscriber` stream,
+//! the `IncomingMessage` and its `ack`, the `Publisher` - with no handler and no runtime above
+//! them. **Service** is the application a user writes: a `#[subscriber]` handler on a started
+//! `RustStream` app.
+//!
+//! Two differences come out of that. Adapter against raw is what this crate's consumer and
+//! publisher cost over the client they wrap, which is the number this repository answers for.
+//! Service against adapter is what the runtime costs on top of this transport in particular: if
+//! every adapter is thin and the runtime's share still differs between brokers, the difference
+//! lives in how the two meet, and that is a finding about this crate.
+//!
+//! The three differ in that and in nothing else - same connection options, same subscription,
+//! same consumer configuration, same ack position, same decode into the same type behind a
+//! `black_box`, the same payload bytes, the same tokio runtime and the same binary. The adapter
+//! and the service halves also publish through the same publisher, so what separates those two is
+//! the runtime alone. The procedure the numbers follow is the framework's own, published at
 //! <https://powersemmi.github.io/ruststream/latest/benchmarks/>.
 //!
 //! # What a run is
 //!
 //! The consumer is attached first, a publisher on a second connection then feeds it, and the
-//! window runs from the first delivery to the end of the last handler call. Connecting,
+//! window runs from the first delivery to the end of the last one's handling. Connecting,
 //! subscribing and creating the stream are startup cost and sit outside it. Every run subscribes
 //! to a fresh subject - and, on `JetStream`, creates a fresh stream and consumer - so a run never
 //! sees what the one before it left behind.
@@ -29,15 +42,17 @@
 //! The message count is not a constant: a probe run measures the raw half's rate and the count is
 //! set from it, so a measured run lasts at least [`SECONDS`] on whatever machine it is taken on.
 //!
-//! Pairs are interleaved - raw, framework, raw, framework - and the first is discarded. Blocking
-//! one half and then the other would charge every drift of the machine to whichever ran second.
+//! The three are interleaved - raw, adapter, service, round after round - and the first round is
+//! discarded. Running one of them to the end and then the next would charge every drift of the
+//! machine to whichever went last.
 //!
 //! # What the numbers do not say
 //!
-//! The window ends where the last handler returns rather than after its acknowledgement, on both
-//! halves alike: the framework acks a delivery once the handler is done, which is a point the
-//! handler itself cannot observe. One acknowledgement out of millions is far below the
-//! run-to-run spread.
+//! The window ends where the last delivery has been decoded and read, before its
+//! acknowledgement, in all three halves alike: the runtime acks once the handler is done, which
+//! is a point the handler itself cannot observe. One acknowledgement out of millions is far below
+//! the run-to-run spread, and closing the window at the same point everywhere matters more than
+//! where that point is.
 //!
 //! A row is reported as broker-bound when the transport makes the consumer wait for the server
 //! often enough to account for half of what a message costs: what such a row measures is the
@@ -51,9 +66,11 @@
 use std::convert::Infallible;
 use std::env;
 use std::fmt::Write as _;
+use std::future::Future;
 use std::hint::black_box;
 use std::iter::repeat_n;
 use std::num::NonZeroUsize;
+use std::pin::pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -66,7 +83,9 @@ use async_nats::{Client, ConnectOptions, Subject};
 use bytes::Bytes;
 use futures::StreamExt;
 use ruststream::runtime::RunningApp;
+use ruststream::{AckError, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Subscriber};
 use ruststream_nats::prelude::*;
+use ruststream_nats::{ConnectedNatsBroker, NatsPublish, NatsPublisher, NatsSubscriber};
 use serde::Deserialize;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::Notify;
@@ -94,7 +113,7 @@ const MARGIN: f64 = 1.25;
 /// The ceiling on a calibrated count, so a machine an order faster does not turn a run into an
 /// afternoon.
 const MAX_MESSAGES: usize = 20_000_000;
-/// Pairs kept. One more is run and discarded.
+/// Rounds kept. One more is run and discarded.
 const PAIRS: usize = 11;
 /// Worker threads both halves are driven on.
 const WORKERS: usize = 4;
@@ -322,7 +341,49 @@ async fn connect(url: &str) -> Client {
 }
 
 /// Publishes the run's bodies, never letting the consumer fall further behind than [`IN_FLIGHT`].
-async fn publish_all(client: &Client, subject: &str, messages: usize, run: &Run) -> usize {
+/// What a half sends its bodies with.
+///
+/// The raw half sends through the client, and the other two through this crate's publisher: the
+/// publish path is part of what this crate charges, and holding it identical between the adapter
+/// and the service halves is what makes their difference the runtime alone.
+// The futures are `Send` in the trait rather than at the call site: both implementations are, the
+// publishing task is spawned beside the consuming one, and a private helper with two impls has no
+// caller to keep the choice open for.
+trait Feed {
+    fn send(&self, subject: &Subject, body: &Bytes) -> impl Future<Output = ()> + Send;
+    fn finish(&self) -> impl Future<Output = ()> + Send;
+}
+
+impl Feed for Client {
+    async fn send(&self, subject: &Subject, body: &Bytes) {
+        self.publish(subject.clone(), body.clone())
+            .await
+            .expect("the server accepts the publish");
+    }
+
+    async fn finish(&self) {
+        self.flush().await.expect("the publisher flushes");
+    }
+}
+
+impl Feed for NatsPublisher {
+    async fn send(&self, subject: &Subject, body: &Bytes) {
+        self.publish(OutgoingMessage::new(subject.as_str(), body), None)
+            .await
+            .expect("the server accepts the publish");
+    }
+
+    // The publisher hands its bodies to the same connection the client half flushes; the run ends
+    // on the consumer's count either way, so there is nothing left to wait for here.
+    async fn finish(&self) {}
+}
+
+async fn publish_all(
+    feed: &(impl Feed + Sync),
+    subject: &str,
+    messages: usize,
+    run: &Run,
+) -> usize {
     let subject = Subject::from(subject.to_owned());
     let body = Bytes::from(json_body(BODY_BYTES));
     let mut throttled = 0;
@@ -333,12 +394,9 @@ async fn publish_all(client: &Client, subject: &str, messages: usize, run: &Run)
                 sleep(Duration::from_micros(200)).await;
             }
         }
-        client
-            .publish(subject.clone(), body.clone())
-            .await
-            .expect("the server accepts the publish");
+        feed.send(&subject, &body).await;
     }
-    client.flush().await.expect("the publisher flushes");
+    feed.finish().await;
     throttled
 }
 
@@ -382,6 +440,102 @@ async fn start_stream(url: &str, run: Run) -> RunningApp {
         .start()
         .await
         .expect("the service starts")
+}
+
+// ---------------------------------------------------------------------------------------------
+// The adapter half
+// ---------------------------------------------------------------------------------------------
+
+async fn connected(url: &str) -> ConnectedNatsBroker {
+    NatsBroker::new(url)
+        .connect()
+        .await
+        .expect("the broker connects")
+}
+
+/// Drains a subscription this crate opened, decoding and settling in this frame.
+///
+/// The raw half's body with this crate's types in it: the subscription's stream in place of the
+/// client's subscriber, an [`IncomingMessage`] in place of `async_nats::Message`, and its `ack` in
+/// place of the settling the client offers. Nothing above that: no handler, no dispatch, no
+/// service. What the runtime costs is the half after this one.
+async fn drain_subscription(subscriber: &mut NatsSubscriber, run: &Run) {
+    let mut stream = pin!(subscriber.stream());
+    while let Some(delivery) = stream.next().await {
+        let message = delivery.expect("the subscription delivers");
+        let order: Order = serde_json::from_slice(message.payload()).expect("the body decodes");
+        black_box((order.id, order.quantity));
+        let done = run.arrived();
+        // Core NATS settles nothing and says so rather than pretending. The raw half has nothing
+        // to call there either, so all three halves settle at the same point in the loop.
+        match message.ack().await {
+            Ok(()) | Err(AckError::Unsupported) => {}
+            Err(err) => panic!("the ack reaches the server: {err}"),
+        }
+        if done {
+            break;
+        }
+    }
+}
+
+async fn adapter_core(url: &str, names: &Names, messages: usize) -> Sample {
+    let broker = connected(url).await;
+    let mut subscriber = broker
+        .subscribe_with(CoreSubject::new(names.subject.clone()))
+        .await
+        .expect("the server accepts the subscription");
+
+    let run = Run::new(messages);
+    let consuming = tokio::spawn({
+        let run = run.clone();
+        async move { drain_subscription(&mut subscriber, &run).await }
+    });
+
+    let feed = connected(url).await;
+    let throttled = publish_all(&feed.publisher(NatsPublish), &names.subject, messages, &run).await;
+    drain(&run, "adapter core").await;
+    consuming.await.expect("the consuming task ends");
+    let sample = Sample {
+        window: run.window(),
+        throttled,
+    };
+    broker.shutdown().await.expect("the broker closes");
+    feed.shutdown().await.expect("the broker closes");
+    sample
+}
+
+async fn adapter_stream(url: &str, names: &Names, messages: usize) -> Sample {
+    let client = connect(url).await;
+    let ctx = jetstream(client);
+    create_stream(&ctx, names).await;
+
+    let broker = connected(url).await;
+    let mut subscriber = broker
+        .subscribe_with(
+            JetStreamSubject::new(names.subject.clone(), names.stream.clone())
+                .durable(names.durable.clone()),
+        )
+        .await
+        .expect("the consumer is created");
+
+    let run = Run::new(messages);
+    let consuming = tokio::spawn({
+        let run = run.clone();
+        async move { drain_subscription(&mut subscriber, &run).await }
+    });
+
+    let feed = connected(url).await;
+    let throttled = publish_all(&feed.publisher(NatsPublish), &names.subject, messages, &run).await;
+    drain(&run, "adapter jetstream").await;
+    consuming.await.expect("the consuming task ends");
+    let sample = Sample {
+        window: run.window(),
+        throttled,
+    };
+    broker.shutdown().await.expect("the broker closes");
+    feed.shutdown().await.expect("the broker closes");
+    delete_stream(&ctx, names).await;
+    sample
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -505,14 +659,18 @@ async fn framework_core(url: &str, names: &Names, messages: usize) -> Sample {
     let run = Run::new(messages);
     install(names);
     let app = start_core(url, run.clone()).await;
-    let publisher = connect(url).await;
-    let throttled = publish_all(&publisher, &names.subject, messages, &run).await;
+    // The same feed the adapter half uses, so what separates the two is the runtime and nothing
+    // on the publish side.
+    let feed = connected(url).await;
+    let throttled = publish_all(&feed.publisher(NatsPublish), &names.subject, messages, &run).await;
     drain(&run, "framework core").await;
     app.shutdown().await.expect("the service stops");
-    Sample {
+    let sample = Sample {
         window: run.window(),
         throttled,
-    }
+    };
+    feed.shutdown().await.expect("the broker closes");
+    sample
 }
 
 async fn framework_stream(url: &str, names: &Names, messages: usize) -> Sample {
@@ -523,14 +681,15 @@ async fn framework_stream(url: &str, names: &Names, messages: usize) -> Sample {
     let run = Run::new(messages);
     install(names);
     let app = start_stream(url, run.clone()).await;
-    let publisher = connect(url).await;
-    let throttled = publish_all(&publisher, &names.subject, messages, &run).await;
+    let feed = connected(url).await;
+    let throttled = publish_all(&feed.publisher(NatsPublish), &names.subject, messages, &run).await;
     drain(&run, "framework jetstream").await;
     app.shutdown().await.expect("the service stops");
     let sample = Sample {
         window: run.window(),
         throttled,
     };
+    feed.shutdown().await.expect("the broker closes");
     delete_stream(&ctx, names).await;
     sample
 }
@@ -606,6 +765,13 @@ impl Scenario {
         }
     }
 
+    async fn adapter(self, url: &str, names: &Names, messages: usize) -> Sample {
+        match self {
+            Self::Core => adapter_core(url, names, messages).await,
+            Self::JetStream => adapter_stream(url, names, messages).await,
+        }
+    }
+
     async fn framework(self, url: &str, names: &Names, messages: usize) -> Sample {
         match self {
             Self::Core => framework_core(url, names, messages).await,
@@ -614,7 +780,7 @@ impl Scenario {
     }
 }
 
-/// Median, smallest and largest of the kept pairs.
+/// Median, smallest and largest of the kept rounds.
 #[derive(Clone, Copy, Debug)]
 struct Stats {
     median: f64,
@@ -647,18 +813,35 @@ impl Stats {
 struct Measured {
     scenario: Scenario,
     messages: usize,
-    pairs: usize,
+    rounds: usize,
     raw: Stats,
+    adapter: Stats,
     framework: Stats,
+    adapter_overhead_percent: f64,
+    adapter_verdict: &'static str,
     overhead_percent: f64,
     verdict: &'static str,
     broker_bound: bool,
 }
 
+/// How much slower `half` is than `raw`, and whether the difference outgrew the noise.
+///
+/// The honesty rule of the procedure, applied to every percentage the document carries: a
+/// difference smaller than the run-to-run spread is a verdict, never a figure.
+fn against(raw: Stats, half: Stats) -> (f64, &'static str) {
+    let difference = raw.median - half.median;
+    let verdict = if difference.abs() < raw.spread().max(half.spread()) {
+        "indistinguishable"
+    } else {
+        "measured"
+    };
+    (difference / raw.median * 100.0, verdict)
+}
+
 async fn measure(
     scenario: Scenario,
     url: &str,
-    pairs: usize,
+    rounds: usize,
     seconds: f64,
     round_trip: Duration,
 ) -> Measured {
@@ -673,48 +856,60 @@ async fn measure(
         probe.rate(PROBE_MESSAGES)
     );
 
-    let mut raws = Vec::with_capacity(pairs);
-    let mut frameworks = Vec::with_capacity(pairs);
-    // Kept, and printed, although it decides nothing: a run where neither publisher ever had to
-    // wait is a run where neither consumer was starved, and that is worth seeing.
-    let mut waits = (0, 0);
-    for pair in 0..=pairs {
+    let mut raws = Vec::with_capacity(rounds);
+    let mut adapters = Vec::with_capacity(rounds);
+    let mut frameworks = Vec::with_capacity(rounds);
+    // Kept, and printed, although they decide nothing: a round where no publisher ever had to
+    // wait is a round where no consumer was starved, and that is worth seeing.
+    let mut waits = (0, 0, 0);
+    for round in 0..=rounds {
         let raw = scenario.raw(url, &Names::fresh(), messages).await;
+        let adapter = scenario.adapter(url, &Names::fresh(), messages).await;
         let framework = scenario.framework(url, &Names::fresh(), messages).await;
-        if pair == 0 {
+        if round == 0 {
             continue;
         }
         println!(
-            "  pair {pair:>2}: raw {:>10.0} msg/s, framework {:>10.0} msg/s",
+            "  round {round:>2}: raw {:>10.0}, adapter {:>10.0}, service {:>10.0} msg/s",
             raw.rate(messages),
+            adapter.rate(messages),
             framework.rate(messages)
         );
         raws.push(raw.rate(messages));
+        adapters.push(adapter.rate(messages));
         frameworks.push(framework.rate(messages));
-        waits = (waits.0 + raw.throttled, waits.1 + framework.throttled);
+        waits = (
+            waits.0 + raw.throttled,
+            waits.1 + adapter.throttled,
+            waits.2 + framework.throttled,
+        );
     }
 
     let raw = Stats::of(raws);
+    let adapter = Stats::of(adapters);
     let framework = Stats::of(frameworks);
-    let difference = (raw.median - framework.median).abs();
-    // What the transport makes the consumer wait for, against what a message costs. The faster
+    let (adapter_overhead_percent, adapter_verdict) = against(raw, adapter);
+    let (overhead_percent, verdict) = against(raw, framework);
+    // What the transport makes the consumer wait for, against what a message costs. The fastest
     // half sets the comparison: a ceiling the raw client already sits on is the transport's, and
-    // the framework above it cannot be what the row is about.
+    // nothing layered above it can be what the row is about.
     let waiting = scenario.round_trips_per_delivery() * round_trip.as_secs_f64();
     let per_message = 1.0 / raw.median;
-    println!("  publisher waits: raw {}, framework {}", waits.0, waits.1);
+    println!(
+        "  publisher waits: raw {}, adapter {}, service {}",
+        waits.0, waits.1, waits.2
+    );
     Measured {
         scenario,
         messages,
-        pairs,
+        rounds,
         raw,
+        adapter,
         framework,
-        overhead_percent: (raw.median - framework.median) / raw.median * 100.0,
-        verdict: if difference < raw.spread().max(framework.spread()) {
-            "indistinguishable"
-        } else {
-            "measured"
-        },
+        adapter_overhead_percent,
+        adapter_verdict,
+        overhead_percent,
+        verdict,
         broker_bound: waiting >= BROKER_BOUND_SHARE * per_message,
     }
 }
@@ -736,11 +931,15 @@ fn document(measured: &[Measured], round_trip: Duration) -> String {
                 "      \"name\": \"{name}\",\n",
                 "      \"unit\": \"msg/s\",\n",
                 "      \"messages\": {messages},\n",
-                "      \"pairs\": {pairs},\n",
+                "      \"pairs\": {rounds},\n",
                 "      \"raw\": {{ \"median\": {raw_median:.0}, \"min\": {raw_min:.0},",
                 " \"max\": {raw_max:.0} }},\n",
+                "      \"adapter\": {{ \"median\": {ad_median:.0}, \"min\": {ad_min:.0},",
+                " \"max\": {ad_max:.0} }},\n",
                 "      \"framework\": {{ \"median\": {fw_median:.0}, \"min\": {fw_min:.0},",
                 " \"max\": {fw_max:.0} }},\n",
+                "      \"adapter_overhead_percent\": {adapter_overhead:.1},\n",
+                "      \"adapter_verdict\": \"{adapter_verdict}\",\n",
                 "      \"overhead_percent\": {overhead:.1},\n",
                 "      \"verdict\": \"{verdict}\",\n",
                 "      \"broker_bound\": {broker_bound}\n",
@@ -748,13 +947,18 @@ fn document(measured: &[Measured], round_trip: Duration) -> String {
             ),
             name = row.scenario.name(),
             messages = row.messages,
-            pairs = row.pairs,
+            rounds = row.rounds,
             raw_median = row.raw.median,
             raw_min = row.raw.min,
             raw_max = row.raw.max,
+            ad_median = row.adapter.median,
+            ad_min = row.adapter.min,
+            ad_max = row.adapter.max,
             fw_median = row.framework.median,
             fw_min = row.framework.min,
             fw_max = row.framework.max,
+            adapter_overhead = row.adapter_overhead_percent,
+            adapter_verdict = row.adapter_verdict,
             overhead = row.overhead_percent,
             verdict = row.verdict,
             broker_bound = row.broker_bound,
@@ -790,7 +994,7 @@ fn number(name: &str, fallback: usize) -> usize {
 fn main() {
     let url = env::var("NATS_TEST_URL")
         .expect("NATS_TEST_URL names the server to measure against; `just bench` sets it");
-    let pairs = number("RUSTSTREAM_BENCH_PAIRS", PAIRS);
+    let rounds = number("RUSTSTREAM_BENCH_PAIRS", PAIRS);
     let seconds = number("RUSTSTREAM_BENCH_SECONDS", SECONDS as usize) as f64;
     let out = env::var("RUSTSTREAM_BENCH_OUT").unwrap_or_else(|_| "bench-paired.json".to_owned());
 
@@ -804,23 +1008,26 @@ fn main() {
     );
     let measured: Vec<Measured> = [Scenario::Core, Scenario::JetStream]
         .into_iter()
-        .map(|scenario| runtime.block_on(measure(scenario, &url, pairs, seconds, round_trip)))
+        .map(|scenario| runtime.block_on(measure(scenario, &url, rounds, seconds, round_trip)))
         .collect();
 
     println!();
     for row in &measured {
         println!(
-            "{}: raw {:.0} msg/s, framework {:.0} msg/s, overhead {:.1}% ({}{})",
+            "{}: raw {:.0}, adapter {:.0}, service {:.0} msg/s{}",
             row.scenario.name(),
             row.raw.median,
+            row.adapter.median,
             row.framework.median,
-            row.overhead_percent,
-            row.verdict,
             if row.broker_bound {
-                ", broker-bound"
+                " (broker-bound)"
             } else {
                 ""
             }
+        );
+        println!(
+            "    adapter over raw {:.1}% ({}), service over raw {:.1}% ({})",
+            row.adapter_overhead_percent, row.adapter_verdict, row.overhead_percent, row.verdict
         );
     }
 

@@ -39,14 +39,16 @@
 //! handler itself cannot observe. One acknowledgement out of millions is far below the
 //! run-to-run spread.
 //!
-//! A publisher that never has to wait for the consumer means the consumer was never the limit, and
-//! the row is reported as broker-bound: what it measures then is the machine's loopback and the
-//! server, not this crate.
+//! A publisher that never has to wait for its consumer means that consumer was never the limit.
+//! When that holds for both halves the row is reported as broker-bound: what it measures then is
+//! the machine's loopback and the server, not this crate.
 
 use std::convert::Infallible;
 use std::env;
 use std::fmt::Write as _;
 use std::hint::black_box;
+use std::iter::repeat_n;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -104,8 +106,11 @@ const CHECK_EVERY: usize = 512;
 /// How long a run may go without a delivery before it is called stuck.
 const STALL: Duration = Duration::from_secs(30);
 
-/// The body size both halves publish and decode.
+/// The body size both halves publish and decode, to the byte: the scenario is published under
+/// this number, so the bytes on the wire have to be it.
 const BODY_BYTES: usize = 512;
+/// How wide one padding value is before the next field starts.
+const PAD_WIDTH: usize = 16;
 /// The values every body carries. Fixed, so every delivery of a run costs the same.
 const ID: u64 = 1_000_000;
 const QUANTITY: u32 = 37;
@@ -120,16 +125,40 @@ struct Order {
     quantity: u32,
 }
 
-/// A JSON body carrying the two fields, padded with fields [`Order`] ignores until it reaches
-/// roughly `size` bytes.
+/// A JSON body carrying the two fields, padded with fields [`Order`] ignores until it is exactly
+/// `size` bytes.
+///
+/// The padding is a run of equally wide fields and one last field cut to whatever is left, so a
+/// scenario published as a 512 byte body is one. Building it is startup work, and the assertion
+/// below holds the promise the published name makes.
 fn json_body(size: usize) -> Vec<u8> {
     let mut body = format!("{{\"id\":{ID},\"quantity\":{QUANTITY}");
     let mut field = 0u32;
-    while body.len() + 2 < size {
-        write!(body, ",\"f{field}\":\"{field:016}\"").expect("writing to a String");
+    loop {
+        let key = format!(",\"f{field}\":\"\"");
+        // One byte stays reserved for the closing brace.
+        let Some(room) = size.checked_sub(body.len() + key.len() + 1) else {
+            break;
+        };
+        // A full-width field only when what it leaves behind can still hold the next one, whose
+        // key is at most one digit longer. Otherwise this is the last field and it takes the
+        // rest, because a remainder too small to start a field would come out as a short body.
+        let width = if room > PAD_WIDTH + key.len() {
+            PAD_WIDTH
+        } else {
+            room
+        };
+        body.push_str(&key[..key.len() - 1]);
+        body.extend(repeat_n('x', width));
+        body.push('"');
         field += 1;
     }
     body.push('}');
+    assert_eq!(
+        body.len(),
+        size,
+        "a body has to be the size the scenario publishes"
+    );
     body.into_bytes()
 }
 
@@ -507,7 +536,7 @@ enum Scenario {
 impl Scenario {
     fn name(self) -> &'static str {
         match self {
-            Self::Core => "core NATS, 512 B JSON",
+            Self::Core => "Core NATS, 512 B JSON",
             Self::JetStream => "JetStream pull consumer, 512 B JSON, ack each",
         }
     }
@@ -596,7 +625,9 @@ async fn measure(scenario: Scenario, url: &str, pairs: usize, seconds: f64) -> M
         );
         raws.push(raw.rate(messages));
         frameworks.push(framework.rate(messages));
-        throttled += raw.throttled;
+        // Both halves: a publisher that waited for either consumer means that consumer was the
+        // limit, and a row where the framework was the slower one is not a row the broker paced.
+        throttled += raw.throttled + framework.throttled;
     }
 
     let raw = Stats::of(raws);
@@ -614,7 +645,7 @@ async fn measure(scenario: Scenario, url: &str, pairs: usize, seconds: f64) -> M
         } else {
             "measured"
         },
-        // The publisher never waited for the consumer, so the consumer was never the limit.
+        // Neither publisher ever waited for its consumer, so neither consumer was the limit.
         broker_bound: throttled == 0,
     }
 }
@@ -668,11 +699,16 @@ fn runtime() -> Runtime {
         .expect("the tokio runtime builds")
 }
 
+/// A positive count from the environment, or the default.
+///
+/// The parse target rejects zero, so a pairs count of zero is refused here rather than after the
+/// probe run, where it would panic in the statistics with every kept pair discarded.
 fn number(name: &str, fallback: usize) -> usize {
     env::var(name).ok().map_or(fallback, |value| {
         value
-            .parse()
+            .parse::<NonZeroUsize>()
             .unwrap_or_else(|_| panic!("{name} must be a positive number"))
+            .get()
     })
 }
 

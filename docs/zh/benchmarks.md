@@ -11,20 +11,18 @@
 
 ## 数字 { #the-numbers }
 
-十一组交错配对的中位数，括号里是观察到的离散范围。越大越好。
+交错配对的中位数，括号里是观察到的离散范围。越大越好。
 
-| 场景 | 裸客户端 | RustStream | 开销 |
-| --- | --- | --- | --- |
-| Core NATS，512 B JSON | 1,635,001 条/秒 (1,552,427-1,647,750) | 1,501,334 条/秒 (1,490,862-1,529,421) | 8.2% |
-| JetStream 拉取消费者，512 B JSON，逐条 ack | 234,287 条/秒 (232,869-236,999) | 236,224 条/秒 (234,639-237,928) | 无法区分 |
+<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载公布的结果...", "scenario": "场景", "raw": "裸客户端", "framework": "RustStream", "overhead": "开销", "indistinguishable": "无法区分", "brokerBound": "受 Broker 限制", "machine": "机器", "os": "操作系统", "broker": "Broker", "build": "构建", "versions": "版本", "measured": "测量于", "unavailable": "读不到结果。它们公布在 {url}。", "unknownSchema": "公布的结果声明的 schema 是 {schema}，这一页不渲染它。"}'></div>
 
-Core NATS 这一行是框架自身的开销，不含别的：那里的一次投递就是一次 subject 匹配加一个消息体，
-服务器不做任何确认。裸投递在这台机器上是 612 纳秒，经过 RustStream 的投递是 666 纳秒。订阅的流、
-解码和分发给一条消息加上了大约 55 纳秒。
+表格由浏览器从上一次运行写下的文档读出，所以这一页上没有任何会过期的副本。
 
-JetStream 这一行标为无法区分：两半之间的差值小于各自多次运行之间的离散范围。那里的每次投递都要
-把一次确认送回服务器，而它有 Core 投递七倍的开销，这样大小的差值就淹没在里面。低于运行噪声的
-数字读起来像是从未测到过的精度，所以不公布。
+Core NATS 这一行只有框架自身：那里的一次投递就是一次 subject 匹配加一个消息体，服务器不做任何
+确认。RustStream 在它之上加的是订阅的流、解码和分发。
+
+标为「无法区分」的一行，是两半之间的差值小于各自多次运行之间离散范围的那一行。凡是传输本身比
+分发贵得多的地方，这就是诚实的结果：JetStream 的每次投递都要把一次确认送回服务器，这样大小的
+差值就淹没在一次确认里面。低于运行噪声的数字读起来像是从未测到过的精度，所以不公布。
 
 同一次运行的机器可读形式在
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-nats/latest/benchmarks/results.json)，
@@ -32,14 +30,7 @@ JetStream 这一行标为无法区分：两半之间的差值小于各自多次�
 
 ## 机器 { #the-machine }
 
-| | |
-| --- | --- |
-| CPU | AMD Ryzen 9 7900X，12 个物理核心，24 个逻辑核心 |
-| 内存 | 62.4 GiB |
-| 操作系统 | Linux 7.2.6 |
-| Broker | Docker 里的 `nats:2-alpine`，在 localhost 上 |
-| Rust | 1.98.1，bench 配置，不带 `RUSTFLAGS` |
-| 版本 | `ruststream-nats` 0.7.0，配 `ruststream` 0.7.0-rc.7 |
+<div id="benchmark-environment"></div>
 
 构建标志和数字一起公布，因为它们会改变这些数字。用 `-C target-cpu=native` 构建出的二进制给出的
 结果，换一台机器就复现不了，所以这条 recipe 在构建前先把这个变量清空。
@@ -51,7 +42,8 @@ JetStream 这一行标为无法区分：两半之间的差值小于各自多次�
 比较：不同的传输在每条消息上做的事并不一样。
 
 一次运行的测量窗口从第一次投递开始，到最后一个处理器返回为止，两半都是这样。框架在处理器结束之后
-才确认投递，而这个时刻处理器自己看不到，所以一百五十万次里的这一次确认，在两边都落在数字之外。
+才确认投递，而这个时刻处理器自己看不到，所以一次运行携带的数百万次确认里的这一次，在两边都落在
+数字之外。
 
 JetStream 的数字取自一个内存存储、work-queue 保留策略的流。这样服务器底下的磁盘就不会进入一次
 关于分发的测量。放在文件存储上的流回答的是另一个问题，而且回答的是服务器，不是这个 crate。

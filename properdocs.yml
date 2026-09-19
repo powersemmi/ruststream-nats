@@ -114,6 +114,11 @@ plugins:
             RustStream docs: RustStream 文档
             API reference: API 参考
 
+# The benchmarks page builds its tables in the browser from the document `just bench` publishes,
+# so a re-measurement rewrites that document and no page. The script is a no-op everywhere else.
+extra_javascript:
+  - assets/benchmarks.js
+
 extra:
   version:
     provider: mike

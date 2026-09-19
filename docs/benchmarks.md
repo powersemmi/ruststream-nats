@@ -13,23 +13,21 @@ this page publishes what it produced here.
 
 ## The numbers
 
-Medians over eleven interleaved pairs, with the observed spread in parentheses. Higher is better.
+Medians over interleaved pairs, with the observed spread in parentheses. Higher is better.
 
-| Scenario | Raw client | RustStream | Overhead |
-| --- | --- | --- | --- |
-| Core NATS, 512 B JSON | 1,635,001 msg/s (1,552,427-1,647,750) | 1,501,334 msg/s (1,490,862-1,529,421) | 8.2% |
-| JetStream pull consumer, 512 B JSON, ack each | 234,287 msg/s (232,869-236,999) | 236,224 msg/s (234,639-237,928) | indistinguishable |
+<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "framework": "RustStream", "overhead": "Overhead", "indistinguishable": "indistinguishable", "brokerBound": "broker-bound", "machine": "Machine", "os": "OS", "broker": "Broker", "build": "Build", "versions": "Versions", "measured": "Measured", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
 
-The Core NATS row is the framework's own cost and nothing else: a delivery there is a subject match
-and a body, and the server settles nothing. A raw delivery costs 612 nanoseconds on this machine
-and a delivery through RustStream costs 666, so the subscription stream, the decode and the
-dispatch add about 55 nanoseconds to a message.
+The table is read in your browser from the document the last run wrote, so nothing on this page is
+a copy that could have gone stale.
 
-The JetStream row reports `indistinguishable` because the difference between the two halves is
-smaller than the spread between runs of either. Every delivery there carries an acknowledgement
-back to the server, and at seven times the cost of a Core delivery it hides a difference this size.
-A figure below the run-to-run noise would read as precision that was never measured, so none is
-published.
+Core NATS is the framework alone: a delivery there is a subject match and a body, and the server
+settles nothing. What RustStream adds to it is the subscription stream, the decode and the dispatch.
+
+A row reported as `indistinguishable` is one whose two halves differ by less than the spread between
+runs of either. That is the honest outcome wherever the transport costs far more than the dispatch:
+every JetStream delivery carries an acknowledgement back to the server, and a difference this small
+disappears inside one. A figure below the run-to-run noise would read as precision that was never
+measured, so none is published.
 
 The machine-readable form of the same run, which the framework's site reads to build its
 cross-broker table, is at
@@ -37,14 +35,7 @@ cross-broker table, is at
 
 ## The machine
 
-| | |
-| --- | --- |
-| CPU | AMD Ryzen 9 7900X, 12 physical cores, 24 logical |
-| Memory | 62.4 GiB |
-| OS | Linux 7.2.6 |
-| Broker | `nats:2-alpine` in Docker on localhost |
-| Rust | 1.98.1, bench profile, no `RUSTFLAGS` |
-| Versions | `ruststream-nats` 0.7.0 on `ruststream` 0.7.0-rc.7 |
+<div id="benchmark-environment"></div>
 
 The build flags are published with the numbers because they change them: a binary built with
 `-C target-cpu=native` produces a figure no other machine can reproduce, so the recipe clears the
@@ -58,8 +49,8 @@ published for another broker: the transports do different work per message.
 
 The window a run measures opens at the first delivery and closes when the last handler returns,
 on both halves alike. The framework acknowledges a delivery after the handler is done, which is a
-point the handler itself cannot observe, so one acknowledgement out of a million and a half sits
-outside the number on both sides.
+point the handler itself cannot observe, so one acknowledgement out of the millions a run carries
+sits outside the number on both sides.
 
 The JetStream figure is taken on a memory-backed stream with work-queue retention. That keeps the
 disk under the server out of a measurement that is about dispatch; a stream on a file store answers

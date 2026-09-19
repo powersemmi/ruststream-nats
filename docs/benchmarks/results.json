@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "crate": "ruststream-nats",
+  "crate_version": "0.7.0",
+  "core_version": "0.7.0-rc.7",
+  "measured_at": "2026-09-20",
+  "environment": {
+    "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
+    "architecture": "x86_64",
+    "cpu_frequency": "427-5912 MHz",
+    "cores": "12 physical, 24 logical",
+    "memory": "62.4 GiB",
+    "memory_speed": "unknown",
+    "os": "Linux 7.2.6-x64v3-xanmod1-1",
+    "broker": "nats:2-alpine in Docker on localhost",
+    "rustc": "1.98.1",
+    "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
+    "features": "ruststream-nats default (none), ruststream macros,json",
+    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)"
+  },
+  "scenarios": [
+    {
+      "name": "core NATS, 512 B JSON",
+      "unit": "msg/s",
+      "messages": 10681231,
+      "pairs": 11,
+      "raw": {
+        "median": 1635001,
+        "min": 1552427,
+        "max": 1647750
+      },
+      "framework": {
+        "median": 1501334,
+        "min": 1490862,
+        "max": 1529421
+      },
+      "overhead_percent": 8.2,
+      "verdict": "measured",
+      "broker_bound": false
+    },
+    {
+      "name": "JetStream pull consumer, 512 B JSON, ack each",
+      "unit": "msg/s",
+      "messages": 1479142,
+      "pairs": 11,
+      "raw": {
+        "median": 234287,
+        "min": 232869,
+        "max": 236999
+      },
+      "framework": {
+        "median": 236224,
+        "min": 234639,
+        "max": 237928
+      },
+      "overhead_percent": -0.8,
+      "verdict": "indistinguishable",
+      "broker_bound": false
+    }
+  ]
+}

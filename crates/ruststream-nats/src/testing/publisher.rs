@@ -192,11 +192,10 @@ impl Publisher for NatsTestPublisher {
         if let Err(err) = validate_publish_subject(msg.name()) {
             return ready(Err(err));
         }
-        let subject = msg.name().to_owned();
-        let headers = msg.headers().clone();
+        let (subject, payload, headers) = msg.into_parts();
         self.state.router.publish(
-            subject,
-            msg.into_payload().freeze(),
+            subject.to_owned(),
+            payload.freeze(),
             headers,
             self.state.coordinator().as_ref(),
         );
@@ -217,10 +216,9 @@ impl RequestReply for NatsTestPublisher {
         // The inbox belongs to this requester alone, so it joins no competing set.
         let (id, requeue, mut rx) = self.state.router.subscribe(pattern, None);
 
-        let mut headers = msg.headers().clone();
+        let (subject, payload, mut headers) = msg.into_parts();
         headers.insert("reply-to", Bytes::from(inbox.clone()));
-        let subject = msg.name();
-        let outgoing = OutgoingMessage::produced(subject, msg.into_payload()).with_headers(headers);
+        let outgoing = OutgoingMessage::produced(subject, payload).with_headers(headers);
 
         if let Err(err) = self.publish(outgoing, None).await {
             self.state.router.unsubscribe(id);
@@ -307,13 +305,12 @@ impl Publisher for JetStreamTestPublisher {
         // The client's own half of a JetStream publish is writing these protocol headers, and
         // that is exactly what is reproduced here. The server's half, checking them against
         // stream state, is what no in-process transport can stand in for.
-        let mut headers = msg.headers().clone();
+        let (subject, payload, mut headers) = msg.into_parts();
         self.policy.write_headers(&mut headers);
         if let Some(options) = options {
             options.write_headers(&mut headers);
         }
-        let subject = msg.name();
-        let stamped = OutgoingMessage::produced(subject, msg.into_payload()).with_headers(headers);
+        let stamped = OutgoingMessage::produced(subject, payload).with_headers(headers);
         self.inner.publish(stamped, None).await
     }
 }

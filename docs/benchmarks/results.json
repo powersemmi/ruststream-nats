@@ -13,6 +13,7 @@
     "memory_speed": "unknown",
     "os": "Linux 7.2.6-x64v3-xanmod1-1",
     "broker": "nats:2-alpine in Docker on localhost",
+    "round_trip": "57.0 us (median of 30000 request/reply round trips on one connection)",
     "rustc": "1.98.1",
     "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
     "features": "ruststream-nats default (none), ruststream macros,json",
@@ -20,40 +21,54 @@
   },
   "scenarios": [
     {
-      "name": "core NATS, 512 B JSON",
+      "name": "Core NATS, 512 B JSON",
       "unit": "msg/s",
-      "messages": 10681231,
+      "messages": 10174630,
       "pairs": 11,
       "raw": {
-        "median": 1635001,
-        "min": 1552427,
-        "max": 1647750
+        "median": 1578346,
+        "min": 1494315,
+        "max": 1601339
+      },
+      "adapter": {
+        "median": 1518620,
+        "min": 1304554,
+        "max": 1590518
       },
       "framework": {
-        "median": 1501334,
-        "min": 1490862,
-        "max": 1529421
+        "median": 1454686,
+        "min": 1257893,
+        "max": 1470410
       },
-      "overhead_percent": 8.2,
-      "verdict": "measured",
+      "adapter_overhead_percent": 3.8,
+      "adapter_verdict": "indistinguishable",
+      "overhead_percent": 7.8,
+      "verdict": "indistinguishable",
       "broker_bound": false
     },
     {
       "name": "JetStream pull consumer, 512 B JSON, ack each",
       "unit": "msg/s",
-      "messages": 1479142,
+      "messages": 1679142,
       "pairs": 11,
       "raw": {
-        "median": 234287,
-        "min": 232869,
-        "max": 236999
+        "median": 245716,
+        "min": 230967,
+        "max": 256761
+      },
+      "adapter": {
+        "median": 234182,
+        "min": 199284,
+        "max": 252315
       },
       "framework": {
-        "median": 236224,
-        "min": 234639,
-        "max": 237928
+        "median": 237005,
+        "min": 218932,
+        "max": 255334
       },
-      "overhead_percent": -0.8,
+      "adapter_overhead_percent": 4.7,
+      "adapter_verdict": "indistinguishable",
+      "overhead_percent": 3.5,
       "verdict": "indistinguishable",
       "broker_bound": false
     }

@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "crate": "ruststream-nats",
+  "crate_version": "0.7.0",
+  "core_version": "0.7.0-rc.7",
+  "measured_at": "2026-09-20",
+  "environment": {
+    "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
+    "architecture": "x86_64",
+    "cpu_frequency": "427-5912 MHz",
+    "cores": "12 physical, 24 logical",
+    "memory": "62.4 GiB",
+    "memory_speed": "unknown",
+    "os": "Linux 7.2.6-x64v3-xanmod1-1",
+    "broker": "nats:2-alpine in Docker on localhost",
+    "round_trip": "57.0 us (median of 30000 request/reply round trips on one connection)",
+    "rustc": "1.98.1",
+    "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
+    "features": "ruststream-nats default (none), ruststream macros,json",
+    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)"
+  },
+  "scenarios": [
+    {
+      "name": "Core NATS, 512 B JSON",
+      "unit": "msg/s",
+      "messages": 10174630,
+      "pairs": 11,
+      "raw": {
+        "median": 1578346,
+        "min": 1494315,
+        "max": 1601339
+      },
+      "adapter": {
+        "median": 1518620,
+        "min": 1304554,
+        "max": 1590518
+      },
+      "framework": {
+        "median": 1454686,
+        "min": 1257893,
+        "max": 1470410
+      },
+      "adapter_overhead_percent": 3.8,
+      "adapter_verdict": "indistinguishable",
+      "overhead_percent": 7.8,
+      "verdict": "indistinguishable",
+      "broker_bound": false
+    },
+    {
+      "name": "JetStream pull consumer, 512 B JSON, ack each",
+      "unit": "msg/s",
+      "messages": 1679142,
+      "pairs": 11,
+      "raw": {
+        "median": 245716,
+        "min": 230967,
+        "max": 256761
+      },
+      "adapter": {
+        "median": 234182,
+        "min": 199284,
+        "max": 252315
+      },
+      "framework": {
+        "median": 237005,
+        "min": 218932,
+        "max": 255334
+      },
+      "adapter_overhead_percent": 4.7,
+      "adapter_verdict": "indistinguishable",
+      "overhead_percent": 3.5,
+      "verdict": "indistinguishable",
+      "broker_bound": false
+    }
+  ]
+}

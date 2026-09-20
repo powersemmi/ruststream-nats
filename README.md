@@ -225,7 +225,7 @@ ruststream-nats/
 └── Cargo.toml                  workspace
 ```
 
-The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.7.0-rc.7, <0.8.0"`). The lower bound names the release candidate because cargo leaves pre-releases out of a range that does not mention one; the range takes the final 0.7.0 as soon as it is published.
+The crate resolves `ruststream` against the crates.io version range (`ruststream = ">=0.7.0-rc.8, <0.8.0"`). The lower bound names the release candidate because cargo leaves pre-releases out of a range that does not mention one; the range takes the final 0.7.0 as soon as it is published.
 
 ## Documentation
 

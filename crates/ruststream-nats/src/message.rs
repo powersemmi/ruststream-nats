@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_nats::jetstream::AckKind;
-use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned};
+use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned, Str};
 
 use crate::convert::headers_from_nats;
 
@@ -54,7 +54,7 @@ impl CoreMessage {
         // authoritative: it overrides a literal `reply-to` header if both are present.
         // JetStream deliveries are excluded on purpose - there `reply` is the ack inbox.
         if let Some(reply) = inner.reply.as_ref() {
-            headers.insert(REPLY_TO_HEADER, reply.as_str().to_owned());
+            headers.insert(Str::from_static(REPLY_TO_HEADER), reply.as_str().to_owned());
         }
         Self { inner, headers }
     }
@@ -97,6 +97,8 @@ impl JetStreamMessage {
 /// NATS carries the inbox in a protocol field rather than a header, so a handler that answers a
 /// request reads it here. The generated `AsyncAPI` document names the same header as the runtime
 /// expression a client reads a reply address from.
+///
+/// The name is static, so surfacing it on a delivery costs no allocation.
 pub(crate) const REPLY_TO_HEADER: &str = "reply-to";
 
 /// The same header, as the runtime expression an `AsyncAPI` document reports a reply address at.

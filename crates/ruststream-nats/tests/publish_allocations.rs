@@ -26,9 +26,10 @@ const BODY: &[u8] = b"{\"id\":1}";
 
 /// Blocks this crate may allocate per publish over what the raw client allocates.
 ///
-/// Two: the destination, copied out of the message that only lends its name, and the copy the
-/// client's own `String` conversion makes of it. The payload travels as the buffer the framework
-/// wrote, an empty header map has no wire form, and the connection is read rather than cloned.
+/// Two, and both are the destination: the outgoing message only lends its name, so the name is
+/// copied once here, and the client copies it again turning it into a subject of its own. Nothing
+/// else costs a block - the payload travels as the buffer the framework wrote, an empty header
+/// map has no wire form, and the connection is read rather than cloned.
 const ALLOWED_PER_PUBLISH: usize = 2;
 
 /// Counts this thread's allocations. A thread-local count rather than a global one: the client

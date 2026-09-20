@@ -12,13 +12,13 @@ use std::sync::Arc;
 
 use async_nats::jetstream::Context;
 use async_nats::jetstream::message::PublishMessage;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 #[cfg(feature = "testing")]
 use ruststream::HeaderMap;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::{PublishBuilder, PublishSink};
-use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
+use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, Take};
 #[cfg(feature = "asyncapi")]
 use serde::Serialize;
 
@@ -355,7 +355,7 @@ impl JetStreamPublisher {
     /// acknowledgement, leaving the publish in an indeterminate state.
     pub async fn publish_ack(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         options: Option<&JetStreamOptions>,
     ) -> Result<PublishAck, NatsError> {
         // Checked before the send: the context caches a client clone that would happily queue a
@@ -383,6 +383,10 @@ impl JetStreamPublisher {
 }
 
 impl Publisher for JetStreamPublisher {
+    /// The same answer the Core publisher gives: a `JetStream` publish carries a `Bytes` the
+    /// client keeps.
+    type Payload = Take;
+
     type Error = NatsError;
     type Options = JetStreamOptions;
 
@@ -391,7 +395,7 @@ impl Publisher for JetStreamPublisher {
     /// Not cancel-safe; see [`publish_ack`](Self::publish_ack).
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         self.publish_ack(msg, options).await.map(|_ack| ())

@@ -14,10 +14,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
-use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply};
+use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, Take};
 
 #[cfg(feature = "asyncapi")]
 use crate::broker::ConnectedNatsBroker;
@@ -172,6 +172,10 @@ impl NatsTestPublisher {
 }
 
 impl Publisher for NatsTestPublisher {
+    /// The same answer the production Core publisher gives: the router keeps the payload as
+    /// `Bytes`.
+    type Payload = Take;
+
     type Error = NatsError;
 
     /// The same answer the production Core publisher gives: Core NATS has no per-message setting.
@@ -179,7 +183,7 @@ impl Publisher for NatsTestPublisher {
 
     fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
         if let Err(err) = self.state.ensure_live(msg.name()) {
@@ -203,7 +207,7 @@ impl RequestReply for NatsTestPublisher {
 
     async fn request(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         timeout_dur: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         let inbox = new_inbox_subject();
@@ -284,6 +288,9 @@ impl std::fmt::Debug for JetStreamTestPublisher {
 }
 
 impl Publisher for JetStreamTestPublisher {
+    /// The same answer the production `JetStream` publisher gives.
+    type Payload = Take;
+
     type Error = NatsError;
 
     /// The same answer the production `JetStream` publisher gives, so a body bounded on
@@ -292,7 +299,7 @@ impl Publisher for JetStreamTestPublisher {
 
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         // The client's own half of a JetStream publish is writing these protocol headers, and

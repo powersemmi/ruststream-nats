@@ -1,7 +1,7 @@
 //! [`RequestReply`] capability for the NATS publisher.
 
 use async_nats::Request;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use ruststream::{OutgoingMessage, RequestReply};
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ impl RequestReply for NatsPublisher {
 
     async fn request(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         let client = self.client_for(msg.name())?;

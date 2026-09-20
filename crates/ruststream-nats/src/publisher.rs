@@ -5,8 +5,8 @@ use std::future::{Future, ready};
 use std::sync::Arc;
 
 use async_nats::Client;
-use bytes::Bytes;
-use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
+use bytes::{Bytes, BytesMut};
+use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, Take};
 
 use crate::broker::{ConnectedNatsBroker, NatsConnection};
 #[cfg(feature = "asyncapi")]
@@ -112,6 +112,10 @@ impl NatsPublisher {
 }
 
 impl Publisher for NatsPublisher {
+    /// The client keeps the payload: `async-nats` publishes a `Bytes`, so the buffer the
+    /// framework wrote is handed over instead of being read and copied.
+    type Payload = Take;
+
     type Error = NatsError;
 
     /// Core NATS says nothing about a message beyond its subject, its payload and its headers, so
@@ -126,7 +130,7 @@ impl Publisher for NatsPublisher {
     /// unsent, with no way to tell which.
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let client = self.client_for(msg.name())?;

@@ -3,8 +3,8 @@
 use std::str::{FromStr, from_utf8};
 
 use async_nats::{HeaderName, HeaderValue};
-use bytes::Bytes;
-use ruststream::HeaderMap;
+use bytes::{Bytes, BytesMut};
+use ruststream::{HeaderMap, OutgoingMessage};
 
 use crate::error::NatsError;
 
@@ -19,6 +19,23 @@ pub(crate) fn headers_from_nats(map: Option<&async_nats::HeaderMap>) -> HeaderMa
         }
     }
     headers
+}
+
+/// An outgoing message as `async-nats` takes it: the subject, the payload the client keeps and
+/// the headers it writes.
+///
+/// Every publish surface of this crate goes through here, so what the client is handed is
+/// decided in one place.
+///
+/// # Errors
+///
+/// Returns [`NatsError::Publish`] when a header has no NATS form; see [`headers_to_nats`].
+pub(crate) fn nats_parts(
+    msg: OutgoingMessage<'_, BytesMut>,
+) -> Result<(String, Bytes, Option<async_nats::HeaderMap>), NatsError> {
+    let (subject, payload, headers) = msg.into_parts();
+    let headers = headers_to_nats(&headers)?;
+    Ok((subject.to_owned(), payload.freeze(), headers))
 }
 
 /// The framework's headers as NATS headers, or an error naming the one the protocol cannot carry.
@@ -78,6 +95,26 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(name.to_owned(), value.into());
         headers
+    }
+
+    // A copy and a hand-over carry the same bytes, so only the address tells them apart.
+    #[test]
+    fn the_client_is_handed_the_buffer_the_framework_wrote() {
+        let payload = BytesMut::from(&br#"{"id":1}"#[..]);
+        let written_at = payload.as_ptr();
+
+        let (subject, body, headers) =
+            nats_parts(OutgoingMessage::produced("orders.created", payload))
+                .expect("a message with no headers has a NATS form");
+
+        assert_eq!(subject, "orders.created");
+        assert!(headers.is_none());
+        assert_eq!(
+            body.as_ptr(),
+            written_at,
+            "async-nats keeps the payload, so the buffer travels into the client rather than \
+             being copied into a second one",
+        );
     }
 
     #[test]

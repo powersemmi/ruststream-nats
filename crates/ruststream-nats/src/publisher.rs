@@ -5,13 +5,13 @@ use std::future::{Future, ready};
 use std::sync::Arc;
 
 use async_nats::Client;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, Take};
 
 use crate::broker::{ConnectedNatsBroker, NatsConnection};
 #[cfg(feature = "asyncapi")]
 use crate::message::REPLY_ADDRESS_LOCATION;
-use crate::{convert::headers_to_nats, error::NatsError};
+use crate::{convert::nats_parts, error::NatsError};
 
 use self::sealed::Sealed;
 
@@ -134,9 +134,8 @@ impl Publisher for NatsPublisher {
         _options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let client = self.client_for(msg.name())?;
-        let subject = msg.name().to_owned();
-        let payload = Bytes::copy_from_slice(msg.payload());
-        let result = match headers_to_nats(msg.headers())? {
+        let (subject, payload, headers) = nats_parts(msg)?;
+        let result = match headers {
             Some(headers) => client.publish_with_headers(subject, headers, payload).await,
             None => client.publish(subject, payload).await,
         };

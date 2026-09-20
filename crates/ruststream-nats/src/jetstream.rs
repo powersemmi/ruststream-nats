@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use async_nats::jetstream::Context;
 use async_nats::jetstream::message::PublishMessage;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 #[cfg(feature = "testing")]
 use ruststream::HeaderMap;
 #[cfg(feature = "asyncapi")]
@@ -26,7 +26,7 @@ use crate::broker::{ConnectedNatsBroker, NatsConnection};
 use crate::publisher::NatsPublishPolicy;
 #[cfg(feature = "asyncapi")]
 use crate::subject::JETSTREAM_EXTENSION;
-use crate::{convert::headers_to_nats, error::NatsError};
+use crate::{convert::nats_parts, error::NatsError};
 
 /// The acknowledgement a `JetStream` stream returns for an accepted publish.
 pub use async_nats::jetstream::publish::PublishAck;
@@ -362,10 +362,11 @@ impl JetStreamPublisher {
         // publish into a drained connection.
         self.connection.live_client(msg.name())?;
 
-        let mut message = PublishMessage::build().payload(Bytes::copy_from_slice(msg.payload()));
+        let (subject, payload, headers) = nats_parts(msg)?;
+        let mut message = PublishMessage::build().payload(payload);
         // The application's headers go on first: `headers` replaces the map, and the protocol
         // fields below are written into it.
-        if let Some(headers) = headers_to_nats(msg.headers())? {
+        if let Some(headers) = headers {
             message = message.headers(headers);
         }
         message = self.policy.apply(message);
@@ -374,7 +375,7 @@ impl JetStreamPublisher {
         }
 
         self.context
-            .send_publish(msg.name().to_owned(), message)
+            .send_publish(subject, message)
             .await
             .map_err(|err| NatsError::Publish(Box::new(err)))?
             .await

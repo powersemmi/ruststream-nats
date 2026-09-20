@@ -192,10 +192,12 @@ impl Publisher for NatsTestPublisher {
         if let Err(err) = validate_publish_subject(msg.name()) {
             return ready(Err(err));
         }
+        let subject = msg.name().to_owned();
+        let headers = msg.headers().clone();
         self.state.router.publish(
-            msg.name().to_owned(),
-            Bytes::copy_from_slice(msg.payload()),
-            msg.headers().clone(),
+            subject,
+            msg.into_payload().freeze(),
+            headers,
             self.state.coordinator().as_ref(),
         );
         ready(Ok(()))
@@ -217,8 +219,8 @@ impl RequestReply for NatsTestPublisher {
 
         let mut headers = msg.headers().clone();
         headers.insert("reply-to", Bytes::from(inbox.clone()));
-        let outgoing =
-            OutgoingMessage::new(msg.name(), msg.payload()).with_headers(headers.clone());
+        let subject = msg.name();
+        let outgoing = OutgoingMessage::produced(subject, msg.into_payload()).with_headers(headers);
 
         if let Err(err) = self.publish(outgoing, None).await {
             self.state.router.unsubscribe(id);
@@ -310,7 +312,8 @@ impl Publisher for JetStreamTestPublisher {
         if let Some(options) = options {
             options.write_headers(&mut headers);
         }
-        let stamped = OutgoingMessage::new(msg.name(), msg.payload()).with_headers(headers);
+        let subject = msg.name();
+        let stamped = OutgoingMessage::produced(subject, msg.into_payload()).with_headers(headers);
         self.inner.publish(stamped, None).await
     }
 }

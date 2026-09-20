@@ -106,8 +106,11 @@ impl NatsPublisher {
         Self { connection }
     }
 
-    pub(crate) fn client_for(&self, subject: &str) -> Result<Client, NatsError> {
-        self.connection.live_client(subject).cloned()
+    /// The live client, lent rather than handed over: `Client::publish` takes `&self` and the
+    /// borrow lives as long as the publish future, so a publish has no reason to own a copy of
+    /// the connection.
+    pub(crate) fn client_for(&self, subject: &str) -> Result<&Client, NatsError> {
+        self.connection.live_client(subject)
     }
 }
 

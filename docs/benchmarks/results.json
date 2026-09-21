@@ -1,9 +1,9 @@
 {
-  "schema": 1,
+  "schema": 3,
   "crate": "ruststream-nats",
   "crate_version": "0.7.0",
   "core_version": "0.7.0-rc.9",
-  "measured_at": "2026-09-20",
+  "measured_at": "2026-09-21",
   "environment": {
     "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
     "architecture": "x86_64",
@@ -13,7 +13,7 @@
     "memory_speed": "unknown",
     "os": "Linux 7.2.6-x64v3-xanmod1-1",
     "broker": "nats:2-alpine in Docker on localhost",
-    "round_trip": "58.2 us (median of 30000 request/reply round trips on one connection)",
+    "round_trip": "59.2 us (median of 30000 request/reply round trips on one connection)",
     "rustc": "1.98.1",
     "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
     "features": "ruststream-nats default (none), ruststream macros,json",
@@ -23,52 +23,46 @@
     {
       "name": "Core NATS, 512 B JSON",
       "unit": "msg/s",
-      "messages": 9820634,
-      "pairs": 11,
+      "messages": 10491087,
+      "pairs": 3,
       "raw": {
-        "median": 1583292,
-        "min": 813666,
-        "max": 1662248
+        "best": 1643259,
+        "worst": 1595344
       },
       "adapter": {
-        "median": 1500117,
-        "min": 1360684,
-        "max": 1630519
+        "best": 1574608,
+        "worst": 1519103
       },
       "framework": {
-        "median": 1400270,
-        "min": 1289958,
-        "max": 1567870
+        "best": 1570491,
+        "worst": 1543000
       },
-      "adapter_overhead_percent": 5.3,
-      "adapter_verdict": "indistinguishable",
-      "overhead_percent": 11.6,
-      "verdict": "indistinguishable",
+      "adapter_overhead_percent": 4.2,
+      "adapter_verdict": "measured",
+      "overhead_percent": 4.4,
+      "verdict": "measured",
       "broker_bound": false
     },
     {
       "name": "JetStream pull consumer, 512 B JSON, ack each",
       "unit": "msg/s",
-      "messages": 1571543,
-      "pairs": 11,
+      "messages": 1604057,
+      "pairs": 3,
       "raw": {
-        "median": 223882,
-        "min": 217907,
-        "max": 246519
+        "best": 253018,
+        "worst": 247327
       },
       "adapter": {
-        "median": 221944,
-        "min": 210159,
-        "max": 234198
+        "best": 250243,
+        "worst": 243060
       },
       "framework": {
-        "median": 221150,
-        "min": 204690,
-        "max": 240409
+        "best": 252651,
+        "worst": 244400
       },
-      "adapter_overhead_percent": 0.9,
+      "adapter_overhead_percent": 1.1,
       "adapter_verdict": "indistinguishable",
-      "overhead_percent": 1.2,
+      "overhead_percent": 0.1,
       "verdict": "indistinguishable",
       "broker_bound": false
     }

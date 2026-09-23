@@ -3,7 +3,7 @@
   "crate": "ruststream-nats",
   "crate_version": "0.7.0",
   "core_version": "0.7.0-rc.9",
-  "measured_at": "2026-09-21",
+  "measured_at": "2026-09-23",
   "environment": {
     "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
     "architecture": "x86_64",
@@ -13,58 +13,106 @@
     "memory_speed": "unknown",
     "os": "Linux 7.2.6-x64v3-xanmod1-1",
     "broker": "nats:2-alpine in Docker on localhost",
-    "round_trip": "59.2 us (median of 30000 request/reply round trips on one connection)",
+    "round_trip": "61.0 us (median of 30000 request/reply round trips on one connection)",
     "rustc": "1.98.1",
     "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
     "features": "ruststream-nats default (none), ruststream macros,json",
-    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)"
+    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)",
+    "valgrind": "3.25.1"
   },
   "scenarios": [
     {
       "name": "Core NATS, 512 B JSON",
       "unit": "msg/s",
-      "messages": 10491087,
+      "messages": 10726274,
       "pairs": 3,
       "raw": {
-        "best": 1643259,
-        "worst": 1595344
+        "best": 1572989,
+        "median": 1529161,
+        "worst": 1235864
       },
       "adapter": {
-        "best": 1574608,
-        "worst": 1519103
+        "best": 1517318,
+        "median": 1388559,
+        "worst": 903061
       },
       "framework": {
-        "best": 1570491,
-        "worst": 1543000
+        "best": 1538720,
+        "median": 1452357,
+        "worst": 1115541
       },
-      "adapter_overhead_percent": 4.2,
-      "adapter_verdict": "measured",
-      "overhead_percent": 4.4,
-      "verdict": "measured",
+      "adapter_overhead_percent": 3.5,
+      "adapter_verdict": "indistinguishable",
+      "overhead_percent": 2.2,
+      "verdict": "indistinguishable",
       "broker_bound": false
     },
     {
       "name": "JetStream pull consumer, 512 B JSON, ack each",
       "unit": "msg/s",
-      "messages": 1604057,
+      "messages": 1502854,
       "pairs": 3,
       "raw": {
-        "best": 253018,
-        "worst": 247327
+        "best": 238615,
+        "median": 235035,
+        "worst": 227820
       },
       "adapter": {
-        "best": 250243,
-        "worst": 243060
+        "best": 234350,
+        "median": 233144,
+        "worst": 232960
       },
       "framework": {
-        "best": 252651,
-        "worst": 244400
+        "best": 238750,
+        "median": 235916,
+        "worst": 233188
       },
-      "adapter_overhead_percent": 1.1,
+      "adapter_overhead_percent": 1.8,
       "adapter_verdict": "indistinguishable",
-      "overhead_percent": 0.1,
+      "overhead_percent": -0.1,
       "verdict": "indistinguishable",
       "broker_bound": false
+    }
+  ],
+  "code": [
+    {
+      "name": "consume on a Core subject, JSON decode into a small struct",
+      "messages": 1000,
+      "framework": {
+        "instructions": 2205.3,
+        "allocations": 0.0
+      },
+      "cold": {
+        "instructions": 20615,
+        "allocations": 27
+      },
+      "gated": true
+    },
+    {
+      "name": "reply through NatsPublish, on the in-process publisher",
+      "messages": 1000,
+      "framework": {
+        "instructions": 5809.4,
+        "allocations": 7.0
+      },
+      "cold": {
+        "instructions": 25867,
+        "allocations": 37
+      },
+      "gated": true
+    },
+    {
+      "name": "consume in batches of 64, assembled by the in-process subscriber",
+      "messages": 1000,
+      "framework": {
+        "instructions": 2666.7,
+        "allocations": 2.1
+      },
+      "cold": {
+        "instructions": 25017,
+        "allocations": 35
+      },
+      "gated": true
     }
   ]
 }

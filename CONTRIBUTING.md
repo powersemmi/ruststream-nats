@@ -61,9 +61,9 @@ branch by CI's lint job whenever they or the crate change. `cargo generate --pat
 
 `just bench` measures what this crate and the framework's runtime cost over the raw `async-nats`
 client on the same stand and rewrites `docs/benchmarks/results.json`. It takes minutes and wants
-the machine to itself. `just bench-code` counts what a message costs on the in-process transport,
-in instructions and allocations, and rewrites the code table of the same document; it takes
-seconds.
+the machine to itself. `just bench-code` counts what a message costs on the service's thread (the
+framework, this crate and the client) in instructions and allocations, on the same stand, and
+rewrites the code table of the same document; it takes under a minute.
 
 ## Testing against a local core
 

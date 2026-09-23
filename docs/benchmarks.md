@@ -53,29 +53,27 @@ cross-broker table, is at
 <div id="benchmark-code"></div>
 
 The second table is counted rather than timed: instructions under callgrind and allocations under
-DHAT. Each scenario is the service a user writes, started on `NatsTestBroker`, the crate's
-in-process transport, so no socket and no server are in the number. The transport resolves the
-crate's subscription descriptors and pairs its publish policies, the ones a service ships with.
-Its message, its subscriber, its subject matching and its publisher are its own, and its router
-keeps a log of every publish for the tests to read back. The conversions between `async-nats` and
-the framework are measured in the table above, together with the client.
+DHAT. Each scenario is the service a user writes, built on `NatsBroker` against the stand the table
+above uses and started on a single-threaded runtime. Every scenario reads a JetStream pull consumer.
+A producer on another thread fills the stream before the drain begins, and waits until the stream
+has acknowledged every message; Core NATS keeps nothing for a consumer that is not reading, and a
+stream does.
+
+What is counted is everything the service's thread runs: the framework, this crate, and the work of
+the `async-nats` client on that thread, which is where its connection task runs. The producer's
+thread is not counted, and neither is the kernel's side of a system call.
 
 Instructions and allocations are per message in the steady state: the slope between a run of 1000
-deliveries and a run of 2000. The last column is what starting the service and taking the first
-delivery cost once. The numbers are absolute, the framework's own cost included; the core publishes
-that cost alone on its [benchmarks page](https://powersemmi.github.io/ruststream/latest/benchmarks/).
-The reply row counts the in-process publisher, which checks the subject, matches it against every
-subscription and copies the message into its log.
+deliveries and a run of 2000. The last column is what starting the service cost once: the connect,
+the stream lookup, the consumer's creation and the first delivery. The numbers are absolute, the
+framework's own cost included; the core publishes that cost alone on its
+[benchmarks page](https://powersemmi.github.io/ruststream/latest/benchmarks/).
 
-A count repeats within a tenth of a percent between runs of one binary, so a change to this path
-shows in it however small. `just bench-code` fails on an allocation above the floor a scenario
-declares, and with `--baseline=main` on more than two percent more instructions, and a pull
-request that changes the cost cites its numbers. The in-process transport is compiled with the
-`testing` feature, which brings the framework's test hooks with it. On a single delivery they stay
-empty outside a test. On a batch the framework copies each payload twice for the harness's records
-whether a test runs or not, so two of the batch row's allocations per message are ones a production
-service does not make. The rest come once per batch, most of them from the in-process subscriber
-growing the batch it assembles.
+A count depends a little on how the socket hands the client its bytes. Over seven runs the
+instructions per message moved by less than half a percent, and the allocations by one block in a
+run of 2000 deliveries. `just bench-code` fails on an allocation above the highest total a scenario
+was seen at, and with `--baseline=main` on more than two percent more instructions; a pull request
+that changes the cost cites its numbers.
 
 ## The machine
 
@@ -118,6 +116,6 @@ measured run lasts at least five seconds on whatever machine it is taken on.
 just bench-code
 ```
 
-The recipe counts the code table under valgrind and rewrites the `code` section of the same
-document. It takes seconds and needs no stand, only valgrind and the benchmark runner:
-`cargo install --locked gungraun-runner --version =0.19.4`.
+The recipe starts the same stand, counts the code table under valgrind, stops the stand and rewrites
+the `code` section of the same document. It takes under a minute and needs valgrind and the
+benchmark runner: `cargo install --locked gungraun-runner --version =0.19.4`.

@@ -20,9 +20,9 @@ differs between brokers is a fact about how the transport and the runtime meet.
 
 ## The numbers
 
-The best of three interleaved rounds, with the slowest round in parentheses. Higher is better.
+The best of three interleaved rounds, with the median round in parentheses. Higher is better.
 
-<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "adapter": "ruststream-nats", "framework": "RustStream service", "adapterOverhead": "Adapter over raw", "overhead": "Service over raw", "indistinguishable": "indistinguishable", "brokerBound": "broker-bound", "machine": "Machine", "os": "OS", "broker": "Broker", "build": "Build", "versions": "Versions", "measured": "Measured", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
+<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "adapter": "ruststream-nats", "framework": "RustStream service", "adapterOverhead": "Adapter over raw", "overhead": "Service over raw", "indistinguishable": "indistinguishable", "brokerBound": "broker-bound", "machine": "Machine", "os": "OS", "broker": "Broker", "build": "Build", "versions": "Versions", "measured": "Measured", "instructions": "Instructions per message", "allocations": "Allocations per message", "cold": "Cold start (instructions / allocations)", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
 
 The table is read in your browser from the document the last run wrote, so nothing on this page is
 a copy that could have gone stale.
@@ -47,6 +47,34 @@ trip those are counted against is the probe below the machine, so the sum can be
 The machine-readable form of the same run, which the framework's site reads to build its
 cross-broker table, is at
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-nats/latest/benchmarks/results.json).
+
+## The crate's own code
+
+<div id="benchmark-code"></div>
+
+The second table is counted rather than timed: instructions under callgrind and allocations under
+DHAT. Each scenario is the service a user writes, started on `NatsTestBroker`, the crate's
+in-process transport, so no socket and no server are in the number. The transport resolves the
+crate's subscription descriptors and pairs its publish policies, the ones a service ships with.
+Its message, its subscriber, its subject matching and its publisher are its own, and its router
+keeps a log of every publish for the tests to read back. The conversions between `async-nats` and
+the framework are measured in the table above, together with the client.
+
+Instructions and allocations are per message in the steady state: the slope between a run of 1000
+deliveries and a run of 2000. The last column is what starting the service and taking the first
+delivery cost once. The numbers are absolute, the framework's own cost included; the core publishes
+that cost alone on its [benchmarks page](https://powersemmi.github.io/ruststream/latest/benchmarks/).
+The reply row counts the in-process publisher, which checks the subject, matches it against every
+subscription and copies the message into its log.
+
+A count repeats within a tenth of a percent between runs of one binary, so a change to this path
+shows in it however small. `just bench-code` fails on an allocation above the floor a scenario
+declares, and with `--baseline=main` on more than two percent more instructions, and a pull
+request that changes the cost cites its numbers. The in-process transport is compiled with the
+`testing` feature, which brings the framework's test hooks with it. Outside a test they stay
+empty, and a single delivery allocates nothing for them. A batch copies each payload twice for the
+harness record whether a test runs or not, and those copies are two of the batch row's allocations
+per message.
 
 ## The machine
 
@@ -84,3 +112,11 @@ The recipe starts the stand from `docker-compose.test.yml`, runs both scenarios,
 and rewrites `docs/benchmarks/results.json` with what it measured. It takes about ten minutes and
 wants the machine to itself. The message count is not fixed: a probe run sets it so that every
 measured run lasts at least five seconds on whatever machine it is taken on.
+
+```bash
+just bench-code
+```
+
+The recipe counts the code table under valgrind and rewrites the `code` section of the same
+document. It takes seconds and needs no stand, only valgrind and the benchmark runner:
+`cargo install --locked gungraun-runner --version =0.19.4`.

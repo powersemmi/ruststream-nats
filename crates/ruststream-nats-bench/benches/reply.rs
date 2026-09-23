@@ -44,9 +44,10 @@ fn app(messages: usize) -> Pending {
 
 // Eleven allocations per delivery and the same fraction as consuming, so the floor is stated over
 // a thousand deliveries. The client's channel blocks are reused or not depending on how far the
-// subscription lags the socket, which moved the total by one block between runs; the floor is the
-// highest total seen.
-#[library_benchmark(config = common::config_every(11_059, 1_000, 275))]
+// subscription lags the socket: the longest run was seen at 22,392 to 22,393 blocks over seven
+// runs. The limit is the highest plus a tenth of a percent, 22,416, and one more allocation per
+// delivery would add 2,000.
+#[library_benchmark(config = common::config_every(11_059, 1_000, 298))]
 #[bench::first(app(1))]
 #[bench::base(app(MESSAGES))]
 #[bench::twice(app(2 * MESSAGES))]

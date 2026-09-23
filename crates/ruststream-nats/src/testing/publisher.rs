@@ -14,10 +14,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
-use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply};
+use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, Take};
 
 #[cfg(feature = "asyncapi")]
 use crate::broker::ConnectedNatsBroker;
@@ -172,6 +172,10 @@ impl NatsTestPublisher {
 }
 
 impl Publisher for NatsTestPublisher {
+    /// The same answer the production Core publisher gives: the router keeps the payload as
+    /// `Bytes`.
+    type Payload = Take;
+
     type Error = NatsError;
 
     /// The same answer the production Core publisher gives: Core NATS has no per-message setting.
@@ -179,7 +183,7 @@ impl Publisher for NatsTestPublisher {
 
     fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
         if let Err(err) = self.state.ensure_live(msg.name()) {
@@ -188,10 +192,11 @@ impl Publisher for NatsTestPublisher {
         if let Err(err) = validate_publish_subject(msg.name()) {
             return ready(Err(err));
         }
+        let (subject, payload, headers) = msg.into_parts();
         self.state.router.publish(
-            msg.name().to_owned(),
-            Bytes::copy_from_slice(msg.payload()),
-            msg.headers().clone(),
+            subject.to_owned(),
+            payload.freeze(),
+            headers,
             self.state.coordinator().as_ref(),
         );
         ready(Ok(()))
@@ -203,7 +208,7 @@ impl RequestReply for NatsTestPublisher {
 
     async fn request(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         timeout_dur: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         let inbox = new_inbox_subject();
@@ -211,10 +216,9 @@ impl RequestReply for NatsTestPublisher {
         // The inbox belongs to this requester alone, so it joins no competing set.
         let (id, requeue, mut rx) = self.state.router.subscribe(pattern, None);
 
-        let mut headers = msg.headers().clone();
+        let (subject, payload, mut headers) = msg.into_parts();
         headers.insert("reply-to", Bytes::from(inbox.clone()));
-        let outgoing =
-            OutgoingMessage::new(msg.name(), msg.payload()).with_headers(headers.clone());
+        let outgoing = OutgoingMessage::produced(subject, payload).with_headers(headers);
 
         if let Err(err) = self.publish(outgoing, None).await {
             self.state.router.unsubscribe(id);
@@ -284,6 +288,9 @@ impl std::fmt::Debug for JetStreamTestPublisher {
 }
 
 impl Publisher for JetStreamTestPublisher {
+    /// The same answer the production `JetStream` publisher gives.
+    type Payload = Take;
+
     type Error = NatsError;
 
     /// The same answer the production `JetStream` publisher gives, so a body bounded on
@@ -292,18 +299,18 @@ impl Publisher for JetStreamTestPublisher {
 
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         // The client's own half of a JetStream publish is writing these protocol headers, and
         // that is exactly what is reproduced here. The server's half, checking them against
         // stream state, is what no in-process transport can stand in for.
-        let mut headers = msg.headers().clone();
+        let (subject, payload, mut headers) = msg.into_parts();
         self.policy.write_headers(&mut headers);
         if let Some(options) = options {
             options.write_headers(&mut headers);
         }
-        let stamped = OutgoingMessage::new(msg.name(), msg.payload()).with_headers(headers);
+        let stamped = OutgoingMessage::produced(subject, payload).with_headers(headers);
         self.inner.publish(stamped, None).await
     }
 }

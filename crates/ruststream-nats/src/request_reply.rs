@@ -1,12 +1,12 @@
 //! [`RequestReply`] capability for the NATS publisher.
 
 use async_nats::Request;
-use bytes::Bytes;
+use bytes::BytesMut;
 use ruststream::{OutgoingMessage, RequestReply};
 use std::time::Duration;
 
 use crate::{
-    convert::headers_to_nats,
+    convert::nats_parts,
     error::NatsError,
     message::{CoreMessage, NatsMessage},
     publisher::NatsPublisher,
@@ -17,13 +17,11 @@ impl RequestReply for NatsPublisher {
 
     async fn request(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         let client = self.client_for(msg.name())?;
-        let subject = msg.name().to_owned();
-        let payload = Bytes::copy_from_slice(msg.payload());
-        let headers_owned = headers_to_nats(msg.headers())?;
+        let (subject, payload, headers_owned) = nats_parts(msg)?;
 
         let fut = async {
             let request = match headers_owned {

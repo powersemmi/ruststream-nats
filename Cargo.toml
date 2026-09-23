@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ruststream-nats"]
+members = ["crates/ruststream-nats", "crates/ruststream-nats-bench"]
 # `templates/` holds cargo-generate scaffolds (rendered by `cargo generate`, not built here): their
 # sources carry `{{project-name}}` placeholders that are not valid Rust/TOML until rendered, so they
 # must stay out of the workspace. `exclude` alone is not enough: cargo's git-source package
@@ -20,9 +20,9 @@ authors = ["RustStream contributors"]
 ruststream-nats = { path = "crates/ruststream-nats" }
 
 # The lower bound names the release candidate on purpose: cargo keeps pre-releases out of a range
-# that does not mention one, so `>=0.7.0` would skip `0.7.0-rc.7`. The range admits the candidate
+# that does not mention one, so `>=0.7.0` would skip `0.7.0-rc.9`. The range admits the candidate
 # now and the final 0.7.0 the moment it lands, without a second edit here.
-ruststream = { version = ">=0.7.0-rc.7, <0.8.0", default-features = false }
+ruststream = { version = ">=0.7.0-rc.9, <0.8.0", default-features = false }
 
 async-nats = "0.50"
 bytes = "1"

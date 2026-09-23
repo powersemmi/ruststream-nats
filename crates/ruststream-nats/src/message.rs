@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_nats::jetstream::AckKind;
-use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned};
+use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned, Str};
 
 use crate::convert::headers_from_nats;
 
@@ -33,7 +33,10 @@ impl Debug for NatsMessage {
 /// Wrapper around an `async_nats::Message` from a core (non-JetStream) subscription.
 pub struct CoreMessage {
     inner: async_nats::Message,
-    headers: HeaderMap,
+    /// `None` where the delivery carried nothing to put in a map, so a subscription of headerless
+    /// deliveries builds none at all; [`headers`](IncomingMessage::headers) answers the crate's
+    /// one empty map instead.
+    headers: Option<HeaderMap>,
 }
 
 impl Debug for CoreMessage {
@@ -47,6 +50,12 @@ impl Debug for CoreMessage {
 
 impl CoreMessage {
     pub(crate) fn new(inner: async_nats::Message) -> Self {
+        if inner.headers.is_none() && inner.reply.is_none() {
+            return Self {
+                inner,
+                headers: None,
+            };
+        }
         let mut headers = headers_from_nats(inner.headers.as_ref());
         // NATS carries the request inbox in the wire-level `reply` field, not in a header.
         // Surface it as the well-known `reply-to` header so framework handlers can respond
@@ -54,16 +63,20 @@ impl CoreMessage {
         // authoritative: it overrides a literal `reply-to` header if both are present.
         // JetStream deliveries are excluded on purpose - there `reply` is the ack inbox.
         if let Some(reply) = inner.reply.as_ref() {
-            headers.insert(REPLY_TO_HEADER, reply.as_str().to_owned());
+            headers.insert(Str::from_static(REPLY_TO_HEADER), reply.as_str().to_owned());
         }
-        Self { inner, headers }
+        Self {
+            inner,
+            headers: Some(headers),
+        }
     }
 }
 
 /// Wrapper around an `async_nats::jetstream::Message` with ack semantics.
 pub struct JetStreamMessage {
     inner: async_nats::jetstream::Message,
-    headers: HeaderMap,
+    /// `None` where the delivery carried no headers; see [`CoreMessage::headers`].
+    headers: Option<HeaderMap>,
 }
 
 impl Debug for JetStreamMessage {
@@ -77,7 +90,11 @@ impl Debug for JetStreamMessage {
 
 impl JetStreamMessage {
     pub(crate) fn new(inner: async_nats::jetstream::Message) -> Self {
-        let headers = headers_from_nats(inner.message.headers.as_ref());
+        let headers = inner
+            .message
+            .headers
+            .as_ref()
+            .map(|wire| headers_from_nats(Some(wire)));
         Self { inner, headers }
     }
 
@@ -97,6 +114,8 @@ impl JetStreamMessage {
 /// NATS carries the inbox in a protocol field rather than a header, so a handler that answers a
 /// request reads it here. The generated `AsyncAPI` document names the same header as the runtime
 /// expression a client reads a reply address from.
+///
+/// The name is static, so surfacing it on a delivery costs no allocation.
 pub(crate) const REPLY_TO_HEADER: &str = "reply-to";
 
 /// The same header, as the runtime expression an `AsyncAPI` document reports a reply address at.
@@ -105,6 +124,10 @@ pub(crate) const REPLY_TO_HEADER: &str = "reply-to";
 #[cfg(feature = "asyncapi")]
 pub(crate) const REPLY_ADDRESS_LOCATION: &str = "$message.header#/reply-to";
 
+/// The map a delivery with no headers of its own answers with.
+///
+/// The signature `headers()` has to satisfy is `-> &HeaderMap`, and building an empty map per
+/// delivery to satisfy it is the whole cost this removes.
 fn empty_headers() -> &'static HeaderMap {
     static EMPTY: OnceLock<HeaderMap> = OnceLock::new();
     EMPTY.get_or_init(HeaderMap::new)
@@ -119,10 +142,11 @@ impl IncomingMessage for NatsMessage {
     }
 
     fn headers(&self) -> &HeaderMap {
-        match self {
-            Self::Core(m) => &m.headers,
-            Self::JetStream(m) => &m.headers,
-        }
+        let carried = match self {
+            Self::Core(m) => m.headers.as_ref(),
+            Self::JetStream(m) => m.headers.as_ref(),
+        };
+        carried.unwrap_or_else(|| empty_headers())
     }
 
     async fn ack(self) -> Result<(), AckError> {
@@ -225,11 +249,6 @@ where
     Box::<dyn std::error::Error + Send + Sync>::from(msg)
 }
 
-#[allow(dead_code)]
-fn _empty_headers_keepalive() -> &'static HeaderMap {
-    empty_headers()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +263,21 @@ mod tests {
             description: None,
             length: 1,
         })))
+    }
+
+    /// A delivery that carries nothing to put in a map answers with the one empty map the crate
+    /// keeps, so a subscription of headerless deliveries builds none at all. Two deliveries
+    /// answering the same address is what says so.
+    #[test]
+    fn a_headerless_delivery_answers_with_the_shared_empty_map() {
+        let first = core_message(None);
+        let second = core_message(None);
+
+        assert!(
+            std::ptr::eq(first.headers(), second.headers()),
+            "a delivery with neither wire headers nor a reply inbox has nothing to build a map \
+             from, so both answer the crate's own empty one",
+        );
     }
 
     #[test]

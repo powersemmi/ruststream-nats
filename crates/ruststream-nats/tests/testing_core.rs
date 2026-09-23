@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use ruststream::{
-    AckError, BatchSubscriber, Broker, ConnectedBroker, DescribeServer, HeaderMap, IncomingMessage,
-    OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, nonzero,
+    AckError, BatchSubscriber, Broker, BytesMut, ConnectedBroker, DescribeServer, HeaderMap,
+    IncomingMessage, OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, nonzero,
     testing::expect_published,
 };
 use ruststream_nats::{
@@ -482,6 +482,29 @@ async fn broker_observes_published_log() {
     assert_eq!(observed.len(), 2);
     assert_eq!(observed[0].payload(), b"first");
     assert_eq!(observed[1].payload(), b"second");
+    broker.shutdown().await.expect("shutdown");
+}
+
+/// The in-process transport answers the way `async-nats` answers: it keeps the payload, so the
+/// buffer the framework wrote reaches the router rather than a copy of it. Content equality
+/// cannot tell the two apart, so the assertion is on the address.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn published_payload_is_the_buffer_the_framework_wrote() {
+    let broker = connected().await;
+    let publisher = broker.publisher(NatsPublish);
+    let payload = BytesMut::from(&b"first"[..]);
+    let written_at = payload.as_ptr();
+    publisher
+        .publish(OutgoingMessage::produced("events", payload), None)
+        .await
+        .expect("publish");
+
+    let observed = expect_published(&broker, "events", 1, WAIT).await;
+    assert_eq!(
+        observed[0].payload().as_ptr(),
+        written_at,
+        "the transport keeps the payload, so it takes the buffer instead of copying it",
+    );
     broker.shutdown().await.expect("shutdown");
 }
 

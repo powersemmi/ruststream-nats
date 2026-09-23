@@ -1,0 +1,70 @@
+{
+  "schema": 3,
+  "crate": "ruststream-nats",
+  "crate_version": "0.7.0",
+  "core_version": "0.7.0-rc.9",
+  "measured_at": "2026-09-21",
+  "environment": {
+    "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
+    "architecture": "x86_64",
+    "cpu_frequency": "427-5912 MHz",
+    "cores": "12 physical, 24 logical",
+    "memory": "62.4 GiB",
+    "memory_speed": "unknown",
+    "os": "Linux 7.2.6-x64v3-xanmod1-1",
+    "broker": "nats:2-alpine in Docker on localhost",
+    "round_trip": "59.2 us (median of 30000 request/reply round trips on one connection)",
+    "rustc": "1.98.1",
+    "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
+    "features": "ruststream-nats default (none), ruststream macros,json",
+    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)"
+  },
+  "scenarios": [
+    {
+      "name": "Core NATS, 512 B JSON",
+      "unit": "msg/s",
+      "messages": 10491087,
+      "pairs": 3,
+      "raw": {
+        "best": 1643259,
+        "worst": 1595344
+      },
+      "adapter": {
+        "best": 1574608,
+        "worst": 1519103
+      },
+      "framework": {
+        "best": 1570491,
+        "worst": 1543000
+      },
+      "adapter_overhead_percent": 4.2,
+      "adapter_verdict": "measured",
+      "overhead_percent": 4.4,
+      "verdict": "measured",
+      "broker_bound": false
+    },
+    {
+      "name": "JetStream pull consumer, 512 B JSON, ack each",
+      "unit": "msg/s",
+      "messages": 1604057,
+      "pairs": 3,
+      "raw": {
+        "best": 253018,
+        "worst": 247327
+      },
+      "adapter": {
+        "best": 250243,
+        "worst": 243060
+      },
+      "framework": {
+        "best": 252651,
+        "worst": 244400
+      },
+      "adapter_overhead_percent": 1.1,
+      "adapter_verdict": "indistinguishable",
+      "overhead_percent": 0.1,
+      "verdict": "indistinguishable",
+      "broker_bound": false
+    }
+  ]
+}

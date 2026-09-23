@@ -5,13 +5,13 @@ use std::future::{Future, ready};
 use std::sync::Arc;
 
 use async_nats::Client;
-use bytes::Bytes;
-use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher};
+use bytes::BytesMut;
+use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, Take};
 
 use crate::broker::{ConnectedNatsBroker, NatsConnection};
 #[cfg(feature = "asyncapi")]
 use crate::message::REPLY_ADDRESS_LOCATION;
-use crate::{convert::headers_to_nats, error::NatsError};
+use crate::{convert::nats_parts, error::NatsError};
 
 use self::sealed::Sealed;
 
@@ -106,12 +106,19 @@ impl NatsPublisher {
         Self { connection }
     }
 
-    pub(crate) fn client_for(&self, subject: &str) -> Result<Client, NatsError> {
-        self.connection.live_client(subject).cloned()
+    /// The live client, lent rather than handed over: `Client::publish` takes `&self` and the
+    /// borrow lives as long as the publish future, so a publish has no reason to own a copy of
+    /// the connection.
+    pub(crate) fn client_for(&self, subject: &str) -> Result<&Client, NatsError> {
+        self.connection.live_client(subject)
     }
 }
 
 impl Publisher for NatsPublisher {
+    /// The client keeps the payload: `async-nats` publishes a `Bytes`, so the buffer the
+    /// framework wrote is handed over instead of being read and copied.
+    type Payload = Take;
+
     type Error = NatsError;
 
     /// Core NATS says nothing about a message beyond its subject, its payload and its headers, so
@@ -126,13 +133,12 @@ impl Publisher for NatsPublisher {
     /// unsent, with no way to tell which.
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let client = self.client_for(msg.name())?;
-        let subject = msg.name().to_owned();
-        let payload = Bytes::copy_from_slice(msg.payload());
-        let result = match headers_to_nats(msg.headers())? {
+        let (subject, payload, headers) = nats_parts(msg)?;
+        let result = match headers {
             Some(headers) => client.publish_with_headers(subject, headers, payload).await,
             None => client.publish(subject, payload).await,
         };

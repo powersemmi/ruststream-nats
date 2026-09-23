@@ -4,8 +4,8 @@
  *
  * The scenario table has three measured columns - the raw client, this crate's own consumer and
  * publisher, and the whole service - and the two differences that matter between them. The code
- * table is what a message costs on the crate's in-process transport in instructions and
- * allocations, with what starting the service cost once.
+ * table is what a message costs on the service's thread in instructions and allocations, with what
+ * starting the service cost once.
  *
  * The figures are fetched in the reader's browser rather than written into the page. A
  * re-measurement rewrites one JSON document, and a table copied into three translated pages

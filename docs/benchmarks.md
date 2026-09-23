@@ -71,8 +71,8 @@ The JetStream figure is taken on a memory-backed stream with work-queue retentio
 disk under the server out of a measurement that is about dispatch; a stream on a file store answers
 a different question, and answers it about the server rather than about this crate.
 
-The numbers are a snapshot of one machine on one day. They are re-measured on demand, never in CI:
-a shared runner's noise is larger than the difference this page is about.
+The numbers are a snapshot of one machine on one day. They are re-measured by hand, on a machine
+given to the run alone: the difference this page is about is smaller than the noise of a shared one.
 
 ## Running it yourself
 

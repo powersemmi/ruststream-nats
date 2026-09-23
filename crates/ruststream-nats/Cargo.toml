@@ -25,6 +25,8 @@ testing = ["ruststream/testing"]
 asyncapi = ["ruststream/asyncapi", "dep:serde"]
 
 [dev-dependencies]
+# The code-cost benchmarks (`benches/`): callgrind and DHAT through the runner the core pins.
+gungraun = "=0.19.4"
 # The conformance harness drives the testing-feature broker; macros + json power the runnable
 # nats_* examples (the docs site embeds their snippets), and serde decodes their message types.
 ruststream = { workspace = true, features = ["conformance", "testing", "macros", "json", "asyncapi"] }
@@ -54,6 +56,23 @@ name = "nats_request_reply"
 
 [[example]]
 name = "nats_retry"
+
+# The code-cost benchmarks: one scenario per binary, each a service on the in-process transport.
+# `just bench-code` runs them under valgrind; `benches/common` is the shared setup.
+[[bench]]
+name = "consume"
+harness = false
+required-features = ["testing"]
+
+[[bench]]
+name = "reply"
+harness = false
+required-features = ["testing"]
+
+[[bench]]
+name = "batch"
+harness = false
+required-features = ["testing"]
 
 [package.metadata.docs.rs]
 all-features = true

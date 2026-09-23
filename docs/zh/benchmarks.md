@@ -91,7 +91,7 @@ just bench
 ```
 
 这条 recipe 从 `docker-compose.test.yml` 起停测试台，跑完两个场景，然后把测到的结果写回
-`docs/benchmarks/results.json`。它要花十分钟左右，并且需要整台机器。消息条数不是固定的：一次试探
+`docs/benchmarks/results.json`。它要花几分钟，并且需要整台机器。消息条数不是固定的：一次试探
 运行会把它定下来，使得每一次被测量的运行在所在机器上都不短于五秒。
 
 ```bash

@@ -110,7 +110,7 @@ just bench
 ```
 
 The recipe starts the stand from `docker-compose.test.yml`, runs both scenarios, stops the stand
-and rewrites `docs/benchmarks/results.json` with what it measured. It takes about ten minutes and
+and rewrites `docs/benchmarks/results.json` with what it measured. It takes a few minutes and
 wants the machine to itself. The message count is not fixed: a probe run sets it so that every
 measured run lasts at least five seconds on whatever machine it is taken on.
 

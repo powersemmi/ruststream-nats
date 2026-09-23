@@ -1,0 +1,34 @@
+# ruststream-nats
+
+> `ruststream-nats` is the NATS broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them. Over the `async-nats` client a handler binds to a Core NATS subject or to a JetStream pull consumer, a service sends requests and awaits the reply NATS matches to them, and a JetStream publish states what it expects of the stream.
+
+A subscription is one of three descriptors: `CoreSubject` (one subject), `CoreWildcard` (a pattern with `*` and `>`) and `JetStreamSubject` (a stream through a pull consumer); a bare `#[subscriber("orders.created")]` is a `CoreSubject`. A routes file imports `ruststream_nats::prelude::*`, which offers `NatsPublish` as `Publish` (plain Core NATS) and `JetStreamPublish` (awaits the stream's acknowledgement). Two `cargo generate` templates, `templates/nats` and `templates/nats-js`, scaffold a service.
+
+This site holds the entry pages. The crate's guide is its overview on docs.rs, and the framework itself is documented on the RustStream site.
+
+## Site
+
+- [Home](https://powersemmi.github.io/ruststream-nats/latest/): what the crate offers, the dependency lines and a first service
+- [Benchmarks](https://powersemmi.github.io/ruststream-nats/latest/benchmarks/): what this crate and the framework's runtime cost over the raw `async-nats` client, and how to re-measure it with `just bench`
+
+## Guide
+
+- [Overview](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html): the transport and a service
+- [The subscription descriptors](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#the-subscription-descriptors): the three descriptors and their settings
+- [Batches](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#batches): batch handlers on Core NATS and JetStream
+- [Acknowledgement and delayed retry](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#acknowledgement-and-delayed-retry): settlement on a JetStream consumer and on a Core subject
+- [Native JetStream metadata](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#native-jetstream-metadata): the typed per-delivery context of a JetStream message
+- [Publishing](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#publishing): the two publish policies and replies
+- [What one JetStream message states about itself](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#what-one-jetstream-message-states-about-itself): the deduplication id and the stream expectations of one publish
+- [Request-reply](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#request-reply): requests on the plain publisher
+- [The prelude](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#the-prelude): what a routes file and a handler body import
+- [The AsyncAPI document](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#the-asyncapi-document): what the `asyncapi` feature reports
+- [Testing](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#testing): the in-process transport behind the `testing` feature, driven by `TestApp`
+- [Operations](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#operations): connect options, a shared client, addresses, shutdown and the known gaps
+- [Cargo features](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#cargo-features): `testing` and `asyncapi`
+
+## Optional
+
+- [API reference](https://docs.rs/ruststream-nats): the full rustdoc of the crate
+- [RustStream llms.txt](https://powersemmi.github.io/ruststream/llms.txt): the index of the framework's own documentation
+- [Source](https://github.com/powersemmi/ruststream-nats): the crate's repository and its templates

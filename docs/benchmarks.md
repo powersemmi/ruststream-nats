@@ -71,9 +71,10 @@ framework's own cost included; the core publishes that cost alone on its
 
 A count depends a little on how the socket hands the client its bytes. Over seven runs the
 instructions per message moved by less than half a percent, and the allocations by one block in a
-run of 2000 deliveries. `just bench-code` fails on an allocation above the highest total a scenario
-was seen at, and with `--baseline=main` on more than two percent more instructions; a pull request
-that changes the cost cites its numbers.
+run of 2000 deliveries. `just bench-code` fails when a scenario allocates more than the highest
+total it was seen at plus a tenth of a percent, and when it runs more than two percent more
+instructions than the previous run kept in `target/` (or the baseline `--baseline=main` names); a
+pull request that changes the cost cites its numbers.
 
 ## The machine
 

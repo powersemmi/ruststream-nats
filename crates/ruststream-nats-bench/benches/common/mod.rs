@@ -103,8 +103,10 @@ pub const MESSAGES: usize = 1_000;
 ///
 /// `steady` is what one delivery allocates in the steady state and `cold` what starting the
 /// service and taking the first delivery allocate once; together they are the hard limit the
-/// longest run of the scenario (twice [`MESSAGES`] deliveries) is held to, so the run fails when
-/// the path allocates more than the most it was seen to. The instruction limit is relative:
+/// longest run of the scenario (twice [`MESSAGES`] deliveries) is held to. A scenario sets them to
+/// the highest total its runs were seen at plus a tenth of a percent, at least one block: a count
+/// that moves by a block with how the socket hands over its bytes never fails an unchanged tree,
+/// and one allocation more per delivery always does. The instruction limit is relative:
 /// `just bench-code --save-baseline=main` records a baseline and `just bench-code --baseline=main`
 /// compares against it.
 pub fn config(steady: u64, cold: u64) -> LibraryBenchmarkConfig {
@@ -119,6 +121,8 @@ pub fn config_every(steady: u64, per: u64, cold: u64) -> LibraryBenchmarkConfig 
         // The runner clears the environment of the measured process, and the service needs to know
         // where the server is.
         .pass_through_env(URL)
+        // Two percent over the previous run: on the stand the longest runs moved by at most 0.2
+        // percent from one run to the next.
         .tool(callgrind().soft_limits([(EventKind::Ir, 2f64)]))
         .tool(dhat().hard_limits([(DhatMetric::TotalBlocks, blocks(steady, per, cold))]));
     config

@@ -35,8 +35,10 @@ fn app(messages: usize) -> Pending {
 
 // Seven allocations per delivery and a fraction: the client's pull request every hundred messages,
 // and the channel blocks between its connection task and the subscription, which come every so
-// many deliveries. The floor is therefore stated over a thousand of them.
-#[library_benchmark(config = common::config_every(7_059, 1_000, 273))]
+// many deliveries. The floor is therefore stated over a thousand of them. The longest run was seen
+// at 14,391 blocks in each of seven runs; the limit is that plus a tenth of a percent, 14,406, and
+// one more allocation per delivery would add 2,000.
+#[library_benchmark(config = common::config_every(7_059, 1_000, 288))]
 #[bench::first(app(1))]
 #[bench::base(app(MESSAGES))]
 #[bench::twice(app(2 * MESSAGES))]

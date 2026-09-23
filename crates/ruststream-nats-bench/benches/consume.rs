@@ -8,9 +8,9 @@
     clippy::must_use_candidate,
     clippy::needless_pass_by_value
 )]
-//! Consuming a small JSON body on a Core subject: the subscription yields the transport's
-//! message, the dispatcher decodes it into a struct, the handler reads a field, and the runtime
-//! settles it.
+//! Consuming a small JSON body from a `JetStream` pull consumer: the subscription yields the
+//! crate's message, the dispatcher decodes it into a struct, the handler reads a field, and the
+//! runtime acks it.
 
 mod common;
 
@@ -18,9 +18,9 @@ use std::hint::black_box;
 
 use common::{Latch, MESSAGES, Order, Pending};
 use gungraun::{library_benchmark, library_benchmark_group, main};
-use ruststream::prelude::*;
+use ruststream_nats::prelude::*;
 
-#[subscriber("orders.created")]
+#[subscriber(JetStreamSubject::new("orders.created", "ORDERS"))]
 async fn consume(order: &Order, ctx: &mut Context<'_, (), Latch>) -> HandlerOutcome {
     black_box((order.id, order.quantity));
     ctx.state().arrived();
@@ -33,7 +33,10 @@ fn app(messages: usize) -> Pending {
     })
 }
 
-#[library_benchmark(config = common::config(0, 28))]
+// Seven allocations per delivery and a fraction: the client's pull request every hundred messages,
+// and the channel blocks between its connection task and the subscription, which come every so
+// many deliveries. The floor is therefore stated over a thousand of them.
+#[library_benchmark(config = common::config_every(7_059, 1_000, 273))]
 #[bench::first(app(1))]
 #[bench::base(app(MESSAGES))]
 #[bench::twice(app(2 * MESSAGES))]

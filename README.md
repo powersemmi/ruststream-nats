@@ -208,7 +208,7 @@ tb.broker::<NatsTestBroker>()
     .assert_called_once();
 ```
 
-Delayed redelivery is in reach too, on the path its own model takes: a JetStream delivery holds the message back itself and counts its own deliveries, a Core one comes back as a published copy, exactly as each does on a server. The timer belongs to the harness either way, so `tb.advance(delay)` fires the retry under a paused clock instead of waiting, and a declared cap sends the spent delivery to the dead-letter subject where a test can read it.
+Delayed redelivery is in reach too, on the path its own model takes: a JetStream delivery holds the message back itself and counts its own deliveries, a Core one comes back as a published copy, exactly as each does on a server. Settlement follows the model the same way: a Core delivery reports `AckError::Unsupported` from `ack` and `nack` and is never requeued, exactly as on a server. The timer belongs to the harness either way, so `tb.advance(delay)` fires the retry under a paused clock instead of waiting, and a declared cap sends the spent delivery to the dead-letter subject where a test can read it.
 
 JetStream-specific behaviour (durable consumers, the wire's own acknowledgement, redelivery timing) is covered by the env-gated integration suite instead: `just test-brokers` spins up `nats:2-alpine` with JetStream and runs the live tests plus the framework conformance suite against it.
 

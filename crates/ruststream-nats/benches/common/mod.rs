@@ -20,10 +20,11 @@
 //! server, is the other table on the benchmarks page.
 //!
 //! The in-process transport is behind the `testing` feature, which compiles the framework's test
-//! hooks in as well. Outside a `TestApp` run they are installed empty: the single-message path
-//! pays the checks that find them empty and allocates nothing for them. The batch path copies
-//! every payload of a batch for the harness record whether a harness runs or not, twice per
-//! delivery, and those two allocations are in the batch scenario's number.
+//! hooks in as well. Outside a `TestApp` run they are installed empty on a single delivery. On a
+//! batch the framework copies each payload twice for the harness's records whether a test runs or
+//! not, so two allocations per message of the batch scenario are ones a production service does
+//! not make. The rest come once per batch, most of them from the in-process subscriber growing the
+//! batch it assembles.
 //!
 //! # Steady state and cold start
 //!

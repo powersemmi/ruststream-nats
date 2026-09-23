@@ -76,41 +76,41 @@
   ],
   "code": [
     {
-      "name": "consume on a Core subject, JSON decode into a small struct",
+      "name": "JetStream pull consumer, JSON decode into a small struct, ack each",
       "messages": 1000,
       "framework": {
-        "instructions": 2205.3,
-        "allocations": 0.0
+        "instructions": 9897.5,
+        "allocations": 7.1
       },
       "cold": {
-        "instructions": 20615,
-        "allocations": 27
+        "instructions": 350808,
+        "allocations": 274
       },
       "gated": true
     },
     {
-      "name": "reply through NatsPublish, on the in-process publisher",
+      "name": "JetStream pull consumer, reply published by NatsPublisher on Core NATS",
       "messages": 1000,
       "framework": {
-        "instructions": 5809.4,
-        "allocations": 7.0
+        "instructions": 14050.2,
+        "allocations": 11.1
       },
       "cold": {
-        "instructions": 25867,
-        "allocations": 37
+        "instructions": 358317,
+        "allocations": 279
       },
       "gated": true
     },
     {
-      "name": "consume in batches of 64, assembled by the in-process subscriber",
+      "name": "JetStream fetches of 64, ack each",
       "messages": 1000,
       "framework": {
-        "instructions": 2666.7,
-        "allocations": 2.1
+        "instructions": 9457.3,
+        "allocations": 6.4
       },
       "cold": {
-        "instructions": 25017,
-        "allocations": 35
+        "instructions": 375191,
+        "allocations": 301
       },
       "gated": true
     }

@@ -12,7 +12,7 @@ https://powersemmi.github.io/ruststream/latest/benchmarks/#publishing-results: s
 loop of the comparison as its best, median and worst round, and the `code` section.
 
 `--code` reads the other run instead: the summary `cargo bench -- --output-format=json` writes for
-the code-cost benches under `crates/ruststream-nats/benches`, one JSON object per benchmark. It
+the code-cost benches under `crates/ruststream-nats-bench/benches`, one JSON object per benchmark. It
 writes the `code` section, one entry per scenario with instructions and allocations per message
 plus what starting the service cost once, by the core's method: every scenario is measured over
 one delivery, over MESSAGES and over twice MESSAGES, the slope between the last two is the steady
@@ -141,9 +141,9 @@ CODE_COLD_FLOOR = 1_000
 # The code table, in reading order: the published name, the benchmark as `file/function`, and
 # whether the benchmark's hard limit holds its allocation floor.
 CODE_SCENARIOS = [
-    ("consume on a Core subject, JSON decode into a small struct", "consume/service", True),
-    ("reply through NatsPublish, on the in-process publisher", "reply/service", True),
-    ("consume in batches of 64, assembled by the in-process subscriber", "batch/service", True),
+    ("JetStream pull consumer, JSON decode into a small struct, ack each", "consume/service", True),
+    ("JetStream pull consumer, reply published by NatsPublisher on Core NATS", "reply/service", True),
+    ("JetStream fetches of 64, ack each", "batch/service", True),
 ]
 
 

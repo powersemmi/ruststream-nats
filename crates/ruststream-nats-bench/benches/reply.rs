@@ -8,9 +8,9 @@
     clippy::must_use_candidate,
     clippy::needless_pass_by_value
 )]
-//! Replying: the handler returns a value, the runtime encodes it and hands it to the publisher
-//! the broker's default policy, `NatsPublish`, pairs into on the in-process transport, which
-//! routes it to the subject the reply type declares.
+//! Replying: the handler consumes from a `JetStream` pull consumer and returns a value, the runtime
+//! encodes it and hands it to `NatsPublisher`, the live form of the broker's default policy, which
+//! publishes it on the Core subject the reply type declares.
 
 mod common;
 
@@ -18,7 +18,7 @@ use std::hint::black_box;
 
 use common::{Latch, MESSAGES, Order, Pending};
 use gungraun::{library_benchmark, library_benchmark_group, main};
-use ruststream::prelude::*;
+use ruststream_nats::prelude::*;
 use serde::Serialize;
 
 /// A reply with a destination of its own: the mount site adds nothing to it.
@@ -28,7 +28,7 @@ struct Confirmation {
     id: u64,
 }
 
-#[subscriber("orders.created", publish)]
+#[subscriber(JetStreamSubject::new("orders.created", "ORDERS"), publish)]
 async fn confirm(order: &Order, ctx: &mut Context<'_, (), Latch>) -> Confirmation {
     ctx.state().arrived();
     Confirmation {
@@ -42,7 +42,11 @@ fn app(messages: usize) -> Pending {
     })
 }
 
-#[library_benchmark(config = common::config(7, 40))]
+// Eleven allocations per delivery and the same fraction as consuming, so the floor is stated over
+// a thousand deliveries. The client's channel blocks are reused or not depending on how far the
+// subscription lags the socket, which moved the total by one block between runs; the floor is the
+// highest total seen.
+#[library_benchmark(config = common::config_every(11_059, 1_000, 275))]
 #[bench::first(app(1))]
 #[bench::base(app(MESSAGES))]
 #[bench::twice(app(2 * MESSAGES))]

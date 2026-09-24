@@ -1,14 +1,24 @@
 //! Core NATS publishing: the [`NatsPublish`] policy and its live [`NatsPublisher`].
 
+// Without the `testing` feature a connection link has one variant, so a `match` on it has a
+// single arm; the matches stay so that the in-process arm has its place when the feature is on.
+#![cfg_attr(
+    not(feature = "testing"),
+    allow(clippy::infallible_destructuring_match)
+)]
+
 use std::fmt::{Debug, Formatter};
 use std::future::{Future, ready};
+#[cfg(not(feature = "testing"))]
 use std::sync::Arc;
 
 use async_nats::Client;
 use bytes::BytesMut;
 use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, Take};
 
-use crate::broker::{ConnectedNatsBroker, NatsConnection};
+use crate::broker::{ConnectedNatsBroker, Link, NatsConnection};
+#[cfg(feature = "testing")]
+use crate::in_process::{Origin, PublishMode};
 #[cfg(feature = "asyncapi")]
 use crate::message::REPLY_ADDRESS_LOCATION;
 use crate::{convert::nats_parts, error::NatsError};
@@ -81,7 +91,7 @@ impl PublishPolicy<ConnectedNatsBroker> for NatsPublish {
 
 impl NatsPublishPolicy for NatsPublish {
     fn bind(self, connected: &ConnectedNatsBroker) -> Self::Live {
-        NatsPublisher::new(Arc::clone(connected.connection()))
+        NatsPublisher::new(connected.link().clone())
     }
 }
 
@@ -92,8 +102,12 @@ impl NatsPublishPolicy for NatsPublish {
 /// [`NatsError::Closed`] instead of silently succeeding against a dead connection.
 #[derive(Clone)]
 pub struct NatsPublisher {
-    connection: Arc<NatsConnection>,
+    link: Link,
 }
+
+// A production build holds the connection handle and nothing else.
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<NatsPublisher>() == size_of::<Arc<NatsConnection>>());
 
 impl Debug for NatsPublisher {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -102,16 +116,24 @@ impl Debug for NatsPublisher {
 }
 
 impl NatsPublisher {
-    pub(crate) const fn new(connection: Arc<NatsConnection>) -> Self {
-        Self { connection }
+    pub(crate) const fn new(link: Link) -> Self {
+        Self { link }
     }
 
-    /// The live client, lent rather than handed over: `Client::publish` takes `&self` and the
-    /// borrow lives as long as the publish future, so a publish has no reason to own a copy of
-    /// the connection.
-    pub(crate) fn client_for(&self, subject: &str) -> Result<&Client, NatsError> {
-        self.connection.live_client(subject)
+    /// What this publisher speaks over.
+    pub(crate) const fn link(&self) -> &Link {
+        &self.link
     }
+}
+
+/// The live client, lent rather than handed over: `Client::publish` takes `&self` and the borrow
+/// lives as long as the publish future, so a publish has no reason to own a copy of the
+/// connection.
+pub(crate) fn client_for<'a>(
+    connection: &'a NatsConnection,
+    subject: &str,
+) -> Result<&'a Client, NatsError> {
+    connection.live_client(subject)
 }
 
 impl Publisher for NatsPublisher {
@@ -136,7 +158,24 @@ impl Publisher for NatsPublisher {
         msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
-        let client = self.client_for(msg.name())?;
+        let connection = match &self.link {
+            Link::Nats(connection) => connection,
+            #[cfg(feature = "testing")]
+            Link::InProcess(bus) => {
+                let (subject, payload, headers) = msg.into_parts();
+                return bus
+                    .publish(
+                        subject,
+                        payload.freeze(),
+                        &headers,
+                        None,
+                        PublishMode::Core,
+                        Origin::Connection,
+                    )
+                    .map(drop);
+            }
+        };
+        let client = client_for(connection, msg.name())?;
         let (subject, payload, headers) = nats_parts(msg)?;
         let result = match headers {
             Some(headers) => client.publish_with_headers(subject, headers, payload).await,

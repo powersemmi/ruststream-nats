@@ -6,12 +6,18 @@
 //! stream to look like. Both live on this pair, so the Core publisher keeps the fire-and-forget
 //! shape the transport actually has.
 
+// Without the `testing` feature a publisher's link has one variant; see `broker.rs`.
+#![cfg_attr(
+    not(feature = "testing"),
+    allow(clippy::infallible_destructuring_match)
+)]
+
 use std::fmt::{Debug, Formatter};
 use std::future::{Future, ready};
 use std::sync::Arc;
 
-use async_nats::jetstream::Context;
 use async_nats::jetstream::message::PublishMessage;
+use async_nats::jetstream::{self, Context};
 use bytes::BytesMut;
 #[cfg(feature = "testing")]
 use ruststream::HeaderMap;
@@ -22,7 +28,9 @@ use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, Take};
 #[cfg(feature = "asyncapi")]
 use serde::Serialize;
 
-use crate::broker::{ConnectedNatsBroker, NatsConnection};
+use crate::broker::{ConnectedNatsBroker, Link, NatsConnection};
+#[cfg(feature = "testing")]
+use crate::in_process::{Bus, Origin, PublishMode};
 use crate::publisher::NatsPublishPolicy;
 #[cfg(feature = "asyncapi")]
 use crate::subject::JETSTREAM_EXTENSION;
@@ -33,15 +41,15 @@ pub use async_nats::jetstream::publish::PublishAck;
 
 /// The `JetStream` protocol header names, as `async-nats` writes them on the wire.
 #[cfg(feature = "testing")]
-const MESSAGE_ID: &str = "Nats-Msg-Id";
+pub(crate) const MESSAGE_ID: &str = "Nats-Msg-Id";
 #[cfg(feature = "testing")]
-const EXPECTED_LAST_SEQUENCE: &str = "Nats-Expected-Last-Sequence";
+pub(crate) const EXPECTED_LAST_SEQUENCE: &str = "Nats-Expected-Last-Sequence";
 #[cfg(feature = "testing")]
-const EXPECTED_LAST_SUBJECT_SEQUENCE: &str = "Nats-Expected-Last-Subject-Sequence";
+pub(crate) const EXPECTED_LAST_SUBJECT_SEQUENCE: &str = "Nats-Expected-Last-Subject-Sequence";
 #[cfg(feature = "testing")]
-const EXPECTED_LAST_MESSAGE_ID: &str = "Nats-Expected-Last-Msg-Id";
+pub(crate) const EXPECTED_LAST_MESSAGE_ID: &str = "Nats-Expected-Last-Msg-Id";
 #[cfg(feature = "testing")]
-const EXPECTED_STREAM: &str = "Nats-Expected-Stream";
+pub(crate) const EXPECTED_STREAM: &str = "Nats-Expected-Stream";
 
 /// What one `JetStream` publish states about itself, over and above its subject and payload.
 ///
@@ -83,8 +91,8 @@ impl JetStreamOptions {
     /// Writes the fields this value set as the `JetStream` protocol headers a server reads.
     ///
     /// The real publisher lets `async-nats` write them; the in-process transport has no such
-    /// builder, so it writes the same headers itself and a test reads back what a server would
-    /// have seen.
+    /// builder, so it writes the same headers itself, and its stream reads them as a server
+    /// does.
     #[cfg(feature = "testing")]
     pub(crate) fn write_headers(&self, headers: &mut HeaderMap) {
         if let Some(id) = &self.message_id {
@@ -307,13 +315,36 @@ struct JetStreamPublishChannel<'a> {
 
 impl NatsPublishPolicy for JetStreamPublish {
     fn bind(self, connected: &ConnectedNatsBroker) -> Self::Live {
-        JetStreamPublisher {
-            connection: Arc::clone(connected.connection()),
-            context: connected.jetstream(),
-            policy: self,
-        }
+        let link = match connected.link() {
+            Link::Nats(connection) => JetStreamLink::Nats {
+                connection: Arc::clone(connection),
+                context: jetstream::new(connection.client().clone()),
+            },
+            #[cfg(feature = "testing")]
+            Link::InProcess(bus) => JetStreamLink::InProcess(Arc::clone(bus)),
+        };
+        JetStreamPublisher { link, policy: self }
     }
 }
+
+/// What a `JetStream` publisher speaks over: the connection and its `JetStream` context, or, under
+/// the `testing` feature, the in-process transport.
+// The size difference exists only with the `testing` feature; boxing the production variant to
+// even it out would cost every production publisher an allocation.
+#[cfg_attr(feature = "testing", allow(clippy::large_enum_variant))]
+#[derive(Clone)]
+enum JetStreamLink {
+    Nats {
+        connection: Arc<NatsConnection>,
+        context: Context,
+    },
+    #[cfg(feature = "testing")]
+    InProcess(Arc<Bus>),
+}
+
+// A production build holds the connection and the context and nothing else.
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<JetStreamLink>() == size_of::<(Arc<NatsConnection>, Context)>());
 
 /// The live `JetStream` publisher. Cheap to clone.
 ///
@@ -323,8 +354,7 @@ impl NatsPublishPolicy for JetStreamPublish {
 /// publish reports [`NatsError::Closed`].
 #[derive(Clone)]
 pub struct JetStreamPublisher {
-    connection: Arc<NatsConnection>,
-    context: Context,
+    link: JetStreamLink,
     policy: JetStreamPublish,
 }
 
@@ -358,9 +388,17 @@ impl JetStreamPublisher {
         msg: OutgoingMessage<'_, BytesMut>,
         options: Option<&JetStreamOptions>,
     ) -> Result<PublishAck, NatsError> {
+        let (connection, context) = match &self.link {
+            JetStreamLink::Nats {
+                connection,
+                context,
+            } => (connection, context),
+            #[cfg(feature = "testing")]
+            JetStreamLink::InProcess(bus) => return self.publish_in_process(bus, msg, options),
+        };
         // Checked before the send: the context caches a client clone that would happily queue a
         // publish into a drained connection.
-        self.connection.live_client(msg.name())?;
+        connection.live_client(msg.name())?;
 
         let (subject, payload, headers) = nats_parts(msg)?;
         let mut message = PublishMessage::build().payload(payload);
@@ -374,12 +412,46 @@ impl JetStreamPublisher {
             message = options.apply(message);
         }
 
-        self.context
+        context
             .send_publish(subject, message)
             .await
             .map_err(|err| NatsError::Publish(Box::new(err)))?
             .await
             .map_err(|err| NatsError::JetStream(Box::new(err)))
+    }
+}
+
+#[cfg(feature = "testing")]
+impl JetStreamPublisher {
+    /// The in-process publish: the client's half is writing the protocol headers, and the
+    /// in-process stream reads them as a server does.
+    fn publish_in_process(
+        &self,
+        bus: &Bus,
+        msg: OutgoingMessage<'_, BytesMut>,
+        options: Option<&JetStreamOptions>,
+    ) -> Result<PublishAck, NatsError> {
+        let (subject, payload, mut headers) = msg.into_parts();
+        self.policy.write_headers(&mut headers);
+        if let Some(options) = options {
+            options.write_headers(&mut headers);
+        }
+        let stored = bus
+            .publish(
+                subject,
+                payload.freeze(),
+                &headers,
+                None,
+                PublishMode::JetStream,
+                Origin::Connection,
+            )?
+            .ok_or_else(|| NatsError::JetStream("no stream found for given subject".into()))?;
+        Ok(PublishAck {
+            stream: stored.stream,
+            sequence: stored.sequence,
+            duplicate: stored.duplicate,
+            ..PublishAck::default()
+        })
     }
 }
 

@@ -1,5 +1,11 @@
 //! Delivered-message wrapper that implements [`IncomingMessage`].
 
+// Without the `testing` feature a `JetStream` delivery has one variant; see `broker.rs`.
+#![cfg_attr(
+    not(feature = "testing"),
+    allow(clippy::infallible_destructuring_match)
+)]
+
 use std::fmt::{Debug, Formatter};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -8,6 +14,8 @@ use async_nats::jetstream::AckKind;
 use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned, Str};
 
 use crate::convert::headers_from_nats;
+#[cfg(feature = "testing")]
+use crate::in_process::{JetStreamDelivery, Release};
 
 /// A NATS delivery. Two flavours: core NATS (no ack) and `JetStream` (real ack/nack/redelivery).
 ///
@@ -37,6 +45,10 @@ pub struct CoreMessage {
     /// deliveries builds none at all; [`headers`](IncomingMessage::headers) answers the crate's
     /// one empty map instead.
     headers: Option<HeaderMap>,
+    /// Keeps a delivery of the in-process transport counted with the test harness until it
+    /// drops. The field is there only with the `testing` feature.
+    #[cfg(feature = "testing")]
+    _release: Release,
 }
 
 impl Debug for CoreMessage {
@@ -54,6 +66,8 @@ impl CoreMessage {
             return Self {
                 inner,
                 headers: None,
+                #[cfg(feature = "testing")]
+                _release: Release::uncounted(),
             };
         }
         let mut headers = headers_from_nats(inner.headers.as_ref());
@@ -68,22 +82,59 @@ impl CoreMessage {
         Self {
             inner,
             headers: Some(headers),
+            #[cfg(feature = "testing")]
+            _release: Release::uncounted(),
+        }
+    }
+
+    /// A delivery of the in-process transport: the client's own message, counted with the test
+    /// harness until it drops.
+    #[cfg(feature = "testing")]
+    pub(crate) fn in_process(inner: async_nats::Message, release: Release) -> Self {
+        Self {
+            _release: release,
+            ..Self::new(inner)
         }
     }
 }
 
 /// Wrapper around an `async_nats::jetstream::Message` with ack semantics.
 pub struct JetStreamMessage {
-    inner: async_nats::jetstream::Message,
+    inner: JetStreamInner,
     /// `None` where the delivery carried no headers; see [`CoreMessage::headers`].
     headers: Option<HeaderMap>,
+}
+
+/// A consumer's delivery: the client's, or, under the `testing` feature, the in-process
+/// transport's, which settles through its own consumer.
+// The size difference exists only with the `testing` feature; boxing the production variant to
+// even it out would cost every production delivery an allocation.
+#[cfg_attr(feature = "testing", allow(clippy::large_enum_variant))]
+enum JetStreamInner {
+    Nats(async_nats::jetstream::Message),
+    #[cfg(feature = "testing")]
+    InProcess(Box<JetStreamDelivery>),
+}
+
+// A production build holds the client's delivery and nothing else.
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<JetStreamInner>() == size_of::<async_nats::jetstream::Message>());
+
+/// The native `JetStream` metadata of one delivery, as the server states it.
+pub(crate) struct DeliveryMetadata<'a> {
+    pub(crate) stream: &'a str,
+    pub(crate) consumer: &'a str,
+    pub(crate) stream_sequence: u64,
+    pub(crate) consumer_sequence: u64,
+    pub(crate) delivered: i64,
+    pub(crate) pending: u64,
 }
 
 impl Debug for JetStreamMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JetStreamMessage")
-            .field("subject", &self.inner.message.subject.as_str())
-            .field("payload_len", &self.inner.message.payload.len())
+            .field("subject", &self.message().subject.as_str())
+            .field("payload_len", &self.message().payload.len())
             .finish_non_exhaustive()
     }
 }
@@ -95,7 +146,33 @@ impl JetStreamMessage {
             .headers
             .as_ref()
             .map(|wire| headers_from_nats(Some(wire)));
-        Self { inner, headers }
+        Self {
+            inner: JetStreamInner::Nats(inner),
+            headers,
+        }
+    }
+
+    /// A delivery of the in-process transport.
+    #[cfg(feature = "testing")]
+    pub(crate) fn in_process(delivery: JetStreamDelivery) -> Self {
+        let headers = delivery
+            .message
+            .headers
+            .as_ref()
+            .map(|wire| headers_from_nats(Some(wire)));
+        Self {
+            inner: JetStreamInner::InProcess(Box::new(delivery)),
+            headers,
+        }
+    }
+
+    /// The message as the client read it.
+    fn message(&self) -> &async_nats::Message {
+        match &self.inner {
+            JetStreamInner::Nats(inner) => &inner.message,
+            #[cfg(feature = "testing")]
+            JetStreamInner::InProcess(delivery) => &delivery.message,
+        }
     }
 
     /// The native `JetStream` delivery metadata (stream/consumer name and sequences, redelivery
@@ -104,8 +181,26 @@ impl JetStreamMessage {
     /// Returns `None` when the reply subject is absent or malformed - i.e. the underlying
     /// `async_nats` parse failed - so a caller building a context can fall back to "no metadata"
     /// rather than surfacing an error on the per-delivery hot path.
-    pub(crate) fn info(&self) -> Option<async_nats::jetstream::message::Info<'_>> {
-        self.inner.info().ok()
+    pub(crate) fn metadata(&self) -> Option<DeliveryMetadata<'_>> {
+        match &self.inner {
+            JetStreamInner::Nats(inner) => inner.info().ok().map(|info| DeliveryMetadata {
+                stream: info.stream,
+                consumer: info.consumer,
+                stream_sequence: info.stream_sequence,
+                consumer_sequence: info.consumer_sequence,
+                delivered: info.delivered,
+                pending: info.pending,
+            }),
+            #[cfg(feature = "testing")]
+            JetStreamInner::InProcess(delivery) => Some(DeliveryMetadata {
+                stream: &delivery.info.stream,
+                consumer: &delivery.info.consumer,
+                stream_sequence: delivery.info.stream_sequence,
+                consumer_sequence: delivery.info.consumer_sequence,
+                delivered: i64::try_from(delivery.info.delivered).unwrap_or(i64::MAX),
+                pending: delivery.info.pending,
+            }),
+        }
     }
 }
 
@@ -137,7 +232,7 @@ impl IncomingMessage for NatsMessage {
     fn payload(&self) -> &[u8] {
         match self {
             Self::Core(m) => &m.inner.payload,
-            Self::JetStream(m) => &m.inner.message.payload,
+            Self::JetStream(m) => &m.message().payload,
         }
     }
 
@@ -152,11 +247,14 @@ impl IncomingMessage for NatsMessage {
     async fn ack(self) -> Result<(), AckError> {
         match self {
             Self::Core(_) => Err(AckError::Unsupported),
-            Self::JetStream(m) => m
-                .inner
-                .ack()
-                .await
-                .map_err(|err| AckError::Broker(format_err(err))),
+            Self::JetStream(m) => match m.inner {
+                JetStreamInner::Nats(inner) => inner
+                    .ack()
+                    .await
+                    .map_err(|err| AckError::Broker(format_err(err))),
+                #[cfg(feature = "testing")]
+                JetStreamInner::InProcess(delivery) => delivery.ack(),
+            },
         }
     }
 
@@ -164,12 +262,17 @@ impl IncomingMessage for NatsMessage {
         match self {
             Self::Core(_) => Err(AckError::Unsupported),
             Self::JetStream(m) => {
+                let inner = match m.inner {
+                    JetStreamInner::Nats(inner) => inner,
+                    #[cfg(feature = "testing")]
+                    JetStreamInner::InProcess(delivery) => return delivery.nack(requeue),
+                };
                 let kind = if requeue {
                     AckKind::Nak(None)
                 } else {
                     AckKind::Term
                 };
-                m.inner
+                inner
                     .ack_with(kind)
                     .await
                     .map_err(|err| AckError::Broker(format_err(err)))
@@ -187,7 +290,7 @@ impl IncomingMessage for NatsMessage {
     fn redelivery_count(&self) -> Option<u64> {
         match self {
             Self::Core(_) => None,
-            Self::JetStream(m) => m.info().map(|info| info.delivered.unsigned_abs()),
+            Self::JetStream(m) => m.metadata().map(|info| info.delivered.unsigned_abs()),
         }
     }
 
@@ -214,11 +317,14 @@ impl IncomingMessage for NatsMessage {
     async fn nack_after(self, delay: Duration) -> Result<(), AckError> {
         match self {
             Self::Core(_) => Err(AckError::Unsupported),
-            Self::JetStream(m) => m
-                .inner
-                .ack_with(AckKind::Nak(Some(delay)))
-                .await
-                .map_err(|err| AckError::Broker(format_err(err))),
+            Self::JetStream(m) => match m.inner {
+                JetStreamInner::Nats(inner) => inner
+                    .ack_with(AckKind::Nak(Some(delay)))
+                    .await
+                    .map_err(|err| AckError::Broker(format_err(err))),
+                #[cfg(feature = "testing")]
+                JetStreamInner::InProcess(delivery) => delivery.nack_after(delay),
+            },
         }
     }
 }
@@ -293,8 +399,7 @@ mod tests {
 
     // Core NATS has no acknowledgement, so it must not claim the native delay: the runtime reads
     // this to decide between the native `-NAK {"delay"}` and its own deferred re-publish. The
-    // JetStream arm answers `true` and is exercised against a real server (a
-    // `async_nats::jetstream::Message` has no in-process constructor).
+    // JetStream arm answers `true`, which `tests/in_process_nats.rs` and the live suite exercise.
     #[test]
     fn core_delivery_does_not_claim_native_delayed_redelivery() {
         assert!(!core_message(None).supports_nack_after());

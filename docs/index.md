@@ -6,7 +6,8 @@ JetStream consumer. NATS matches replies to requests, so a service can send a re
 the answer. A JetStream publish states what it expects of the stream, and the stream refuses it when
 that does not hold.
 
-The `testing` feature runs a service's handlers in process, with no NATS server.
+With the `testing` feature, a test runs the service's production app with `NatsBroker` in process,
+with no NATS server, or against a running one.
 
 ```toml
 [dependencies]
@@ -39,8 +40,8 @@ The crate reference is the textbook for all of it, and each topic is one section
 - [Acknowledgement and delayed redelivery](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#acknowledgement-and-delayed-retry),
   which a JetStream consumer settles on the server and a Core subject does not settle at all.
 - The [AsyncAPI document](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#the-asyncapi-document)
-  the crate fills in, and the [in-process transport](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#testing)
-  a test runs against.
+  the crate fills in, and [testing](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#testing):
+  the production app under the `TestApp` harness, in process or against a live server.
 
 ## Where to go next
 

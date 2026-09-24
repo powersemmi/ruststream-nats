@@ -1,17 +1,17 @@
 //! Conformance suites. Each check verifies a different contract surface: `run_suite` proves Core
-//! routing against the `NatsTestBroker`'s
-//! [`TestableBroker`](ruststream::testing::TestableBroker) impl; `lifecycle` proves the
+//! routing through the in-process mode of `NatsBroker` and its
+//! [`TestableBroker`](ruststream::testing::TestableBroker) view; `lifecycle` proves the
 //! ladder (synchronous construction, consuming `connect`, subscribe through the crate's own
 //! source, publish, ack, consuming `shutdown`, and a pre-shutdown publisher erroring afterwards);
 //! the capability suites prove optional trait implementations.
 //!
-//! Every suite this crate's capabilities justify runs twice: in process against `NatsTestBroker`,
-//! and against a real server when `NATS_TEST_URL` is set. The in-process leg is what holds the
-//! stand-in to the framework's own definition of correct broker behaviour rather than to its own
-//! tests; the server leg is what keeps the in-process pass honest, since only a server can say
-//! whether the stand-in reproduced the contract or merely agreed with itself. Both spellings are
-//! identical apart from the broker, because the policies and the subscription source are the
-//! same on either ladder.
+//! Every suite this crate's capabilities justify runs twice on the production `NatsBroker`: in
+//! process, wrapped in `InProcessBroker` so its `connect` is the in-process transition, and
+//! against a real server when `NATS_TEST_URL` is set. The in-process leg holds the transport to
+//! the framework's own definition of correct broker behaviour rather than to its own tests; the
+//! server leg keeps the in-process pass honest, since only a server can say whether the transport
+//! reproduced the contract or merely agreed with itself. Both spellings are identical apart from
+//! that wrapper.
 //!
 //! `transactions`, `owned_transactions` and `seeking` are absent from both legs, not skipped:
 //! neither Core NATS nor `JetStream` has a multi-message transaction, and a live subscription is
@@ -30,16 +30,23 @@
 #![cfg(feature = "testing")]
 
 use async_nats::jetstream::stream::Config as StreamConfig;
+use ruststream::conformance::harness::InProcessBroker;
 use ruststream::conformance::{capabilities, harness};
 use ruststream::{Broker, ConnectedBroker};
-use ruststream_nats::testing::NatsTestBroker;
 use ruststream_nats::{CoreSubject, JetStreamSubject, NatsBroker, NatsPublish};
 
 mod live;
 
+/// The address the service's broker is built with. The in-process mode dials nothing.
+const URL: &str = "nats://localhost:4222";
+
+fn in_process() -> InProcessBroker<NatsBroker> {
+    InProcessBroker::new(NatsBroker::new(URL))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn nats_test_broker_passes_conformance_suite() {
-    harness::run_suite(NatsTestBroker::new).await;
+async fn in_process_passes_conformance_suite() {
+    harness::run_suite(|| NatsBroker::new(URL)).await;
 }
 
 // `make_source` / `make_publisher` must stay closures: their bounds are higher-ranked
@@ -47,9 +54,9 @@ async fn nats_test_broker_passes_conformance_suite() {
 // would not type-check.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_broker_passes_lifecycle() {
+async fn in_process_passes_lifecycle() {
     harness::lifecycle(
-        NatsTestBroker::new,
+        in_process,
         |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
     )
@@ -75,9 +82,9 @@ async fn passes_lifecycle() {
 // subscription reads and the filter a consumer reads, and this is what holds both to the promise.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_broker_reports_a_reachable_subject() {
+async fn in_process_reports_a_reachable_subject() {
     harness::redelivery_address(
-        NatsTestBroker::new,
+        in_process,
         |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
     )
@@ -100,9 +107,9 @@ async fn reports_a_reachable_subject() {
 
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_broker_reports_a_reachable_consumer_filter() {
+async fn in_process_reports_a_reachable_consumer_filter() {
     harness::redelivery_address(
-        NatsTestBroker::new,
+        in_process,
         |subject| JetStreamSubject::new(subject, "CONFORMANCE"),
         |connected| connected.publisher(NatsPublish),
     )
@@ -145,9 +152,9 @@ async fn reports_a_reachable_consumer_filter() {
 
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_broker_passes_request_reply() {
+async fn in_process_passes_request_reply() {
     capabilities::request_reply(
-        NatsTestBroker::new,
+        in_process,
         |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
         |connected| connected.publisher(NatsPublish),
@@ -172,9 +179,9 @@ async fn passes_request_reply() {
 
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_broker_passes_batches() {
+async fn in_process_passes_batches() {
     capabilities::batches(
-        NatsTestBroker::new,
+        in_process,
         |subject| CoreSubject::new(subject),
         |connected| connected.publisher(NatsPublish),
     )

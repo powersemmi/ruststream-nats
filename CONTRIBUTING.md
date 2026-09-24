@@ -45,7 +45,7 @@ git clone https://github.com/powersemmi/ruststream-nats.git
 
 ```bash
 just check          # rustfmt, clippy, cargo check with all features and with none
-just test           # the handler-stub suite
+just test           # the suite in process, NatsBroker with no server
 just test-brokers   # the live suite against NATS with JetStream
 just ci             # check and test, plus codespell, cargo deny and zizmor
 ```

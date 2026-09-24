@@ -539,8 +539,8 @@ async fn a_delayed_nack_holds_the_message_server_side() {
 
 // The server-side half of the queue-group contract the in-process transport reproduces: a queue
 // group splits its subject between its members, and a subscription outside the group still gets
-// everything. `a_queue_group_splits_the_subject_between_its_members` in `testing_core.rs` asserts
-// the same property against the stand-in; this is what keeps that one honest.
+// everything. `a_queue_group_splits_the_subject_between_its_members` in `in_process_nats.rs`
+// asserts the same property in process; this is what keeps that one honest.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_queue_group_splits_the_work_across_its_members() {
     let Some(connected) = connected_or_skip().await else {
@@ -594,6 +594,52 @@ async fn a_queue_group_splits_the_work_across_its_members() {
     }
 
     drop((worker_a, worker_b, observer));
+    connected.shutdown().await.expect("shutdown failed");
+}
+
+// The server groups queue subscriptions by name over every subject a message matches: one name on
+// two patterns is one group, and a message both match is handled once. The in-process transport
+// keys its groups the same way (`one_queue_group_name_is_one_group_across_subjects` in
+// `in_process_nats.rs`); this is the server saying so.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_queue_group_name_is_one_group_across_subjects() {
+    let Some(connected) = connected_or_skip().await else {
+        return;
+    };
+    let prefix = unique_subject("queue-across");
+
+    let mut narrow = connected
+        .subscribe_with(CoreWildcard::new(format!("{prefix}.*")).queue_group("workers"))
+        .await
+        .expect("subscribe narrow failed");
+    let mut wide = connected
+        .subscribe_with(CoreWildcard::new(format!("{prefix}.>")).queue_group("workers"))
+        .await
+        .expect("subscribe wide failed");
+
+    let publisher = connected.publisher(NatsPublish);
+    let subject = format!("{prefix}.created");
+    for payload in [b"1".as_slice(), b"2", b"3", b"4"] {
+        publisher
+            .publish(OutgoingMessage::new(subject.as_str(), payload), None)
+            .await
+            .expect("publish failed");
+    }
+
+    {
+        let mut narrow_stream = std::pin::pin!(narrow.stream());
+        let mut wide_stream = std::pin::pin!(wide.stream());
+        let mut taken = drain(&mut narrow_stream).await;
+        taken.extend(drain(&mut wide_stream).await);
+        taken.sort();
+        assert_eq!(
+            taken,
+            vec![b"1".to_vec(), b"2".to_vec(), b"3".to_vec(), b"4".to_vec()],
+            "each message reaches the group once, whichever pattern its member joined through",
+        );
+    }
+
+    drop((narrow, wide));
     connected.shutdown().await.expect("shutdown failed");
 }
 

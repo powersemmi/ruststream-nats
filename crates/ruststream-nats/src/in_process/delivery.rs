@@ -16,7 +16,7 @@ use ruststream::testing::Coordinator;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::Instant;
 
-use super::bus::Bus;
+use super::bus::{Bus, Group};
 
 /// Keeps one delivery counted in flight with the test harness until it drops.
 ///
@@ -89,7 +89,13 @@ impl Feed {
 
 impl Drop for Feed {
     fn drop(&mut self) {
-        self.bus.unsubscribe(self.id);
+        // A durable consumer keeps what its closing subscription had not read yet.
+        if let Some(group @ Group::Durable { .. }) = self.bus.unsubscribe(self.id) {
+            self.rx.close();
+            while let Ok(delivery) = self.rx.try_recv() {
+                self.bus.reroute(&group, delivery);
+            }
+        }
     }
 }
 
@@ -100,14 +106,25 @@ pub(crate) struct ConsumerState {
     stream: Arc<str>,
     name: Arc<str>,
     sequence: AtomicU64,
+    durable: bool,
 }
 
 impl ConsumerState {
-    pub(crate) fn new(stream: &str, name: &str) -> Arc<Self> {
+    pub(crate) fn new(stream: &str, name: &str, durable: bool) -> Arc<Self> {
         Arc::new(Self {
             stream: Arc::from(stream),
             name: Arc::from(name),
             sequence: AtomicU64::new(0),
+            durable,
+        })
+    }
+
+    /// The group a durable consumer's subscriptions share; `None` for an ephemeral consumer,
+    /// which ends with its subscription.
+    fn group(&self) -> Option<Group> {
+        self.durable.then(|| Group::Durable {
+            stream: self.stream.to_string(),
+            name: self.name.to_string(),
         })
     }
 }
@@ -171,6 +188,7 @@ impl Consumer {
             redeliver: Some(Redeliver {
                 bus: Arc::clone(&self.feed.bus),
                 requeue: self.requeue.clone(),
+                consumer: Arc::clone(&self.state),
                 ack_wait: self.ack_wait,
                 sequence: delivery.sequence,
                 delivered: delivery.delivered,
@@ -259,6 +277,7 @@ impl Drop for JetStreamDelivery {
 struct Redeliver {
     bus: Arc<Bus>,
     requeue: DeliverySender,
+    consumer: Arc<ConsumerState>,
     ack_wait: Duration,
     sequence: u64,
     delivered: u64,
@@ -266,7 +285,9 @@ struct Redeliver {
 
 impl Redeliver {
     fn again(
+        bus: &Bus,
         requeue: &DeliverySender,
+        consumer: &ConsumerState,
         coordinator: Option<Coordinator>,
         message: async_nats::Message,
         sequence: u64,
@@ -275,17 +296,24 @@ impl Redeliver {
         // The count is taken before the send: a subscription that has gone drops the delivery,
         // and the drop gives the count back.
         let release = Release::counted(coordinator);
-        let _ = requeue.send(BusDelivery {
+        let sent = requeue.send(BusDelivery {
             message,
             sequence,
             delivered: delivered + 1,
             release,
         });
+        // The subscription has gone; a durable consumer still owes the message to whoever
+        // reads it next.
+        if let (Err(failed), Some(group)) = (sent, consumer.group()) {
+            bus.reroute(&group, failed.0);
+        }
     }
 
     fn now(self, message: async_nats::Message) {
         Self::again(
+            &self.bus,
             &self.requeue,
+            &self.consumer,
             self.bus.coordinator(),
             message,
             self.sequence,
@@ -299,6 +327,7 @@ impl Redeliver {
         let Self {
             bus,
             requeue,
+            consumer,
             sequence,
             delivered,
             ..
@@ -306,7 +335,15 @@ impl Redeliver {
         if let Some(coordinator) = bus.coordinator() {
             let counter = coordinator.clone();
             coordinator.schedule_redelivery(delay, move || {
-                Self::again(&requeue, Some(counter), message, sequence, delivered);
+                Self::again(
+                    &bus,
+                    &requeue,
+                    &consumer,
+                    Some(counter),
+                    message,
+                    sequence,
+                    delivered,
+                );
             });
             return;
         }
@@ -317,7 +354,9 @@ impl Redeliver {
             let due = Instant::now() + delay;
             runtime.spawn(async move {
                 tokio::time::sleep_until(due).await;
-                Self::again(&requeue, None, message, sequence, delivered);
+                Self::again(
+                    &bus, &requeue, &consumer, None, message, sequence, delivered,
+                );
             });
         }
     }

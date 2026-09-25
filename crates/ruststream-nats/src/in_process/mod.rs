@@ -20,7 +20,8 @@
 //! metadata, negative acknowledgement, termination, delayed redelivery and the `ack_wait`
 //! redelivery of a delivery dropped unsettled. What belongs to the server and is left to the
 //! live mode: a stream's own subject list and its limits (a stream here stores what a consumer
-//! of the app reads, and a `JetStream` publish reaches a stream the app names), `max_ack_pending`,
+//! of the app reads, a publish that names a stream reaches it until a consumer of the app says
+//! what that stream serves, and from then on a subject outside it is refused), `max_ack_pending`,
 //! a subscription's pending limits, and a stream or consumer the service expects to find (a
 //! subscription here finds every stream it names).
 
@@ -64,7 +65,7 @@ pub(crate) fn connect(addrs: &str, options: &ConnectOptions) -> Result<Arc<Bus>,
 /// set.
 pub(crate) fn settings(options: &ConnectOptions) -> Result<Settings, NatsError> {
     let printed = format!("{options:?}");
-    let field = |name: &str| -> Result<&str, NatsError> {
+    let field = |name: &str| -> Result<String, NatsError> {
         let key = format!("\"{name}\": ");
         let start = printed.find(&key).ok_or_else(|| {
             NatsError::Connect(
@@ -72,14 +73,26 @@ pub(crate) fn settings(options: &ConnectOptions) -> Result<Settings, NatsError> 
             )
         })? + key.len();
         let rest = &printed[start..];
-        let end = rest.strip_prefix('"').map_or_else(
-            || rest.find([',', '}']).unwrap_or(rest.len()),
-            |quoted| quoted.find('"').map_or(rest.len(), |end| end + 2),
-        );
-        Ok(&rest[..end])
+        let Some(quoted) = rest.strip_prefix('"') else {
+            return Ok(rest[..rest.find([',', '}']).unwrap_or(rest.len())].to_owned());
+        };
+        // A string prints as a Rust literal: read up to the closing quote, undoing the escapes
+        // `Debug` wrote, so a quote or a backslash inside the value neither ends nor alters it.
+        let mut value = String::new();
+        let mut chars = quoted.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => return Ok(value),
+                '\\' => value.push(chars.next().unwrap_or('\\')),
+                c => value.push(c),
+            }
+        }
+        Err(NatsError::Connect(
+            format!("the client's connect options state `{name}` unterminated").into(),
+        ))
     };
     let no_echo = field("no_echo")? == "true";
-    let inbox_prefix = field("inbox_prefix")?.trim_matches('"').to_owned();
+    let inbox_prefix = field("inbox_prefix")?;
     Ok(Settings {
         no_echo,
         inbox_prefix,
@@ -187,6 +200,10 @@ mod tests {
             .expect("the options state both");
         assert!(set.no_echo);
         assert_eq!(set.inbox_prefix, "_SVC");
+
+        let escaped = settings(&ConnectOptions::new().custom_inbox_prefix(r#"_S"V\C"#))
+            .expect("the options state both");
+        assert_eq!(escaped.inbox_prefix, r#"_S"V\C"#);
     }
 
     #[test]

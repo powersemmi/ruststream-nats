@@ -534,6 +534,91 @@ async fn a_jetstream_publish_is_acknowledged_by_the_stream_that_stores_it() {
     assert!(matches!(err, NatsError::JetStream(_)), "got {err}");
 }
 
+// A stream serves the subjects it captures: naming it on a publish to another subject does not
+// make it store that subject, and the server refuses the publish.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_named_stream_refuses_a_subject_it_does_not_serve() {
+    let broker = connected().await;
+    let mut consumer = broker
+        .subscribe_with(JetStreamSubject::new("orders.*", "ORDERS"))
+        .await
+        .expect("subscribe");
+    let err = broker
+        .publisher(JetStreamPublish::default().expect_stream("ORDERS"))
+        .publish_ack(OutgoingMessage::new("payments.created", b"x"), None)
+        .await
+        .expect_err("ORDERS does not serve payments.created");
+    assert!(matches!(err, NatsError::JetStream(_)), "got {err}");
+    assert!(waiting(&mut consumer).is_empty());
+}
+
+// A durable consumer outlives its subscriptions: what one left unread, and a redelivery it had
+// scheduled, reach the next subscription on the same durable.
+#[tokio::test(start_paused = true)]
+async fn a_durable_hands_what_a_closed_subscription_left_to_the_next_one() {
+    let broker = connected().await;
+    let durable = || JetStreamSubject::new("orders.parked", "ORDERS").durable("worker");
+    let mut first = broker.subscribe_with(durable()).await.expect("subscribe");
+    let publisher = broker.publisher(NatsPublish);
+    for payload in [b"delayed", b"unread!"] {
+        publisher
+            .publish(OutgoingMessage::new("orders.parked", payload), None)
+            .await
+            .expect("publish");
+    }
+    {
+        let mut stream = Box::pin(first.stream());
+        let delayed = next_message(&mut stream).await;
+        delayed
+            .nack_after(Duration::from_secs(5))
+            .await
+            .expect("nack after");
+    }
+    drop(first);
+
+    let mut second = broker.subscribe_with(durable()).await.expect("subscribe");
+    assert_eq!(waiting(&mut second), [b"unread!".to_vec()]);
+    tokio::time::advance(Duration::from_secs(5)).await;
+    let mut stream = Box::pin(second.stream());
+    let again = next_message(&mut stream).await;
+    assert_eq!(again.payload(), b"delayed");
+    assert_eq!(again.redelivery_count(), Some(2));
+}
+
+// A publish racing the shutdown either lands before it, counted, or is refused: the bus never
+// takes a message once it has closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_publish_racing_shutdown_never_lands_after_it() {
+    for _ in 0..3000 {
+        let broker = connected().await;
+        let mut consumer = broker
+            .subscribe_with(CoreSubject::new("race"))
+            .await
+            .expect("subscribe");
+        let publisher = broker.publisher(NatsPublish);
+        let racing = tokio::spawn(async move {
+            let mut landed = 0_u64;
+            while publisher
+                .publish(OutgoingMessage::new("race", b"x"), None)
+                .await
+                .is_ok()
+            {
+                landed += 1;
+            }
+            landed
+        });
+        tokio::task::yield_now().await;
+        let closed = broker.shutdown().await.expect("shutdown");
+        let landed = racing.await.expect("the publisher task");
+        assert_eq!(
+            closed.messages_sent(),
+            landed,
+            "every accepted publish is counted"
+        );
+        drop(waiting(&mut consumer));
+    }
+}
+
 // The stream checks what a publish states about it, and a repeated message id inside the
 // duplicate window is acknowledged without being stored or delivered again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

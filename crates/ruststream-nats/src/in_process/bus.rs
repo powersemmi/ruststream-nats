@@ -255,6 +255,17 @@ struct State {
     /// In the order the bus learned of them.
     streams: Vec<Stream>,
     durables: HashMap<(String, String), Arc<ConsumerState>>,
+    /// What a durable consumer holds while no subscription reads it: the deliveries its last
+    /// subscription left unread or unsettled. The next subscription on the durable receives them.
+    parked: HashMap<Group, Vec<Parked>>,
+}
+
+/// A delivery a durable consumer holds with no subscription to hand it to. It carries no count:
+/// the harness does not wait for a message nothing can read.
+struct Parked {
+    message: async_nats::Message,
+    sequence: u64,
+    delivered: u64,
 }
 
 impl State {
@@ -266,6 +277,13 @@ impl State {
             self.streams.len() - 1
         };
         &mut self.streams[index]
+    }
+
+    /// Whether a consumer of the app has named the stream, so the bus knows what it serves.
+    fn knows(&self, stream: &str) -> bool {
+        self.streams
+            .iter()
+            .any(|known| known.name == stream && !known.filters.is_empty())
     }
 
     /// The stream that stores a message published to `subject`: the first one a consumer's
@@ -393,8 +411,11 @@ impl Bus {
     /// Shuts the connection: every subscription ends, and every handle aliasing it errors. Returns
     /// how many messages the connection published and how many it was handed.
     pub(crate) fn close(&self) -> (u64, u64) {
+        let mut state = self.state();
         self.closed.store(true, Ordering::Release);
-        self.state().subscriptions.clear();
+        state.subscriptions.clear();
+        state.parked.clear();
+        drop(state);
         (
             self.sent.load(Ordering::Relaxed),
             self.received.load(Ordering::Relaxed),
@@ -450,13 +471,13 @@ impl Bus {
             if let Some(consumer) = state.durables.get(&key) {
                 (Arc::clone(consumer), true)
             } else {
-                let consumer = ConsumerState::new(spec.stream, name);
+                let consumer = ConsumerState::new(spec.stream, name, true);
                 state.durables.insert(key, Arc::clone(&consumer));
                 (consumer, false)
             }
         } else {
             let name = format!("{}_ephemeral_{}", spec.stream, self.next_id());
-            (ConsumerState::new(spec.stream, &name), false)
+            (ConsumerState::new(spec.stream, &name, false), false)
         };
         let backlog: Vec<(async_nats::Message, u64)> = if existed {
             Vec::new()
@@ -475,7 +496,19 @@ impl Bus {
         let kind = Kind::JetStream {
             stream: spec.stream.to_owned(),
         };
+        let parked = group
+            .as_ref()
+            .and_then(|group| state.parked.remove(group))
+            .unwrap_or_default();
         let (feed, sender) = self.register(&mut state, spec.filter, group, kind);
+        for parked in parked {
+            let _ = sender.send(BusDelivery {
+                message: parked.message,
+                sequence: parked.sequence,
+                delivered: parked.delivered,
+                release: Release::counted(self.coordinator()),
+            });
+        }
         drop(state);
         for (message, sequence) in backlog {
             let _ = sender.send(BusDelivery {
@@ -488,9 +521,49 @@ impl Bus {
         (feed, sender, consumer)
     }
 
-    /// Removes a subscription; an id already gone is ignored.
-    pub(crate) fn unsubscribe(&self, id: u64) {
-        self.state().subscriptions.remove(&id);
+    /// Removes a subscription, returning the group it belonged to; an id already gone is ignored.
+    pub(crate) fn unsubscribe(&self, id: u64) -> Option<Group> {
+        self.state()
+            .subscriptions
+            .remove(&id)
+            .and_then(|subscription| subscription.group)
+    }
+
+    /// Hands a durable consumer's delivery to another subscription reading it, or holds it for the
+    /// next one when none is open: the consumer outlives its subscriptions on a server, and so do
+    /// its unacknowledged messages.
+    pub(crate) fn reroute(&self, group: &Group, delivery: BusDelivery) {
+        let mut state = self.state();
+        if self.is_closed() {
+            return;
+        }
+        let mut members: Vec<&DeliverySender> = state
+            .subscriptions
+            .values()
+            .filter(|subscription| subscription.group.as_ref() == Some(group))
+            .map(|subscription| &subscription.sender)
+            .collect();
+        let delivery = if members.is_empty() {
+            Err(delivery)
+        } else {
+            let turn = state.turns.get(group).copied().unwrap_or(0);
+            let picked = usize::try_from(turn % members.len() as u64).unwrap_or(0);
+            members
+                .swap_remove(picked)
+                .send(delivery)
+                .map_err(|failed| failed.0)
+        };
+        match delivery {
+            Ok(()) => {
+                let turn = state.turns.entry(group.clone()).or_insert(0);
+                *turn = turn.wrapping_add(1);
+            }
+            Err(delivery) => state.parked.entry(group.clone()).or_default().push(Parked {
+                message: delivery.message,
+                sequence: delivery.sequence,
+                delivered: delivery.delivered,
+            }),
+        }
     }
 
     /// The message as the client frames it, or the refusal the client or the server answers
@@ -557,14 +630,21 @@ impl Bus {
         let echo = origin == Origin::External || !self.settings.no_echo;
 
         let mut state = self.state();
+        // Checked again under the lock: `close` marks the bus closed while holding it, so a
+        // publish that passed the first check cannot land on a closed bus.
+        self.ensure_live(subject)?;
         let capturing = state.capturing(subject);
         let expected = text(headers, EXPECTED_STREAM);
         let target = match (&expected, capturing) {
             (Some(expected), Some(index)) if state.streams[index].name != *expected => {
                 Err("expected stream does not match".to_owned())
             }
-            (Some(expected), _) => Ok(Some(expected.clone())),
-            (None, Some(index)) => Ok(Some(state.streams[index].name.clone())),
+            // A stream the bus knows serves the subjects its consumers read: naming it does not
+            // make it take another one, and the server refuses such a publish. A stream no
+            // consumer has named yet is taken at its word.
+            (Some(expected), None) if state.knows(expected) => Ok(None),
+            (Some(expected), None) => Ok(Some(expected.clone())),
+            (_, Some(index)) => Ok(Some(state.streams[index].name.clone())),
             (None, None) => Ok(None),
         };
         let stored = match (target, mode) {
@@ -591,8 +671,9 @@ impl Bus {
             .filter(|stored| !stored.duplicate)
             .map(|stored| stored.stream.as_str());
         let recipients = state.recipients(subject, reaching, echo);
-        drop(state);
 
+        // The sends stay under the lock, so the counters `close` returns include this publish,
+        // and a durable subscription closing concurrently finds the delivery in its channel.
         if origin == Origin::Connection {
             self.sent.fetch_add(1, Ordering::Relaxed);
         }
@@ -615,6 +696,7 @@ impl Bus {
                 self.received.fetch_add(1, Ordering::Relaxed);
             }
         }
+        drop(state);
         Ok(stored)
     }
 

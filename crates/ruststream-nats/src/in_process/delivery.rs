@@ -14,7 +14,7 @@ use std::time::Duration;
 use ruststream::AckError;
 use ruststream::testing::Coordinator;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::time::Instant;
+use tokio::time::{Instant, sleep_until};
 
 use super::bus::{Bus, Group};
 
@@ -347,17 +347,17 @@ impl Redeliver {
             });
             return;
         }
-        // Why the runtime check: a delivery can drop outside any runtime (a test that ends before
-        // it settles), and there is no timer to arm there.
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            // The deadline is taken now: the timer task first runs later.
-            let due = Instant::now() + delay;
-            runtime.spawn(async move {
-                tokio::time::sleep_until(due).await;
-                Self::again(
-                    &bus, &requeue, &consumer, None, message, sequence, delivered,
-                );
-            });
-        }
+        // On the runtime the broker connected on, not the settling caller's: a handler on a
+        // dedicated thread settles from that thread's runtime, which may stop before the delay
+        // runs out. A runtime that has already stopped drops the timer with the connection.
+        // The deadline is taken now: the timer task first runs later.
+        let due = Instant::now() + delay;
+        let runtime = bus.runtime().clone();
+        runtime.spawn(async move {
+            sleep_until(due).await;
+            Self::again(
+                &bus, &requeue, &consumer, None, message, sequence, delivered,
+            );
+        });
     }
 }

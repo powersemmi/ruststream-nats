@@ -38,6 +38,17 @@ pub(crate) enum DeliveryModel {
     JetStream,
 }
 
+impl DeliveryModel {
+    /// Whether a delivery of this model can be settled at all: a `JetStream` consumer
+    /// acknowledges, a Core subject answers every settlement with [`AckError::Unsupported`].
+    const fn settles(self) -> Result<(), AckError> {
+        match self {
+            Self::Core => Err(AckError::Unsupported),
+            Self::JetStream => Ok(()),
+        }
+    }
+}
+
 /// Subscriber returned by [`crate::testing::ConnectedNatsTestBroker::subscribe_with`].
 pub struct NatsTestSubscriber {
     state: Arc<TestBrokerState>,
@@ -110,9 +121,13 @@ impl Subscriber for NatsTestSubscriber {
 
 /// Message handed to handlers from a [`NatsTestSubscriber`].
 ///
-/// `ack` consumes the handle silently; `nack(requeue=true)` re-queues the delivery on the
-/// owning subscription's channel so the next handler invocation sees it again (matching the
-/// `MemoryBroker` contract). `nack(requeue=false)` drops it.
+/// It settles the way [`NatsMessage`](crate::NatsMessage) settles on a real connection, by the
+/// model its subscription was opened on. Through a `JetStream` consumer, `ack` consumes the
+/// handle, `nack(requeue = true)` re-queues the delivery on the owning subscription so the next
+/// handler invocation sees it again, `nack(requeue = false)` drops it, and `nack_after` re-queues
+/// it once the delay has passed. On a Core subject every one of them reports
+/// [`AckError::Unsupported`] and nothing comes back, because Core NATS has no acknowledgement and
+/// no redelivery.
 pub struct NatsTestMessage {
     delivery: Option<Delivery>,
     requeue: DeliverySender,
@@ -198,9 +213,11 @@ impl IncomingMessage for NatsTestMessage {
             .map_or_else(|| EMPTY.get_or_init(HeaderMap::new), |d| &d.headers)
     }
 
+    /// Consumes the delivery through a `JetStream` consumer; on a Core subject reports
+    /// [`AckError::Unsupported`], the answer a server's Core delivery gives.
     fn ack(mut self) -> impl Future<Output = Result<(), AckError>> {
         self.delivery.take();
-        ready(Ok(()))
+        ready(self.model.settles())
     }
 
     /// The count a `JetStream` consumer keeps on the server: `1` on the first delivery, one more
@@ -212,11 +229,17 @@ impl IncomingMessage for NatsTestMessage {
         }
     }
 
+    /// Re-queues or drops the delivery through a `JetStream` consumer. On a Core subject it
+    /// reports [`AckError::Unsupported`] and re-queues nothing: a server has no Core redelivery,
+    /// so a stand-in that performed one would pass a retry that loses the message in production.
     fn nack(mut self, requeue: bool) -> impl Future<Output = Result<(), AckError>> {
         let mut delivery = self
             .delivery
             .take()
             .expect("NatsTestMessage ack/nack invoked twice");
+        if let Err(unsupported) = self.model.settles() {
+            return ready(Err(unsupported));
+        }
         delivery.delivered += 1;
         if requeue {
             let sent = self.requeue.send(delivery);
@@ -254,10 +277,10 @@ impl IncomingMessage for NatsTestMessage {
             .delivery
             .take()
             .expect("NatsTestMessage ack/nack invoked twice");
-        delivery.delivered += 1;
-        if matches!(self.model, DeliveryModel::Core) {
-            return ready(Err(AckError::Unsupported));
+        if let Err(unsupported) = self.model.settles() {
+            return ready(Err(unsupported));
         }
+        delivery.delivered += 1;
         let requeue = self.requeue.clone();
         if let Some(coordinator) = self.coordinator.clone() {
             let counter = coordinator.clone();

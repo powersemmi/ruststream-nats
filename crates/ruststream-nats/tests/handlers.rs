@@ -373,6 +373,48 @@ async fn a_deferred_retry_comes_back_through_the_publisher_the_mount_named() {
     tb.shutdown().await.expect("shutdown");
 }
 
+// ------------------------------------------------------------ settling what the model settles
+
+/// Asks for an immediate retry on the first delivery and acknowledges every later one, so a
+/// redelivery shows up as a second call.
+#[subscriber("orders.retried")]
+async fn retry_once(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> HandlerOutcome {
+    let _ = order.id;
+    if ctx.state().0.fetch_add(1, Ordering::SeqCst) == 0 {
+        HandlerOutcome::retry()
+    } else {
+        HandlerOutcome::ack()
+    }
+}
+
+/// Core NATS stores nothing and acknowledges nothing, so the requeue a retry asks for is refused
+/// and, with no cap declared to make the framework publish a copy, the message never comes back.
+/// The harness still reads the answer the handler gave; what shows the transport is the second
+/// delivery that does not happen.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_core_subject_does_not_redeliver_a_retried_delivery() {
+    let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .on_startup(async move |()| Ok::<_, Infallible>(Attempts::default()))
+        .with_broker(NatsTestBroker::new(), |b| {
+            b.include(retry_once);
+        });
+    let tb = TestApp::start(app).await.expect("start");
+
+    tb.message(&Order { id: 12 })
+        .to("orders.retried")
+        .publish()
+        .await
+        .expect("publish");
+
+    tb.broker::<NatsTestBroker>()
+        .subscriber("orders.retried")
+        .assert_called_once()
+        .assert_outcome(Outcome::Nack)
+        .settled(HandlerOutcome::retry());
+
+    tb.shutdown().await.expect("shutdown");
+}
+
 // ------------------------------------------------------------------- capping the retries
 
 /// Never ready: every delivery asks to come back later, so only the declared cap ends the circle.

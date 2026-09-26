@@ -19,8 +19,10 @@
 //!   ([`Publisher`](ruststream::Publisher) + [`RequestReply`](ruststream::RequestReply) for Core,
 //!   `Publisher` alone for `JetStream`);
 //! * [`NatsTestSubscriber`] / [`NatsTestMessage`] - `Subscriber` and `IncomingMessage` impls
-//!   with `nack(requeue=true)` redelivery (re-sent into the same subscriber's queue) and its
-//!   delayed form, whose timer the harness drives.
+//!   that settle by the subscription's model, as a server does: a `JetStream` consumer's
+//!   `nack(requeue = true)` re-sends the delivery into the same subscription, and its delayed
+//!   form waits on a timer the harness drives; a Core delivery answers `ack` and `nack` with
+//!   [`AckError::Unsupported`](ruststream::AckError::Unsupported) and is not delivered again.
 //!
 //! No `nats-server`, no docker, no network. Broker-specific edge cases (the `JetStream` durable's
 //! cursor and its resume, `ack_wait` redelivery, `max_ack_pending`, retention) are out of scope

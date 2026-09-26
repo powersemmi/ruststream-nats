@@ -136,9 +136,10 @@ impl DescribeServer for NatsTestBroker {
 ///
 /// `publish` performs NATS subject matching (`*` per-token, `>` tail) and hands the message to
 /// every matching subscriber's channel, one per competing set (see
-/// [`subscribe_with`](Self::subscribe_with)); ack/nack are no-ops on the broker side (Core NATS
-/// has no ack concept) and `nack(requeue=true)` re-sends to the same subscriber's queue. It
-/// implements
+/// [`subscribe_with`](Self::subscribe_with)). A delivery settles the way its model settles on a
+/// server: through a `JetStream` consumer `nack(requeue = true)` re-sends it to the same
+/// subscriber's queue, and on a Core subject `ack` and `nack` report
+/// [`AckError::Unsupported`](ruststream::AckError::Unsupported). It implements
 /// [`TestableBroker`], so it drives both the [`TestApp`](ruststream::testing::TestApp) harness and
 /// the framework's conformance suite in process, with no server.
 #[derive(Clone, Debug)]

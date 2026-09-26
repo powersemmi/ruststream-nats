@@ -379,6 +379,7 @@ jobs:
           RUSTSTREAM_REQUIRE_LIVE: "1"
         run: >-
           cargo test -p ruststream-nats --all-features
+          --test both_modes
           --test integration_nats
           --test integration_nats_batch
           --test integration_nats_consumer

@@ -131,12 +131,6 @@ mod sealed {
 
     pub trait Sealed {
         fn plan(&self) -> SubscriptionPlan<'_>;
-
-        /// Moves the subject out, dropping the rest. The in-process transport routes on the
-        /// subject alone, so it takes the string rather than copying it.
-        fn into_subject(self) -> String
-        where
-            Self: Sized;
     }
 }
 
@@ -265,10 +259,6 @@ impl Sealed for CoreSubject {
             queue_group: self.queue_group.as_deref(),
         }
     }
-
-    fn into_subject(self) -> String {
-        self.subject
-    }
 }
 
 /// A pattern subscribed to over Core NATS: `orders.*`, `orders.>`, `>`.
@@ -324,10 +314,6 @@ impl Sealed for CoreWildcard {
         SubscriptionPlan::Core {
             queue_group: self.queue_group.as_deref(),
         }
-    }
-
-    fn into_subject(self) -> String {
-        self.subject
     }
 }
 
@@ -551,10 +537,6 @@ impl Sealed for JetStreamSubject {
                 .pull_expires
                 .map_or(DEFAULT_PULL_EXPIRES, NonZeroDuration::get),
         }
-    }
-
-    fn into_subject(self) -> String {
-        self.subject
     }
 }
 

@@ -34,6 +34,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_nats::{ConnectOptions, ServerAddr};
+use tokio::runtime::Handle;
 
 pub(crate) use bus::{Bus, Origin, PublishMode, Settings};
 pub(crate) use delivery::{Consumer, Feed, JetStreamDelivery, Release};
@@ -45,7 +46,12 @@ use crate::subscriber::NatsSubscriber;
 use bus::ConsumerSpec;
 use subject::{SubjectPattern, check_queue_group};
 
-/// The in-process connection for a broker configured with `addrs` and `options`.
+/// The in-process connection for a broker configured with `addrs` and `options`, keeping the
+/// runtime it is called on as the one the broker connected on.
+///
+/// # Panics
+///
+/// Panics outside a Tokio runtime, as the client's `connect` does.
 ///
 /// # Errors
 ///
@@ -54,7 +60,7 @@ pub(crate) fn connect(addrs: &str, options: &ConnectOptions) -> Result<Arc<Bus>,
     for addr in addrs.split(',') {
         ServerAddr::from_str(addr.trim()).map_err(|err| NatsError::Connect(Box::new(err)))?;
     }
-    Ok(Bus::new(settings(options)?))
+    Ok(Bus::new(settings(options)?, Handle::current()))
 }
 
 /// Reads the options that change what the server delivers.
@@ -206,8 +212,9 @@ mod tests {
         assert_eq!(escaped.inbox_prefix, r#"_S"V\C"#);
     }
 
-    #[test]
-    fn an_address_the_client_refuses_is_refused() {
+    // A runtime to connect on, as the client's own connect needs one.
+    #[tokio::test]
+    async fn an_address_the_client_refuses_is_refused() {
         assert!(connect("nats://localhost:4222", &ConnectOptions::new()).is_ok());
         assert!(connect("nats://a:4222, nats://b:4222", &ConnectOptions::new()).is_ok());
         assert!(matches!(

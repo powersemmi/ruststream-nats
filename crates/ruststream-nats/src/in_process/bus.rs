@@ -493,6 +493,16 @@ impl Bus {
             stream: spec.stream.to_owned(),
             name: name.to_owned(),
         });
+        // The client creates or updates the consumer: a durable has one filter, the one it was
+        // last opened with, and every subscription on it reads through that filter, what the
+        // durable already holds included.
+        if let Some(group) = group.as_ref().filter(|_| existed) {
+            for member in state.subscriptions.values_mut() {
+                if member.group.as_ref() == Some(group) {
+                    member.pattern = spec.filter.clone();
+                }
+            }
+        }
         let kind = Kind::JetStream {
             stream: spec.stream.to_owned(),
         };

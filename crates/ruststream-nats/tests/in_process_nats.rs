@@ -585,6 +585,32 @@ async fn a_durable_hands_what_a_closed_subscription_left_to_the_next_one() {
     assert_eq!(again.redelivery_count(), Some(2));
 }
 
+// A durable has one filter, the one it was last opened with: the client creates or updates the
+// consumer, so a second subscription with another filter moves both onto it.
+#[tokio::test(start_paused = true)]
+async fn a_durable_reads_through_the_filter_it_was_last_opened_with() {
+    let broker = connected().await;
+    let durable = |filter| JetStreamSubject::new(filter, "ORDERS").durable("mixed");
+    let mut first = broker
+        .subscribe_with(durable("orders.a.*"))
+        .await
+        .expect("subscribe");
+    let mut second = broker
+        .subscribe_with(durable("orders.b.*"))
+        .await
+        .expect("subscribe");
+    let publisher = broker.publisher(NatsPublish);
+    for subject in ["orders.a.created", "orders.b.created"] {
+        publisher
+            .publish(OutgoingMessage::new(subject, subject.as_bytes()), None)
+            .await
+            .expect("publish");
+    }
+    let mut read = waiting(&mut first);
+    read.extend(waiting(&mut second));
+    assert_eq!(read, [b"orders.b.created".to_vec()]);
+}
+
 // A publish racing the shutdown either lands before it, counted, or is refused: the bus never
 // takes a message once it has closed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

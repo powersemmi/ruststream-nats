@@ -63,6 +63,19 @@ async fn in_process_passes_lifecycle() {
     .await;
 }
 
+// A consumer's delivery offers a delayed nack, so this run also settles one from a runtime that
+// stops at once: the redelivery has to come back on the runtime the broker connected on.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_process_consumer_passes_lifecycle() {
+    harness::lifecycle(
+        in_process,
+        |subject| JetStreamSubject::new(subject, "CONFORMANCE"),
+        |connected| connected.publisher(NatsPublish),
+    )
+    .await;
+}
+
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn passes_lifecycle() {
@@ -75,6 +88,39 @@ async fn passes_lifecycle() {
         |connected| connected.publisher(NatsPublish),
     )
     .await;
+}
+
+// The live consumer settles a delayed nack on the server, from a runtime that stops at once.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_passes_lifecycle() {
+    let Some(url) = nats_url() else {
+        return;
+    };
+    let stream = format!("RS_CONF_LIFECYCLE_{}", std::process::id());
+    let connected = NatsBroker::new(url.clone())
+        .connect()
+        .await
+        .expect("connect failed");
+    connected
+        .jetstream()
+        .create_stream(StreamConfig {
+            name: stream.clone(),
+            subjects: vec!["conformance.lifecycle.>".to_owned()],
+            ..Default::default()
+        })
+        .await
+        .expect("create_stream failed");
+
+    harness::lifecycle(
+        || NatsBroker::new(url.clone()),
+        |subject| JetStreamSubject::new(subject, stream.clone()),
+        |connected| connected.publisher(NatsPublish),
+    )
+    .await;
+
+    let _ = connected.jetstream().delete_stream(&stream).await;
+    connected.shutdown().await.expect("shutdown failed");
 }
 
 // A descriptor that addresses its own retry copies promises that a publish to the address it

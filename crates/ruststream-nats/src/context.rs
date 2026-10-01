@@ -93,7 +93,7 @@ struct JetStreamInfo {
 impl BuildContext<NatsMessage> for JetStreamContext {
     fn build(msg: &NatsMessage) -> Self {
         let info = match msg {
-            NatsMessage::JetStream(m) => m.info().map(|i| JetStreamInfo {
+            NatsMessage::JetStream(m) => m.metadata().map(|i| JetStreamInfo {
                 stream: i.stream.to_owned(),
                 consumer: i.consumer.to_owned(),
                 stream_sequence: i.stream_sequence,
@@ -107,34 +107,14 @@ impl BuildContext<NatsMessage> for JetStreamContext {
     }
 }
 
-/// The in-process transport carries no `JetStream` metadata, exactly as a core delivery does not,
-/// so the context it builds is the empty one and every key reads `None`.
-///
-/// This is what makes a handler bound to these keys unit-testable. Without it the mount bound
-/// `Cx: BuildContext<S::Message>` would hold for the real broker and not for its test transport,
-/// so such a handler could only ever run against a server.
-#[cfg(feature = "testing")]
-impl BuildContext<crate::testing::NatsTestMessage> for JetStreamContext {
-    fn build(_msg: &crate::testing::NatsTestMessage) -> Self {
-        Self::default()
-    }
-}
-
 // Compile-time guarantee that the context is buildable from the subscriber's actual delivery type,
 // so a handler declaring `Context<'_, JetStreamContext>` satisfies the runtime's
-// `Cx: BuildContext<S::Message>` mount bound. The JetStream `build` arm itself is only exercised
-// against a real server (`async_nats::jetstream::Message` has no in-process constructor), so this
-// type-level check is what validates the mount path here.
+// `Cx: BuildContext<S::Message>` mount bound.
 const _: fn() = || {
     fn assert_build_context<C: BuildContext<M>, M>() {}
     assert_build_context::<
         JetStreamContext,
         <crate::NatsSubscriber as ruststream::Subscriber>::Message,
-    >();
-    #[cfg(feature = "testing")]
-    assert_build_context::<
-        JetStreamContext,
-        <crate::testing::NatsTestSubscriber as ruststream::Subscriber>::Message,
     >();
 };
 

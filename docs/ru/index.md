@@ -6,7 +6,8 @@
 запрос и дождаться ответа. Публикация в JetStream заявляет, чего она ждёт от стрима, и стрим
 отвергает её, когда ожидание не выполнено.
 
-Фича `testing` выполняет обработчики сервиса внутри процесса, без сервера NATS.
+С фичей `testing` тест запускает рабочее приложение сервиса: `NatsBroker` работает внутри процесса,
+без сервера NATS, или подключается к живому серверу.
 
 ```toml
 [dependencies]
@@ -39,8 +40,8 @@ ruststream-nats = { version = "0.7", features = ["testing"] }
 - [Подтверждение и отложенная повторная доставка](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#acknowledgement-and-delayed-retry):
   консьюмер JetStream закрывает доставку на сервере, а субъект Core NATS не закрывает её вовсе.
 - [Документ AsyncAPI](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#the-asyncapi-document),
-  который заполняет крейт, и [транспорт внутри процесса](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#testing),
-  на котором выполняется тест.
+  который заполняет крейт, и [тестирование](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#testing):
+  рабочее приложение под обвязкой `TestApp`, внутри процесса или против живого сервера.
 
 ## Куда идти дальше {#where-to-go-next}
 

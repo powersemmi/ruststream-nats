@@ -5,7 +5,8 @@ subject 上，并向这些 subject 发布消息。一个处理器绑定到 Core 
 JetStream 消费者。NATS 会把回复和请求对应起来，因此服务可以发出一次请求并等待答复。JetStream 的
 一次发布会说明它对流的期望，期望不成立时流就拒绝这次发布。
 
-`testing` feature 在进程内运行服务的处理器，不需要 NATS 服务器。
+启用 `testing` feature 后，测试运行服务的生产应用：`NatsBroker` 在进程内运行，不需要 NATS 服务器，
+也可以对着运行中的服务器。
 
 ```toml
 [dependencies]
@@ -39,7 +40,8 @@ crate 参考就是这一切的教科书，每个主题在其中都是一节：
   JetStream 消费者在服务器上了结一次投递，Core NATS 的 subject 则根本不了结。
 - crate 填写的
   [AsyncAPI 文档](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#the-asyncapi-document)，
-  以及测试所运行的[进程内传输](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#testing)。
+  以及[测试](https://docs.rs/ruststream-nats/latest/ruststream_nats/index.html#testing)：`TestApp`
+  测试套件下的生产应用，在进程内运行，或对着运行中的服务器。
 
 ## 接下来读什么 { #where-to-go-next }
 

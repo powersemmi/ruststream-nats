@@ -9,6 +9,6 @@
     "Only a `JetStream` delivery settles on the server: a core delivery reports `AckError::Unsupported` and its `retry_after` becomes a copy the framework publishes, which is at-most-once.",
     "Send a request with `request(msg, timeout)` on the Core publisher, which correlates the reply natively; there is no separate `Request` policy in this prelude, and a responder reads the inbox from the `reply-to` header.",
     "Read native `JetStream` metadata (stream and consumer sequence, delivery count, pending) by binding a `ruststream_nats::context::keys` key as a `Ctx<K>` parameter; every key reads `None` on a core delivery.",
-    "Test with `ruststream::testing::TestApp` over `ruststream_nats::testing::NatsTestBroker` (feature `testing`), and leave what only a server holds - the publish acknowledgement, the stream expectations, the durable's cursor - to a live suite gated by `NATS_TEST_URL`."
+    "Test the production app: with feature `testing`, hand the builder `main` runs to `ruststream::testing::TestApp::start`, which connects `NatsBroker` in process, and address it as `tb.broker::<NatsBroker>()`; `TestApp::start_live` runs the same test against a real NATS server, which is where a stream's own configuration and limits are exercised."
   ]
 }

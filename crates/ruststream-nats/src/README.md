@@ -11,7 +11,7 @@ How a handler is written, how routing, codecs, middleware and the CLI work, is d
 the core crate:
 [`ruststream::runtime`](https://docs.rs/ruststream/latest/ruststream/runtime/index.html).
 This page is the NATS half: the descriptors, the publish policies, the per-message settings, and
-what the in-process transport does and does not reproduce.
+how a test runs the production app with the broker in process.
 
 # A service
 
@@ -416,7 +416,7 @@ own.
 
 Two vocabularies, one per file. A handler body imports `ruststream::prelude::*` and bounds an
 injected slot with the capability it needs (`Out<impl Publisher>`, `Out<impl RequestReply>`), so it
-names no broker and mounts on a server and on the in-process transport unchanged. A routes file
+names no broker and mounts under whichever publish policy the routes file pairs it with. A routes file
 imports this prelude and names policies, where the broker is already chosen. The single exception
 is a body that writes a per-message `JetStream` setting, which takes this prelude and says so in
 its signature.
@@ -446,9 +446,12 @@ anything is dialled, so it is read from [`ConnectedNatsBroker::server_spec`] ins
 
 # Testing
 
-The `testing` feature ships an in-process transport with real NATS subject matching, header
-propagation and request-reply, and no `nats-server`: see [`testing`]. It drives the framework's
-`TestApp` harness, whose vocabulary is documented with the core crate:
+A test hands the framework's `TestApp` harness the service's production app, the one `main`
+runs, and addresses the broker by its production type, `tb.broker::<NatsBroker>()`. With the
+`testing` feature enabled in the service's `[dev-dependencies]`, [`TestApp::start`] connects
+[`NatsBroker`] in process: no `nats-server`, the same descriptors, policies and deliveries.
+[`TestApp::start_live`] connects the same app to a running server, and the same test body runs in
+both modes. The harness vocabulary is documented with the core crate:
 [`ruststream::testing`](https://docs.rs/ruststream/latest/ruststream/testing/index.html).
 
 ```rust
@@ -456,7 +459,6 @@ propagation and request-reply, and no `nats-server`: see [`testing`]. It drives 
 # mod demo {
 use ruststream::testing::TestApp;
 use ruststream_nats::prelude::*;
-use ruststream_nats::testing::NatsTestBroker;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
@@ -475,20 +477,24 @@ async fn confirm(order: &Order) -> Confirmation {
     Confirmation { id: order.id }
 }
 
-pub async fn confirms_an_order() -> Result<(), Box<dyn std::error::Error>> {
-    let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
-        .with_broker(NatsTestBroker::new(), |b| {
+/// The app `main` runs, and the one the tests hand the harness.
+pub fn app() -> impl App {
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
             b.include(confirm).out_reply(Publish);
-        });
-    let tb = TestApp::start(app).await?;
+        })
+}
 
-    tb.broker::<NatsTestBroker>()
+pub async fn confirms_an_order() -> Result<(), Box<dyn std::error::Error>> {
+    let tb = TestApp::start(app()).await?;
+
+    tb.broker::<NatsBroker>()
         .message(&Order { id: 1 })
         .to("orders.created")
         .publish()
         .await?;
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Confirmation>("confirmations")
         .assert_called_once()
         .with(&Confirmation { id: 1 });
@@ -497,37 +503,50 @@ pub async fn confirms_an_order() -> Result<(), Box<dyn std::error::Error>> {
 }
 # }
 # #[cfg(feature = "testing")]
-# fn main() {
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 #     tokio::runtime::Builder::new_multi_thread()
 #         .enable_all()
-#         .build()
-#         .unwrap()
+#         .build()?
 #         .block_on(demo::confirms_an_order())
-#         .unwrap();
 # }
 # #[cfg(not(feature = "testing"))]
 # fn main() {}
 ```
 
-The routes file above is the production one. Both policies pair against the test broker, `Publish`
-is its default policy too, and each live form carries exactly the capabilities its production
-counterpart carries, so a slot that compiles here compiles against a server. Competing consumers
-compete: a Core `queue_group`, and the subscriptions sharing a `JetStream` `durable`, take each
-message in turn. A per-message setting arrives as the same protocol header the real client writes,
-and `with_options` reads it back. A delayed retry takes the path its own model takes, and
-`tb.advance(delay)` fires the timer under a paused clock.
+The in-process transport has no settings of its own. The addresses are parsed as `connect` parses
+them, and the connection options that change what the server delivers (`no_echo`, the inbox
+prefix) are the ones [`NatsBroker::with_options`] set. It routes as a server routes:
 
-Settlement follows the model as well. A `JetStream` delivery is acknowledged, requeued and dropped
-here as on a server. A Core delivery reports `AckError::Unsupported` from `ack` and `nack` and is
-never requeued, so what brings it back is the copy the framework publishes, here as against a
-server. The harness still reads back the answer the handler gave.
+* a Core subscription receives every message whose subject its subject matches, `*` standing for
+  one token and `>` for the rest;
+* a queue group delivers each message to one of its members, and one group name is one group over
+  every subject its members subscribe to;
+* a stream stores what its consumers' filter subjects place in it, and a consumer receives what
+  its stream stores under its filter; subscriptions sharing a `durable` share one consumer and take
+  each message in turn;
+* a request to a subject nobody subscribes to fails at once with "no responders".
 
-What the transport does not reproduce is the server's own state: the durable's cursor and its
-resume, `ack_wait` redelivery, `max_ack_pending`, retention, and on the publish side the stream
-itself. There is no acknowledgement to await and no stream state to check an expectation against,
-so a publish that violates one succeeds here where a server would refuse it. An
-optimistic-concurrency chain therefore proves nothing until it runs live, against a server gated
-behind `NATS_TEST_URL`.
+A stream keeps its sequences, its deduplication window and the expectations a publish states, so
+`publish_ack` answers with the stream and sequence, a repeated `Nats-Msg-Id` is acknowledged as a
+duplicate, and a violated expectation is refused as the server refuses it. A consumer starts where
+its `deliver_policy` says, numbers its deliveries, and a handler reads the metadata keys of
+[`context`] as against a server. A `JetStream` delivery is acknowledged, requeued, terminated and
+held back for a delay here as on a server, and one dropped unsettled comes back after `ack_wait`.
+A Core delivery reports `AckError::Unsupported` from `ack` and `nack` and is never requeued, so what
+brings it back is the copy the framework publishes. `tb.advance(delay)` fires a delayed
+redelivery under a paused clock, and lets the delay pass for real in live mode.
+
+The transport refuses what the client or the server refuses: a subject with whitespace, a header
+with no NATS form, a message over the server's default payload limit of 1 MiB, a `JetStream`
+publish no stream takes, a name a stream or a durable cannot have, and any publish or
+acknowledgement once the broker has shut down. A stream is known to it from the moment a
+subscription or a publish names it, and a subscription finds every stream it names; a stream's own
+subject list and limits, `max_ack_pending` and a subscription's pending limits are the server's,
+and a live test asserts them. [`ConnectedNatsBroker::client`] and
+[`ConnectedNatsBroker::jetstream`] panic on a broker connected in process, which has no client.
+
+[`TestApp::start`]: https://docs.rs/ruststream/latest/ruststream/testing/struct.TestApp.html#method.start
+[`TestApp::start_live`]: https://docs.rs/ruststream/latest/ruststream/testing/struct.TestApp.html#method.start_live
 
 # Operations
 
@@ -554,8 +573,7 @@ core message is lost.
 
 Both are off by default and additive.
 
-* `testing`: the in-process transport in [`testing`], for application unit tests and for the
-  framework's conformance suite.
+* `testing`: the broker's in-process mode, which `TestApp::start` connects; see [Testing](#testing).
 * `asyncapi`: the protocol bindings this crate contributes to the generated document.
 
 Everything else is the core crate's: enable `macros` and a codec there, and `testing` there for the

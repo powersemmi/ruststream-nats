@@ -1,7 +1,7 @@
 <h1 align="center">ruststream-nats</h1>
 
 <p align="center">
-  <i>The NATS broker for the <a href="https://github.com/powersemmi/ruststream">RustStream</a> messaging framework: Core NATS and JetStream, request/reply, and an in-process test broker.</i>
+  <i>The NATS broker for the <a href="https://github.com/powersemmi/ruststream">RustStream</a> messaging framework: Core NATS and JetStream, request/reply, and tests that run the production app in process.</i>
 </p>
 
 <p align="center">
@@ -36,7 +36,8 @@ from the framework; this crate is the transport.
 - **Two publishers:** Core NATS with request/reply, and JetStream with the stream's
   acknowledgement and per-message deduplication ids and position expectations.
 - **AsyncAPI** with the specification's `nats` binding, behind the `asyncapi` feature.
-- **Tests without a server:** handlers run against an in-process NATS.
+- **Tests run the production app:** `TestApp::start(app())` connects `NatsBroker` in process, with
+  no server.
 
 ## Install
 
@@ -98,29 +99,31 @@ cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nat
 
 ## Test it
 
-`TestApp` runs the handlers against an in-process NATS, with no server.
+The app `main` runs, handed to the harness unchanged: `TestApp::start` connects `NatsBroker` in
+process, with no server, and the test addresses it by that type.
 
 ```rust
 use ruststream::testing::TestApp;
-use ruststream_nats::prelude::*;
-use ruststream_nats::testing::NatsTestBroker;
 
-let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
-    .with_broker(NatsTestBroker::new(), |b| {
-        b.include(confirm);
-    });
-let tb = TestApp::start(app).await?;
+let tb = TestApp::start(app()).await?;
 
-tb.publish("orders", &Order { id: 1, quantity: 2 }).await?;
+// `publish` returns once the handlers it woke have settled.
+tb.broker::<NatsBroker>()
+    .message(&Order { id: 1, quantity: 2 })
+    .to("orders")
+    .publish()
+    .await?;
 
-tb.broker::<NatsTestBroker>()
+tb.broker::<NatsBroker>()
     .subscriber("orders")
     .assert_called_once()
     .settled(HandlerOutcome::ack());
-tb.broker::<NatsTestBroker>()
+tb.broker::<NatsBroker>()
     .published::<Confirmation>("confirmations")
     .assert_called_once();
 ```
+
+`TestApp::start_live(app())` runs the same test against a running server (`just test-brokers`).
 
 ## Documentation
 

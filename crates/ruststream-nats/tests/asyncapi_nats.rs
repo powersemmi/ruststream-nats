@@ -4,15 +4,14 @@
 //! here comes from a descriptor or a publish policy and nothing waits for a server. The excerpts
 //! the documentation shows are taken from this file.
 
-#![cfg(all(feature = "testing", feature = "asyncapi"))]
+#![cfg(feature = "asyncapi")]
 
 use ruststream::asyncapi::build_spec;
-use ruststream::conformance::harness;
+use ruststream::conformance::{harness, message_shape};
 use ruststream::nonzero;
 use ruststream::runtime::{Names, Outgoing, PublishContext};
-use ruststream_nats::DeliverPolicy;
 use ruststream_nats::prelude::*;
-use ruststream_nats::testing::NatsTestBroker;
+use ruststream_nats::{ConnectedNatsBroker, DeliverPolicy, NatsPublish};
 use serde::{Deserialize, Serialize};
 
 /// The message the handlers below carry. No declared destination: each mount names one.
@@ -195,43 +194,6 @@ fn a_redirected_reply_still_names_the_subject_its_stream_serves() {
     );
 }
 
-/// The in-process broker answers the production answer, so a document built over the test broker
-/// describes the service that ships.
-#[test]
-fn the_test_broker_describes_the_publisher_the_service_ships() {
-    let app =
-        RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(NatsTestBroker::new(), |b| {
-            b.include(answer)
-                .out_reply(JetStreamPublish::default().expect_stream("RECEIPTS"));
-        });
-    let json = build_spec(&app)
-        .to_json()
-        .expect("the document must serialize");
-    let document: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-    let channel = &document["channels"]["orders.answers"]["bindings"]["x-ruststream-jetstream"];
-
-    assert_eq!(channel["expectedStream"], "RECEIPTS");
-    assert_eq!(channel["subject"], "orders.answers");
-}
-
-/// The Core NATS reply address is the test broker's answer too.
-#[test]
-fn the_test_broker_reports_the_header_a_reply_address_travels_in() {
-    let app =
-        RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(NatsTestBroker::new(), |b| {
-            b.include(answer).out_reply(Publish).transform(ReplyTo);
-        });
-    let json = build_spec(&app)
-        .to_json()
-        .expect("the document must serialize");
-    let document: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
-
-    assert_eq!(
-        document["operations"]["receive_orders_asks"]["reply"]["address"]["location"],
-        "$message.header#/reply-to"
-    );
-}
-
 /// The scan the framework ships for exactly this mistake: a password in a configuration URL must
 /// not reach a document that is published and shared.
 #[test]
@@ -239,6 +201,27 @@ fn nothing_the_broker_describes_carries_a_password() {
     harness::describes_without_credentials(
         &NatsBroker::new("nats://svc:hunter2@nats.example.com:4222"),
         &CoreSubject::new("orders.created").queue_group("workers"),
+        "hunter2",
+    );
+}
+
+/// A cluster is configured as one comma-separated setting, and each of its URLs may carry a user
+/// and a password.
+#[test]
+fn no_address_of_a_cluster_carries_a_password() {
+    message_shape::describes_addresses_without_credentials(
+        |addrs| NatsBroker::new(addrs.join(",")),
+        "nats",
+    );
+}
+
+/// The publish policies describe the positions they are bound on; a stream name is all a
+/// deployment configures on one, and a password never reaches it.
+#[test]
+fn no_publish_policy_carries_a_password() {
+    message_shape::publishes_without_credentials::<ConnectedNatsBroker, _>(&NatsPublish, "hunter2");
+    message_shape::publishes_without_credentials::<ConnectedNatsBroker, _>(
+        &JetStreamPublish::default().expect_stream("ORDERS"),
         "hunter2",
     );
 }

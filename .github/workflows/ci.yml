@@ -89,7 +89,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2.87.18
+        uses: taiki-e/install-action@v2.87.20
         with:
           tool: cargo-deny
 
@@ -135,13 +135,13 @@ jobs:
 
       - name: Install cargo-hack
         if: "!cancelled() && env.RUST_CHANGED == 'true'"
-        uses: taiki-e/install-action@v2.87.18
+        uses: taiki-e/install-action@v2.87.20
         with:
           tool: cargo-hack
 
       - name: Install cargo-generate
         if: "!cancelled() && env.TEMPLATES_CHANGED == 'true'"
-        uses: taiki-e/install-action@v2.87.18
+        uses: taiki-e/install-action@v2.87.20
         with:
           tool: cargo-generate
 
@@ -379,6 +379,7 @@ jobs:
           RUSTSTREAM_REQUIRE_LIVE: "1"
         run: >-
           cargo test -p ruststream-nats --all-features
+          --test both_modes
           --test integration_nats
           --test integration_nats_batch
           --test integration_nats_consumer

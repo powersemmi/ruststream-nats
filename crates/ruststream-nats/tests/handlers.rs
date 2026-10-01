@@ -1,4 +1,5 @@
-//! The service surface, driven in process through `TestApp` on the NATS test broker.
+//! The service surface, driven in process through `TestApp`: each test hands the harness an app
+//! built on the production `NatsBroker`, which the harness connects in process.
 //!
 //! Every handler here is what a NATS service actually writes, and every assertion goes through the
 //! framework's own harness: input rides the publish builder, the publish drives the whole reaction
@@ -8,7 +9,7 @@
 //!
 //! What genuinely needs a server - the `JetStream` protocol, the live connection's own contracts -
 //! lives in `integration_nats.rs`. What the in-process transport itself must do lives in
-//! `testing_core.rs`.
+//! `in_process_nats.rs`.
 
 #![cfg(feature = "testing")]
 
@@ -19,15 +20,15 @@ use std::time::Duration;
 
 // The derive and the value a transform reads share the name in different namespaces: the derive
 // on the types below is the macro the prelude carries, the value here is the type.
-use ruststream::runtime::{Outgoing, PublishContext, RETRY_COUNT_HEADER};
+use ruststream::runtime::{BrokerScope, Outgoing, PublishContext, RETRY_COUNT_HEADER};
 use ruststream::testing::{Outcome, TestApp};
 use ruststream_nats::PARTITION_KEY_HEADER;
 use ruststream_nats::context::keys::{Delivered, StreamSequence};
 use ruststream_nats::prelude::*;
-// Only the broker differs from a production routes file: the policies below are the ones the
-// prelude carries, so every mount here is spelled exactly as the service ships it.
-use ruststream_nats::testing::NatsTestBroker;
 use serde::{Deserialize, Serialize};
+
+/// The address the service's broker is built with. `TestApp::start` dials nothing.
+const URL: &str = "nats://localhost:4222";
 
 /// How long the deferring handler asks the broker to hold a message.
 const RETRY_DELAY: Duration = Duration::from_secs(30);
@@ -38,11 +39,13 @@ struct Order {
     id: u64,
 }
 
+/// The service's app, built on the production broker as `main` builds it. `TestApp::start` runs
+/// it in process.
 fn app<F>(build: F) -> RustStream
 where
-    F: FnOnce(&mut ruststream::runtime::BrokerScope<NatsTestBroker>),
+    F: FnOnce(&mut BrokerScope<NatsBroker>),
 {
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsTestBroker::new(), build)
+    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), build)
 }
 
 // --------------------------------------------------------------------- a body receives its input
@@ -67,7 +70,7 @@ async fn a_body_receives_the_value_that_was_published() {
         .await
         .expect("publish");
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.created")
         .assert_called_once()
         .with(&Order { id: 1 })
@@ -136,7 +139,7 @@ async fn a_body_reads_the_headers_the_delivery_arrived_with() {
     headers.insert("Content-Type", "application/json");
     headers.insert("X-Trace-Id", "abc-123");
     headers.insert(PARTITION_KEY_HEADER, "tenant-abc");
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .message(&Order { id: 2 })
         .to("orders.traced")
         .with_headers(headers)
@@ -156,7 +159,7 @@ async fn a_body_reads_the_headers_the_delivery_arrived_with() {
 
     // A delivery without the contract never reaches the body: the extractor settles it by the
     // decode failure policy, which drops by default.
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .message(&Order { id: 3 })
         .to("orders.traced")
         .publish()
@@ -164,7 +167,7 @@ async fn a_body_reads_the_headers_the_delivery_arrived_with() {
         .expect("publish");
 
     tb.out::<Audit>().assert_called_once();
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.traced")
         .assert_outcome(Outcome::DecodeFailed)
         .settled(HandlerOutcome::drop());
@@ -206,14 +209,12 @@ async fn record_metadata(
     HandlerOutcome::ack()
 }
 
-// A JetStream-configured source resolves against the in-process transport too, and so does the
-// JetStream policy on the way out - the mount is spelled here exactly as a stream-to-stream
-// service spells it. The native metadata the transport has none of reads `None`, which is the
-// whole reason a handler bound to those keys is testable without a server. What the numbers
-// actually are, and whether the stream accepts the publish at all, are JetStream facts asserted
-// against one.
+// A JetStream-configured source resolves against the in-process transport, and so does the
+// JetStream policy on the way out: the mount is spelled here exactly as a stream-to-stream service
+// spells it. The consumer numbers its deliveries as a server does, so the first message of the
+// stream is at sequence 1 and on its first delivery.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_jetstream_handler_reads_no_native_metadata_in_process() {
+async fn a_jetstream_handler_reads_the_native_metadata_in_process() {
     let tb = TestApp::start(app(|b| {
         b.include(record_metadata)
             .out(
@@ -236,10 +237,10 @@ async fn a_jetstream_handler_reads_no_native_metadata_in_process() {
         .decoded_as::<Seen>()
         .with(&Seen {
             id: 4,
-            stream_sequence: None,
-            delivered: None,
+            stream_sequence: Some(1),
+            delivered: Some(1),
         });
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.durable")
         .assert_called_once()
         .settled(HandlerOutcome::ack());
@@ -280,7 +281,7 @@ async fn a_batch_mount_names_its_size_and_the_body_is_handed_whole_batches() {
     // A harness publish drives the reaction to a standstill before it returns, and the in-process
     // transport ships a partial batch immediately rather than holding it for a deadline, so each
     // delivery closes a batch of its own: the size caps a batch, it never holds one open.
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.bulk")
         .assert_batch_sizes(&[1, 1, 1])
         .settled(HandlerOutcome::ack());
@@ -334,8 +335,8 @@ impl<Cx, Options> PublishTransform<ForReply<Cx>, Options> for DeferredStamp {
 #[tokio::test(start_paused = true)]
 async fn a_deferred_retry_comes_back_through_the_publisher_the_mount_named() {
     let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
-        .on_startup(|()| async { Ok::<_, Infallible>(Attempts::default()) })
-        .with_broker(NatsTestBroker::new(), |b| {
+        .on_startup(async move |()| Ok::<_, Infallible>(Attempts::default()))
+        .with_broker(NatsBroker::new(URL), |b| {
             b.include(defer_once)
                 .out_retry(Publish)
                 .transform(DeferredStamp);
@@ -349,21 +350,21 @@ async fn a_deferred_retry_comes_back_through_the_publisher_the_mount_named() {
         .publish()
         .await
         .expect("publish");
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.deferred")
         .assert_called_once()
         .settled(HandlerOutcome::retry_after(RETRY_DELAY));
 
     // Advancing past the delay sends the copy and drives the redelivery to settle.
     tb.advance(RETRY_DELAY).await.expect("advance");
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.deferred")
         .assert_called(2)
         .settled(HandlerOutcome::ack());
 
     // The copy went out through the retry position: the subject saw the test's own publish and
     // then the deferred one, which carries the transform's stamp and the raised retry count.
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Order>("orders.deferred")
         .assert_called(2)
         .with(&Order { id: 5 })
@@ -395,7 +396,7 @@ async fn retry_once(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> Handl
 async fn a_core_subject_does_not_redeliver_a_retried_delivery() {
     let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
         .on_startup(async move |()| Ok::<_, Infallible>(Attempts::default()))
-        .with_broker(NatsTestBroker::new(), |b| {
+        .with_broker(NatsBroker::new(URL), |b| {
             b.include(retry_once);
         });
     let tb = TestApp::start(app).await.expect("start");
@@ -406,7 +407,7 @@ async fn a_core_subject_does_not_redeliver_a_retried_delivery() {
         .await
         .expect("publish");
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.retried")
         .assert_called_once()
         .assert_outcome(Outcome::Nack)
@@ -437,7 +438,7 @@ async fn never_ready_wild(order: &Order) -> HandlerOutcome {
 #[tokio::test(start_paused = true)]
 async fn a_capped_subject_sends_a_spent_delivery_to_the_dead_letter_subject() {
     let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), |b| {
             b.include(never_ready)
                 .max_attempts(nonzero!(2u32))
                 .dead_letter("orders.dead");
@@ -452,16 +453,16 @@ async fn a_capped_subject_sends_a_spent_delivery_to_the_dead_letter_subject() {
     tb.advance(RETRY_DELAY).await.expect("advance");
 
     // Two deliveries, which is the cap, and no third copy on the subject.
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.capped")
         .assert_called(2);
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Order>("orders.capped")
         .assert_called(2);
 
     // The spent delivery left for the declared destination, carrying its payload and the count it
     // reached.
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Order>("orders.dead")
         .assert_called_once()
         .with(&Order { id: 7 })
@@ -477,7 +478,7 @@ async fn a_capped_subject_sends_a_spent_delivery_to_the_dead_letter_subject() {
 #[tokio::test(start_paused = true)]
 async fn a_capped_pattern_takes_its_destination_from_the_mount_site() {
     let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), |b| {
             b.include(never_ready_wild)
                 .max_attempts(nonzero!(2u32))
                 .dead_letter("dead.wild")
@@ -493,10 +494,10 @@ async fn a_capped_pattern_takes_its_destination_from_the_mount_site() {
         .expect("publish");
     tb.advance(RETRY_DELAY).await.expect("advance");
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("wild.*")
         .assert_called(2);
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Order>("dead.wild")
         .assert_called_once()
         .with(&Order { id: 9 })
@@ -519,7 +520,7 @@ async fn never_ready_stream(order: &Order) -> HandlerOutcome {
 #[tokio::test(start_paused = true)]
 async fn a_capped_consumer_counts_the_deliveries_the_server_made() {
     let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), |b| {
             b.include(never_ready_stream)
                 .max_attempts(nonzero!(2u32))
                 .dead_letter("js.dead");
@@ -533,15 +534,15 @@ async fn a_capped_consumer_counts_the_deliveries_the_server_made() {
         .expect("publish");
     tb.advance(RETRY_DELAY).await.expect("advance");
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("js.capped")
         .assert_called(2);
     // Held by the consumer, not republished: the subject saw the test's own publish and nothing
     // else.
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Order>("js.capped")
         .assert_called_once();
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Order>("js.dead")
         .assert_called_once()
         .with(&Order { id: 11 });
@@ -554,7 +555,7 @@ async fn a_capped_consumer_counts_the_deliveries_the_server_made() {
 #[tokio::test(start_paused = true)]
 async fn a_pattern_with_no_named_destination_refuses_to_start() {
     let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsTestBroker::new(), |b| {
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), |b| {
             b.include(never_ready_wild);
         });
 
@@ -622,7 +623,7 @@ async fn a_responder_answers_on_the_inbox_the_request_named() {
     .await
     .expect("start");
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .message(&Question(b"ping".to_vec()))
         .to("questions")
         .with_headers(&Inbox {
@@ -638,13 +639,13 @@ async fn a_responder_answers_on_the_inbox_the_request_named() {
         "_INBOX.42",
         "the answer must go to the inbox the request named",
     );
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("questions")
         .assert_called_once()
         .settled(HandlerOutcome::ack());
 
     // A request with no inbox is dropped rather than retried, and nothing is answered.
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .message(&Question(b"ping".to_vec()))
         .to("questions")
         .with_headers(&Inbox { reply_to: None })
@@ -652,7 +653,7 @@ async fn a_responder_answers_on_the_inbox_the_request_named() {
         .await
         .expect("publish");
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("questions")
         .assert_called(2)
         .assert_outcome(Outcome::Drop);
@@ -700,14 +701,14 @@ async fn a_reply_lands_on_the_destination_its_own_type_declares() {
         .await
         .expect("publish");
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Confirmed>("orders.confirmed")
         .assert_called_once()
         .with(&Confirmed {
             id: 10,
             accepted: true,
         });
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.placed")
         .assert_called_once()
         .settled(HandlerOutcome::ack());
@@ -745,14 +746,14 @@ async fn a_reply_with_no_declared_destination_lands_where_the_mount_names() {
         .await
         .expect("publish");
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Receipt>("orders.receipts")
         .assert_called_once()
         .with(&Receipt {
             id: 11,
             total: 1100,
         });
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .subscriber("orders.billed")
         .assert_called_once()
         .settled(HandlerOutcome::ack());
@@ -777,7 +778,7 @@ async fn a_reply_position_bound_to_the_production_policy_answers_in_process() {
         .await
         .expect("publish");
 
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Receipt>("orders.receipts")
         .assert_called_once()
         .with(&Receipt {
@@ -802,7 +803,7 @@ struct Archived {
 struct Archive;
 
 /// Archives every order twice: once saying nothing about the message, once tagging it for the
-/// stream's deduplication window and pinning the subject's position.
+/// stream's deduplication window and requiring the first copy to be the subject's last message.
 ///
 /// The body names the steps, so it imports this crate's prelude and bounds its slot on the
 /// `JetStream` options type - the one place a handler body is allowed to name a broker.
@@ -816,7 +817,7 @@ async fn archive(
         || out
             .message(&archived)
             .message_id(format!("order-{}", order.id))
-            .expect_last_subject_sequence(41)
+            .expect_last_subject_sequence(1)
             .publish()
             .await
             .is_err()
@@ -852,15 +853,15 @@ async fn a_step_states_a_jetstream_setting_for_one_message_only() {
         .assert_called(2)
         .with_options(&JetStreamOptions {
             message_id: Some("order-7".into()),
-            expect_last_subject_sequence: Some(41),
+            expect_last_subject_sequence: Some(1),
             ..JetStreamOptions::default()
         });
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Archived>("archive.orders")
         .assert_called(2)
         .with(&Archived { id: 7 })
         .with_header("Nats-Msg-Id", "order-7")
-        .with_header("Nats-Expected-Last-Subject-Sequence", "41");
+        .with_header("Nats-Expected-Last-Subject-Sequence", "1");
     // --8<-- [end:options_assert]
 
     tb.shutdown().await.expect("shutdown");
@@ -909,7 +910,7 @@ async fn a_publish_with_no_step_states_nothing_of_its_own() {
     tb.out::<Mirror>()
         .assert_called_once()
         .assert_options_default();
-    tb.broker::<NatsTestBroker>()
+    tb.broker::<NatsBroker>()
         .published::<Order>("orders.mirrored")
         .assert_called_once()
         .with(&Order { id: 8 })

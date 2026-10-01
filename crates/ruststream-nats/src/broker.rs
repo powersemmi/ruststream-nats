@@ -12,8 +12,10 @@
 )]
 
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 #[cfg(feature = "testing")]
-use std::future::{Future, ready};
+use std::future::ready;
+use std::panic::resume_unwind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -30,6 +32,7 @@ use ruststream::{
 };
 #[cfg(feature = "testing")]
 use ruststream::{OutgoingMessage, RawMessage};
+use tokio::runtime::Handle;
 
 #[cfg(feature = "testing")]
 use crate::in_process::{self, Bus, Origin, PublishMode, RouteBook};
@@ -44,6 +47,13 @@ use crate::{
 pub(crate) struct NatsConnection {
     client: Client,
     closed: AtomicBool,
+    /// The runtime the broker connected on, where the tasks the client starts on the broker's
+    /// behalf (a consumer's pull loop, a `JetStream` context's acknowledgement task) run whichever
+    /// thread asks for them.
+    ///
+    /// Why optional: a client adopted through `from_client` may be handed over outside any
+    /// runtime, and then the caller's runtime is the only one there is.
+    runtime: Option<Handle>,
 }
 
 impl Debug for NatsConnection {
@@ -55,10 +65,39 @@ impl Debug for NatsConnection {
 }
 
 impl NatsConnection {
-    fn new(client: Client) -> Arc<Self> {
+    fn new(client: Client, runtime: Option<Handle>) -> Arc<Self> {
         Arc::new(Self {
             client,
             closed: AtomicBool::new(false),
+            runtime,
+        })
+    }
+
+    /// A `JetStream` context on this connection. The context starts its acknowledgement task as
+    /// it is built, so it is built inside the runtime the broker connected on.
+    pub(crate) fn jetstream(&self) -> jetstream::Context {
+        let _entered = self.runtime.as_ref().map(Handle::enter);
+        jetstream::new(self.client.clone())
+    }
+
+    /// Runs `work` on the runtime the broker connected on, so a task the client spawns inside it
+    /// lands there and not on the caller's runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NatsError::JetStream`] when that runtime is shutting down and drops the work.
+    async fn on_runtime<Output: Send + 'static>(
+        &self,
+        work: impl Future<Output = Output> + Send + 'static,
+    ) -> Result<Output, NatsError> {
+        let Some(runtime) = &self.runtime else {
+            return Ok(work.await);
+        };
+        runtime.spawn(work).await.map_err(|err| {
+            if err.is_panic() {
+                resume_unwind(err.into_panic());
+            }
+            NatsError::JetStream(Box::new(err))
         })
     }
 
@@ -174,7 +213,7 @@ impl Broker for NatsBroker {
             .await
             .map_err(|err| NatsError::Connect(Box::new(err)))?;
         Ok(ConnectedNatsBroker {
-            link: Link::Nats(NatsConnection::new(client)),
+            link: Link::Nats(NatsConnection::new(client, Some(Handle::current()))),
             #[cfg(feature = "testing")]
             routes,
         })
@@ -247,10 +286,12 @@ impl ConnectedNatsBroker {
     /// authentication flow `ConnectOptions` cannot express). Prefer
     /// [`NatsBroker::with_options`] where it fits: only the plain [`NatsBroker`] slots into the
     /// synchronous app builder.
+    ///
+    /// The broker's own tasks run on the runtime this is called on, when there is one.
     #[must_use]
     pub fn from_client(client: Client) -> Self {
         Self {
-            link: Link::Nats(NatsConnection::new(client)),
+            link: Link::Nats(NatsConnection::new(client, Handle::try_current().ok())),
             #[cfg(feature = "testing")]
             routes: RouteBook::new(false),
         }
@@ -336,7 +377,7 @@ impl ConnectedNatsBroker {
     /// Panics on a broker connected in process, as [`client`](Self::client) does.
     #[must_use]
     pub fn jetstream(&self) -> jetstream::Context {
-        jetstream::new(self.connection().client().clone())
+        self.connection().jetstream()
     }
 
     /// What every handle paired off this broker speaks over.
@@ -439,8 +480,9 @@ impl ConnectedNatsBroker {
         consumer_cfg: ConsumerConfig,
         pull_expires: Duration,
     ) -> Result<NatsSubscriber, NatsError> {
-        let client = self.connection().live_client(subject)?.clone();
-        let ctx = jetstream::new(client);
+        let connection = self.connection();
+        connection.live_client(subject)?;
+        let ctx = connection.jetstream();
         let stream = ctx
             .get_stream(stream_name)
             .await
@@ -450,9 +492,11 @@ impl ConnectedNatsBroker {
             .create_consumer(consumer_cfg)
             .await
             .map_err(|err| NatsError::JetStream(Box::new(err)))?;
-        let messages = consumer
-            .messages()
-            .await
+        // The stream spawns the consumer's pull loop as it opens.
+        let pulling = consumer.clone();
+        let messages = connection
+            .on_runtime(async move { pulling.messages().await })
+            .await?
             .map_err(|err| NatsError::JetStream(Box::new(err)))?;
 
         Ok(NatsSubscriber::from_jetstream(

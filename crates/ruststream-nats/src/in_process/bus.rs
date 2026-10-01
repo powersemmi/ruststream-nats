@@ -12,6 +12,7 @@ use async_nats::jetstream::consumer::DeliverPolicy;
 use bytes::Bytes;
 use ruststream::testing::Coordinator;
 use ruststream::{HeaderMap, RawMessage};
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
@@ -345,6 +346,9 @@ pub(crate) struct Bus {
     received: AtomicU64,
     coordinator: OnceLock<Coordinator>,
     settings: Settings,
+    /// The runtime the broker connected on, where a delayed redelivery's timer runs whichever
+    /// thread settles.
+    runtime: Handle,
     next_id: AtomicU64,
     state: Mutex<State>,
 }
@@ -359,13 +363,14 @@ impl Debug for Bus {
 }
 
 impl Bus {
-    pub(crate) fn new(settings: Settings) -> Arc<Self> {
+    pub(crate) fn new(settings: Settings, runtime: Handle) -> Arc<Self> {
         Arc::new(Self {
             closed: AtomicBool::new(false),
             sent: AtomicU64::new(0),
             received: AtomicU64::new(0),
             coordinator: OnceLock::new(),
             settings,
+            runtime,
             next_id: AtomicU64::new(1),
             state: Mutex::new(State::default()),
         })
@@ -387,6 +392,11 @@ impl Bus {
 
     pub(crate) fn coordinator(&self) -> Option<Coordinator> {
         self.coordinator.get().cloned()
+    }
+
+    /// The runtime the broker connected on.
+    pub(crate) const fn runtime(&self) -> &Handle {
+        &self.runtime
     }
 
     /// Whether the connection was opened with `no_echo`.

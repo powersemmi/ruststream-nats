@@ -10,6 +10,8 @@
 //!
 //! Skipped unless `NATS_TEST_URL` is set (see `integration_nats.rs` for how to run).
 
+use std::pin::pin;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use async_nats::jetstream::consumer::Info as ConsumerInfo;
@@ -22,6 +24,8 @@ use ruststream_nats::{
     ConnectedNatsBroker, DeliverPolicy, JetStreamSubject, NatsBroker, NatsError, NatsMessage,
     NatsPublish, NonZeroDuration,
 };
+use tokio::runtime::Builder;
+use tokio::task::block_in_place;
 use tokio::time::timeout;
 
 mod live;
@@ -528,6 +532,49 @@ async fn a_durable_consumer_resumes_where_it_left_off() {
         msg.ack().await.expect("ack failed");
     }
     drop(fresh);
+
+    fx.teardown().await;
+}
+
+// A handler on a dedicated thread runs on that thread's own runtime. A consumer opened from such a
+// runtime keeps its pull loop on the runtime the broker connected on, so it still delivers once
+// the runtime it was opened from has stopped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_consumer_opened_from_a_runtime_that_stopped_keeps_delivering() {
+    let Some(fx) = JetStreamFixture::open("foreign").await else {
+        return;
+    };
+    let source = fx.consumer("opened");
+    let opened = block_in_place(|| {
+        thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let runtime = Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("a current-thread runtime must build");
+                    let opened = runtime.block_on(fx.connected.subscribe_with(source));
+                    drop(runtime);
+                    opened
+                })
+                .join()
+                .expect("the foreign runtime's thread panicked")
+        })
+    });
+    let mut subscriber = opened.expect("consumer create failed");
+
+    fx.publish("opened", b"after").await;
+    {
+        let mut stream = pin!(subscriber.stream());
+        let msg = next_delivery(&mut stream, WAIT).await;
+        assert_eq!(
+            msg.payload(),
+            b"after",
+            "a consumer opened from a runtime that stopped must still deliver",
+        );
+        msg.ack().await.expect("ack failed");
+    }
+    drop(subscriber);
 
     fx.teardown().await;
 }

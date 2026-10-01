@@ -244,6 +244,12 @@ impl IncomingMessage for NatsMessage {
         carried.unwrap_or_else(|| empty_headers())
     }
 
+    /// The [`PARTITION_KEY_HEADER`] value the sender set, which the runtime's keyed worker lanes
+    /// (`workers(n, by_key)`) order by.
+    fn partition_key(&self) -> Option<&[u8]> {
+        self.headers().get(PARTITION_KEY_HEADER)
+    }
+
     async fn ack(self) -> Result<(), AckError> {
         match self {
             Self::Core(_) => Err(AckError::Unsupported),
@@ -343,7 +349,7 @@ pub const PARTITION_KEY_HEADER: &str = "nats-partition-key";
 /// [`PARTITION_KEY_HEADER`] header value and the sender is responsible for setting it.
 impl Partitioned for NatsMessage {
     fn partition_key(&self) -> Option<&[u8]> {
-        self.headers().get(PARTITION_KEY_HEADER)
+        IncomingMessage::partition_key(self)
     }
 }
 

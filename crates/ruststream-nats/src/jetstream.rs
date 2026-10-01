@@ -16,8 +16,8 @@ use std::fmt::{Debug, Formatter};
 use std::future::{Future, ready};
 use std::sync::Arc;
 
+use async_nats::jetstream::Context;
 use async_nats::jetstream::message::PublishMessage;
-use async_nats::jetstream::{self, Context};
 use bytes::BytesMut;
 #[cfg(feature = "testing")]
 use ruststream::HeaderMap;
@@ -318,7 +318,7 @@ impl NatsPublishPolicy for JetStreamPublish {
         let link = match connected.link() {
             Link::Nats(connection) => JetStreamLink::Nats {
                 connection: Arc::clone(connection),
-                context: jetstream::new(connection.client().clone()),
+                context: connection.jetstream(),
             },
             #[cfg(feature = "testing")]
             Link::InProcess(bus) => JetStreamLink::InProcess(Arc::clone(bus)),

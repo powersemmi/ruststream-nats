@@ -58,7 +58,7 @@ Add the `asyncapi` feature to fill the generated document with NATS's own vocabu
 use ruststream_nats::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Outgoing)]
 struct Order {
     id: u64,
     quantity: u32,
@@ -98,26 +98,25 @@ cargo generate --git https://github.com/powersemmi/ruststream-nats templates/nat
 
 ## Test it
 
-`TestApp` runs the handlers against an in-process NATS, with no server.
+`TestApp` runs the service's own app with `NatsBroker` in process, with no server.
 
 ```rust
 use ruststream::testing::TestApp;
-use ruststream_nats::prelude::*;
-use ruststream_nats::testing::NatsTestBroker;
 
-let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
-    .with_broker(NatsTestBroker::new(), |b| {
-        b.include(confirm);
-    });
-let tb = TestApp::start(app).await?;
+let tb = TestApp::start(app()).await?;
 
-tb.publish("orders", &Order { id: 1, quantity: 2 }).await?;
+tb.broker::<NatsBroker>()
+    .message(&Order { id: 1, quantity: 2 })
+    .to("orders")
+    .publish()
+    .await?;
 
-tb.broker::<NatsTestBroker>()
+tb.broker::<NatsBroker>()
     .subscriber("orders")
     .assert_called_once()
+    .with(&Order { id: 1, quantity: 2 })
     .settled(HandlerOutcome::ack());
-tb.broker::<NatsTestBroker>()
+tb.broker::<NatsBroker>()
     .published::<Confirmation>("confirmations")
     .assert_called_once();
 ```

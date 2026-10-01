@@ -6,8 +6,8 @@
 //! delayed nack of a consumer, and the handles that outlive `shutdown`. `settlement` holds `ack`,
 //! `nack` and an unsettled drop to their meaning; `retry::redelivery_address` holds the address a
 //! Core subject, a consumer filter and a bare name report for a retry copy; `publish_options`
-//! holds the `JetStream` publisher's per-message settings. The capability suites cover
-//! request/reply and batches.
+//! holds the `JetStream` publisher's per-message settings, and `keyed_order` the key a delivery
+//! reports to the keyed worker lanes. The capability suites cover request/reply and batches.
 //!
 //! Each of these runs twice: in process, with the broker wrapped in `InProcessBroker` so its
 //! `connect` is the in-process transition, and against a real server when `NATS_TEST_URL` is set.
@@ -40,10 +40,10 @@ use ruststream::conformance::in_process::{self, Refusal};
 use ruststream::conformance::message_shape::{self, OptionCases};
 use ruststream::conformance::{capabilities, harness, lifecycle, retry, settlement};
 use ruststream::testing::Backlog;
-use ruststream::{Broker, ConnectedBroker, IncomingMessage, Name};
+use ruststream::{Broker, Bytes, ConnectedBroker, HeaderMap, IncomingMessage, Name};
 use ruststream_nats::{
     ConnectedNatsBroker, CoreSubject, JetStreamOptions, JetStreamPublish, JetStreamSubject,
-    NatsBroker, NatsMessage, NatsPublish, NonZeroDuration,
+    NatsBroker, NatsMessage, NatsPublish, NonZeroDuration, PARTITION_KEY_HEADER,
 };
 
 mod live;
@@ -431,6 +431,73 @@ async fn in_process_refuses_like_the_server() {
         ],
     )
     .await;
+}
+
+/// Carries a key the way this crate does: in the [`PARTITION_KEY_HEADER`] header.
+#[allow(clippy::unnecessary_wraps)]
+fn key_header<Options>(key: &[u8], headers: &mut HeaderMap) -> Option<Options> {
+    headers.insert(PARTITION_KEY_HEADER, Bytes::copy_from_slice(key));
+    None
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_process_keeps_a_keys_order() {
+    message_shape::keyed_order(
+        in_process,
+        &unique_subject("conformance.keyed"),
+        |subject| CoreSubject::new(subject),
+        |connected| connected.publisher(NatsPublish),
+        key_header,
+    )
+    .await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keeps_a_keys_order() {
+    let Some(url) = nats_url() else {
+        return;
+    };
+    message_shape::keyed_order(
+        || NatsBroker::new(url.clone()),
+        &unique_subject("conformance.keyed"),
+        |subject| CoreSubject::new(subject),
+        |connected| connected.publisher(NatsPublish),
+        key_header,
+    )
+    .await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_process_consumer_keeps_a_keys_order() {
+    message_shape::keyed_order(
+        in_process,
+        &unique_subject("conformance.keyed"),
+        |subject| JetStreamSubject::new(subject, "CONFORMANCE"),
+        |connected| connected.publisher(JetStreamPublish::default()),
+        key_header,
+    )
+    .await;
+}
+
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consumer_keeps_a_keys_order() {
+    let Some(url) = nats_url() else {
+        return;
+    };
+    let (admin, stream) = create_stream(&url, "KEYED", "conformance.keyed.>").await;
+    message_shape::keyed_order(
+        || NatsBroker::new(url.clone()),
+        &unique_subject("conformance.keyed"),
+        |subject| JetStreamSubject::new(subject, stream.clone()),
+        |connected| connected.publisher(JetStreamPublish::default()),
+        key_header,
+    )
+    .await;
+    delete_stream(admin, &stream).await;
 }
 
 /// The `JetStream` publisher's settings: the message id reaches the delivery as the header the

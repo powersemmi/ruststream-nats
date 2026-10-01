@@ -7,11 +7,11 @@
 #![cfg(feature = "asyncapi")]
 
 use ruststream::asyncapi::build_spec;
-use ruststream::conformance::harness;
+use ruststream::conformance::{harness, message_shape};
 use ruststream::nonzero;
 use ruststream::runtime::{Names, Outgoing, PublishContext};
-use ruststream_nats::DeliverPolicy;
 use ruststream_nats::prelude::*;
+use ruststream_nats::{ConnectedNatsBroker, DeliverPolicy, NatsPublish};
 use serde::{Deserialize, Serialize};
 
 /// The message the handlers below carry. No declared destination: each mount names one.
@@ -201,6 +201,27 @@ fn nothing_the_broker_describes_carries_a_password() {
     harness::describes_without_credentials(
         &NatsBroker::new("nats://svc:hunter2@nats.example.com:4222"),
         &CoreSubject::new("orders.created").queue_group("workers"),
+        "hunter2",
+    );
+}
+
+/// A cluster is configured as one comma-separated setting, and each of its URLs may carry a user
+/// and a password.
+#[test]
+fn no_address_of_a_cluster_carries_a_password() {
+    message_shape::describes_addresses_without_credentials(
+        |addrs| NatsBroker::new(addrs.join(",")),
+        "nats",
+    );
+}
+
+/// The publish policies describe the positions they are bound on; a stream name is all a
+/// deployment configures on one, and a password never reaches it.
+#[test]
+fn no_publish_policy_carries_a_password() {
+    message_shape::publishes_without_credentials::<ConnectedNatsBroker, _>(&NatsPublish, "hunter2");
+    message_shape::publishes_without_credentials::<ConnectedNatsBroker, _>(
+        &JetStreamPublish::default().expect_stream("ORDERS"),
         "hunter2",
     );
 }

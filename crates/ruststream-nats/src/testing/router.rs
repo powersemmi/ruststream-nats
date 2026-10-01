@@ -130,8 +130,8 @@ impl SubjectRouter {
     /// one, and returns the channel pair the subscriber will use, together with the
     /// [`SubscriptionId`] needed to unsubscribe.
     ///
-    /// The returned [`DeliverySender`] is the same one fanout uses, so subscribers can re-send
-    /// a delivery into their own queue to implement `nack(requeue=true)`.
+    /// The returned [`DeliverySender`] is the same one fanout uses, so a `JetStream` delivery can
+    /// be re-sent into its own subscription's queue to implement `nack(requeue = true)`.
     pub(crate) fn subscribe(
         &self,
         pattern: SubjectPattern,

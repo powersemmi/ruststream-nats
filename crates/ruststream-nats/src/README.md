@@ -517,6 +517,11 @@ message in turn. A per-message setting arrives as the same protocol header the r
 and `with_options` reads it back. A delayed retry takes the path its own model takes, and
 `tb.advance(delay)` fires the timer under a paused clock.
 
+Settlement follows the model as well. A `JetStream` delivery is acknowledged, requeued and dropped
+here as on a server. A Core delivery reports `AckError::Unsupported` from `ack` and `nack` and is
+never requeued, so what brings it back is the copy the framework publishes, here as against a
+server. The harness still reads back the answer the handler gave.
+
 What the transport does not reproduce is the server's own state: the durable's cursor and its
 resume, `ack_wait` redelivery, `max_ack_pending`, retention, and on the publish side the stream
 itself. There is no acknowledgement to await and no stream state to check an expectation against,

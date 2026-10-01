@@ -52,10 +52,7 @@ async fn next_payload<S>(stream: &mut S) -> Vec<u8>
 where
     S: Stream<Item = Result<NatsTestMessage, NatsError>> + Unpin,
 {
-    let msg = next_message(stream).await;
-    let payload = msg.payload().to_vec();
-    msg.ack().await.expect("ack");
-    payload
+    next_message(stream).await.payload().to_vec()
 }
 
 /// One header as text, for an assertion that reads like the wire does.
@@ -297,8 +294,11 @@ async fn a_queue_group_splits_the_subject_between_its_members() {
     assert_eq!(next_payload(&mut every_message).await, b"2");
 }
 
+/// Core NATS has no acknowledgement, so both settlements report `AckError::Unsupported`, exactly
+/// as a delivery from a server does, and a requeue brings nothing back: a stand-in that
+/// redelivered here would pass a handler whose retry loses the message in production.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn nack_requeue_redelivers_to_same_subscriber() {
+async fn a_core_delivery_refuses_both_settlements_and_is_not_redelivered() {
     let broker = connected().await;
     let mut subscriber = broker
         .subscribe_with(CoreSubject::new("orders"))
@@ -306,25 +306,59 @@ async fn nack_requeue_redelivers_to_same_subscriber() {
         .expect("subscribe");
     let publisher = broker.publisher(NatsPublish);
 
+    for payload in [b"acked".as_slice(), b"requeued", b"dropped"] {
+        publisher
+            .publish(OutgoingMessage::new("orders", payload), None)
+            .await
+            .expect("publish");
+    }
+
+    let mut stream = Box::pin(subscriber.stream());
+    let acked = next_message(&mut stream).await;
+    assert!(matches!(acked.ack().await, Err(AckError::Unsupported)));
+    let requeued = next_message(&mut stream).await;
+    assert!(matches!(
+        requeued.nack(true).await,
+        Err(AckError::Unsupported)
+    ));
+    let dropped = next_message(&mut stream).await;
+    assert!(matches!(
+        dropped.nack(false).await,
+        Err(AckError::Unsupported)
+    ));
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), stream.next())
+            .await
+            .is_err(),
+        "a Core subject redelivers nothing, whatever the settlement asked for",
+    );
+}
+
+/// A `JetStream` consumer settles: a requeue brings the delivery back on the same subscription,
+/// counted as its second delivery.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_jetstream_requeue_redelivers_to_the_same_subscriber() {
+    let broker = connected().await;
+    let mut subscriber = broker
+        .subscribe_with(JetStreamSubject::new("orders.requeued", "ORDERS").durable("worker"))
+        .await
+        .expect("subscribe");
+    let publisher = broker.publisher(NatsPublish);
+
     publisher
-        .publish(OutgoingMessage::new("orders", b"once"), None)
+        .publish(OutgoingMessage::new("orders.requeued", b"once"), None)
         .await
         .expect("publish");
 
     let mut stream = Box::pin(subscriber.stream());
-    let first = tokio::time::timeout(WAIT, stream.next())
-        .await
-        .expect("first delivery")
-        .expect("stream has next")
-        .expect("ok");
+    let first = next_message(&mut stream).await;
+    assert_eq!(first.redelivery_count(), Some(1));
     first.nack(true).await.expect("nack requeue");
 
-    let second = tokio::time::timeout(WAIT, stream.next())
-        .await
-        .expect("redelivery")
-        .expect("stream has next")
-        .expect("ok");
+    let second = next_message(&mut stream).await;
     assert_eq!(second.payload(), b"once");
+    assert_eq!(second.redelivery_count(), Some(2));
     second.ack().await.expect("ack");
 }
 
@@ -404,7 +438,6 @@ async fn request_reply_round_trip() {
             .expect("request carries reply-to header")
             .to_owned();
         let payload = format!("reply:{}", String::from_utf8_lossy(req.payload()));
-        req.ack().await.expect("ack");
         let reply = OutgoingMessage::new(reply_to.as_str(), payload.as_bytes());
         responder_publisher
             .publish(reply, None)
@@ -462,7 +495,6 @@ async fn headers_are_propagated_to_subscribers() {
         .expect("ok");
     assert_eq!(msg.headers().content_type(), Some("application/json"));
     assert_eq!(msg.headers().correlation_id(), Some("abc-1"));
-    msg.ack().await.expect("ack");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -765,7 +797,8 @@ async fn durable_order(order: &Order) -> HandlerOutcome {
 #[derive(Clone, Default)]
 struct Attempts(Arc<AtomicUsize>);
 
-#[subscriber("retry")]
+// A stream consumer, because a requeue is a `JetStream` settlement: a Core subject refuses it.
+#[subscriber(JetStreamSubject::new("retry", "RETRIES").durable("retrier"))]
 async fn retry_then_ack(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> HandlerOutcome {
     let _ = order;
     // Requeue once, then ack: exercises `nack(requeue = true)` -> `enqueued` re-count balanced

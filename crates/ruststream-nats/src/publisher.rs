@@ -73,7 +73,7 @@ pub trait NatsPublishPolicy: PublishPolicy<ConnectedNatsBroker> + Sealed {
 ///     id: u64,
 /// }
 ///
-/// #[subscriber("orders.created", publish)]
+/// #[subscriber("orders.created", reply)]
 /// async fn acknowledge(order: &Order) -> Seen {
 ///     Seen { id: order.id }
 /// }

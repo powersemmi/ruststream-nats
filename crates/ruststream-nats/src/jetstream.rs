@@ -312,7 +312,7 @@ where
 ///     order: u64,
 /// }
 ///
-/// #[subscriber("payments.settled", publish)]
+/// #[subscriber("payments.settled", reply)]
 /// async fn record(payment: &Payment) -> Paid {
 ///     Paid { order: payment.order }
 /// }

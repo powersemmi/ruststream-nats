@@ -43,7 +43,7 @@
 //!     id: u64,
 //! }
 //!
-//! #[subscriber(JetStreamSubject::new("orders.created", "ORDERS").durable("confirmer"), publish)]
+//! #[subscriber(JetStreamSubject::new("orders.created", "ORDERS").durable("confirmer"), reply)]
 //! async fn confirm(order: &Order) -> Confirmation {
 //!     Confirmation { id: order.id }
 //! }

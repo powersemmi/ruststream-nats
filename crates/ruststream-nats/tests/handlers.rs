@@ -676,7 +676,7 @@ struct Confirmed {
 
 /// Answers every order with a confirmation. The clause is bare because `Confirmed` already says
 /// where it goes.
-#[subscriber("orders.placed", publish)]
+#[subscriber("orders.placed", reply)]
 async fn confirm(order: &Order) -> Confirmed {
     Confirmed {
         id: order.id,
@@ -724,7 +724,7 @@ struct Receipt {
 }
 
 /// Answers every order with a receipt, on the subject the clause names.
-#[subscriber("orders.billed", publish("orders.receipts"))]
+#[subscriber("orders.billed", reply("orders.receipts"))]
 async fn issue_receipt(order: &Order) -> Receipt {
     Receipt {
         id: order.id,

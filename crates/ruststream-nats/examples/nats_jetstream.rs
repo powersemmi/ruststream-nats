@@ -79,7 +79,7 @@ struct Confirmation {
 
 #[subscriber(
     JetStreamSubject::new("orders.*", "ORDERS").durable("orders-confirmer"),
-    publish
+    reply
 )]
 async fn confirm(order: &Order) -> Confirmation {
     Confirmation { id: order.id }

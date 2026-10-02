@@ -36,10 +36,10 @@ pub struct Confirmation {
 /// Accepts an order and answers with a confirmation carrying the same identifier.
 // The `JetStreamSubject` binds this handler to a durable pull consumer on the `ORDERS` stream.
 // The returned value is the reply: `Confirmation` declares its own destination, so the clause is
-// the bare `publish`; the publisher that carries it is named in `routes`.
+// the bare `reply`; the publisher that carries it is named in `routes`.
 #[subscriber(
     JetStreamSubject::new("orders.*", "ORDERS").durable("{{project-name}}-worker"),
-    publish
+    reply
 )]
 pub async fn confirm(order: &Order) -> Confirmation {
     Confirmation {

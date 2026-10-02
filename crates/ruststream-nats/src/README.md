@@ -284,7 +284,7 @@ struct Archived {
 #[publishes(Archived)]
 struct Archive;
 
-#[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("confirmer"), publish)]
+#[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("confirmer"), reply)]
 async fn confirm(order: &Order) -> Confirmation {
     Confirmation { id: order.id }
 }
@@ -474,7 +474,7 @@ struct Confirmation {
     id: u64,
 }
 
-#[subscriber("orders.created", publish)]
+#[subscriber("orders.created", reply)]
 async fn confirm(order: &Order) -> Confirmation {
     Confirmation { id: order.id }
 }

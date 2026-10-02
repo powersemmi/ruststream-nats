@@ -28,7 +28,7 @@ struct Confirmation {
     id: u64,
 }
 
-#[subscriber(JetStreamSubject::new("orders.created", "ORDERS"), publish)]
+#[subscriber(JetStreamSubject::new("orders.created", "ORDERS"), reply)]
 async fn confirm(order: &Order, ctx: &mut Context<'_, (), Latch>) -> Confirmation {
     ctx.state().arrived();
     Confirmation {

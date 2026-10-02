@@ -33,8 +33,8 @@ pub struct Confirmation {
 
 /// Accepts an order and answers with a confirmation carrying the same identifier.
 // The returned value is the reply. `Confirmation` declares its own destination, so the clause is
-// the bare `publish`; the publisher that carries it is named in `routes`.
-#[subscriber("orders", publish)]
+// the bare `reply`; the publisher that carries it is named in `routes`.
+#[subscriber("orders", reply)]
 pub async fn confirm(order: &Order) -> Confirmation {
     Confirmation {
         id: order.id,

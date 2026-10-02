@@ -67,7 +67,7 @@ impl<Cx, Options> PublishTransform<ForReply<Cx>, Options> for ReplyTo {
     }
 }
 
-#[subscriber("orders.asks", publish("orders.answers"))]
+#[subscriber("orders.asks", reply("orders.answers"))]
 async fn answer(order: &Order) -> Receipt {
     Receipt { id: order.id }
 }

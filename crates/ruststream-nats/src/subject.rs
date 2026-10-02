@@ -48,19 +48,47 @@ const DEFAULT_PULL_EXPIRES: Duration = Duration::from_secs(5);
 /// # Examples
 ///
 /// ```
-/// use std::time::Duration;
+/// # mod demo {
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
 ///
+/// #[derive(Deserialize)]
+/// struct Order {
+///     amount: u64,
+/// }
+///
+/// #[subscriber(
+///     JetStreamSubject::new("orders.*", "ORDERS")
+///         .durable("reconciler")
+///         .ack_wait(NonZeroDuration::from_secs(nonzero!(60)))
+///         .pull_expires(NonZeroDuration::from_millis(nonzero!(300)))
+/// )]
+/// async fn reconcile(orders: &[Order]) -> HandlerOutcome {
+///     let total: u64 = orders.iter().map(|order| order.amount).sum();
+///     println!("reconciling {} orders worth {total}", orders.len());
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.include(reconcile.batch(nonzero!(50)));
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
+/// ```
+///
+/// A literal is checked while the crate compiles, so a zero window does not build:
+///
+/// ```compile_fail
 /// use ruststream::nonzero;
 /// use ruststream_nats::NonZeroDuration;
 ///
-/// // A literal is checked while the crate compiles: `nonzero!(0)` does not build.
-/// let window = NonZeroDuration::from_millis(nonzero!(300));
-/// assert_eq!(window.get(), Duration::from_millis(300));
-///
-/// // A duration read from configuration is checked where it is parsed.
-/// let configured = NonZeroDuration::new(Duration::from_secs(5)).expect("non-zero");
-/// assert_eq!(configured.get(), Duration::from_secs(5));
-/// assert!(NonZeroDuration::new(Duration::ZERO).is_none());
+/// let window = NonZeroDuration::from_millis(nonzero!(0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[must_use]
@@ -208,11 +236,33 @@ pub(crate) fn publish_destination(subject: &str) -> Result<RedeliveryAddress, Na
 /// # Examples
 ///
 /// ```
-/// use ruststream_nats::CoreSubject;
+/// # mod demo {
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
 ///
-/// let plain = CoreSubject::new("orders.created");
-/// let balanced = CoreSubject::new("orders.created").queue_group("workers");
-/// # let _ = (plain, balanced);
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// // Every replica joins `workers`, so each order reaches one of them.
+/// #[subscriber(CoreSubject::new("orders.created").queue_group("workers"))]
+/// async fn fulfil(order: &Order) -> HandlerOutcome {
+///     println!("fulfilling order {}", order.id);
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("fulfillment", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.include(fulfil);
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
 /// ```
 ///
 /// A `JetStream` setting is not a method here, so asking for one does not compile:
@@ -273,11 +323,42 @@ impl Sealed for CoreSubject {
 /// # Examples
 ///
 /// ```
-/// use ruststream_nats::CoreWildcard;
+/// # mod demo {
+/// use std::time::Duration;
 ///
-/// let all = CoreWildcard::new("orders.>");
-/// let balanced = CoreWildcard::new("orders.*").queue_group("workers");
-/// # let _ = (all, balanced);
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+///     paid: bool,
+/// }
+///
+/// #[subscriber(CoreWildcard::new("orders.*").queue_group("auditors"))]
+/// async fn audit(order: &Order) -> HandlerOutcome {
+///     if order.paid {
+///         return HandlerOutcome::ack();
+///     }
+///     HandlerOutcome::retry_after(Duration::from_secs(30))
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("audit", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             // A pattern is no destination, so the mount site names where a delayed copy goes.
+///             b.include(audit)
+///                 .max_attempts(nonzero!(5u32))
+///                 .dead_letter("orders.dead")
+///                 .out_retry(Publish)
+///                 .to("orders.audit");
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
@@ -349,13 +430,37 @@ impl NatsSubscription for CoreSubject {
 /// # Examples
 ///
 /// ```
-/// use ruststream::nonzero;
-/// use ruststream_nats::{JetStreamSubject, NonZeroDuration};
+/// # mod demo {
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
 ///
-/// let orders = JetStreamSubject::new("orders.*", "ORDERS")
-///     .durable("worker-1")
-///     .ack_wait(NonZeroDuration::from_secs(nonzero!(30)));
-/// # let _ = orders;
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// // The durable keeps its position across restarts, and every replica shares it.
+/// #[subscriber(
+///     JetStreamSubject::new("orders.*", "ORDERS")
+///         .durable("billing")
+///         .ack_wait(NonZeroDuration::from_secs(nonzero!(30)))
+/// )]
+/// async fn bill(order: &Order) -> HandlerOutcome {
+///     println!("billing order {}", order.id);
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.include(bill);
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
 /// ```
 ///
 /// A queue group is Core NATS only, so it is not a method here:
@@ -553,11 +658,43 @@ impl NatsSubscription for JetStreamSubject {
 /// # Examples
 ///
 /// ```
-/// use ruststream::runtime::IntoSource;
-/// use ruststream_nats::{NatsSubscription, CoreSubject};
+/// # mod demo {
+/// use ruststream::schemars::JsonSchema;
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
 ///
-/// let source = CoreSubject::new("orders.*").into_source();
-/// assert_eq!(source.subject(), "orders.*");
+/// #[derive(Deserialize, JsonSchema)]
+/// # #[schemars(crate = "ruststream::schemars")]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// struct Audit;
+///
+/// impl Handle<Order> for Audit {
+///     async fn handle(
+///         &self,
+///         order: &Order,
+///         _outs: &(),
+///         _ctx: &mut Context<'_>,
+///     ) -> Result<(), HandlerOutcome> {
+///         println!("auditing order {}", order.id);
+///         Ok(())
+///     }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("audit", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             let audited = CoreSubject::new("orders.created").queue_group("auditors");
+///             b.include(subscriber(audited, Audit).build());
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
 /// ```
 impl IntoSource for CoreSubject {
     type Source = Self;

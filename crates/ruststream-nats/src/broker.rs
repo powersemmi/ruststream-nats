@@ -154,10 +154,32 @@ const _: () = assert!(size_of::<ConnectedNatsBroker>() == size_of::<Arc<NatsConn
 /// # Examples
 ///
 /// ```
-/// use ruststream_nats::NatsBroker;
+/// # mod demo {
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
 ///
-/// let broker = NatsBroker::new("nats://localhost:4222");
-/// # let _ = broker;
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[subscriber("orders.created")]
+/// async fn handle(order: &Order) -> HandlerOutcome {
+///     println!("got order {}", order.id);
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://nats-1:4222,nats://nats-2:4222"),
+///         |b| {
+///             b.include(handle);
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
 /// ```
 #[derive(Debug, Clone)]
 #[must_use]
@@ -181,12 +203,34 @@ impl NatsBroker {
     /// # Examples
     ///
     /// ```
+    /// # mod demo {
     /// use async_nats::ConnectOptions;
-    /// use ruststream_nats::NatsBroker;
+    /// use ruststream_nats::prelude::*;
+    /// use serde::Deserialize;
     ///
-    /// let broker = NatsBroker::new("nats://localhost:4222")
-    ///     .with_options(ConnectOptions::with_user_and_password("svc".into(), "secret".into()));
-    /// # let _ = broker;
+    /// #[derive(Deserialize)]
+    /// struct Order {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[subscriber("orders.created")]
+    /// async fn handle(order: &Order) -> HandlerOutcome {
+    ///     println!("got order {}", order.id);
+    ///     HandlerOutcome::ack()
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let broker = NatsBroker::new("tls://nats.internal:4222").with_options(
+    ///         ConnectOptions::with_user_and_password("orders".into(), "secret".into())
+    ///             .require_tls(true),
+    ///     );
+    ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
+    ///         b.include(handle);
+    ///     })
+    /// }
+    /// # }
+    /// # fn main() {}
     /// ```
     pub fn with_options(mut self, options: ConnectOptions) -> Self {
         self.options = options;
@@ -306,14 +350,20 @@ impl ConnectedNatsBroker {
     /// # Examples
     ///
     /// ```no_run
-    /// use ruststream::Broker;
-    /// use ruststream_nats::{JetStreamPublish, NatsBroker, NatsPublish};
+    /// use std::error::Error;
     ///
-    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// use ruststream::{Broker, ConnectedBroker, OutgoingMessage};
+    /// use ruststream_nats::{JetStreamPublish, NatsBroker};
+    ///
+    /// // A one-off backfill: replay one order into the stream, outside any service.
+    /// # async fn run() -> Result<(), Box<dyn Error>> {
     /// let connected = NatsBroker::new("nats://localhost:4222").connect().await?;
-    /// let core = connected.publisher(NatsPublish);
-    /// let jetstream = connected.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
-    /// # let _ = (core, jetstream);
+    /// let orders = connected.publisher(JetStreamPublish::default().expect_stream("ORDERS"));
+    /// let ack = orders
+    ///     .publish_ack(OutgoingMessage::new("orders.created", br#"{"id":7}"#), None)
+    ///     .await?;
+    /// println!("stored in {} at sequence {}", ack.stream, ack.sequence);
+    /// connected.shutdown().await?;
     /// # Ok(())
     /// # }
     /// ```

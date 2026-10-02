@@ -199,7 +199,7 @@ mod tests {
 
         assert_eq!(book.routes("orders.created", &names), [0, 2]);
         assert_eq!(book.routes("orders.cancelled", &names), [2]);
-        assert!(book.routes("payments", &names).is_empty());
+        assert_eq!(book.routes("payments", &names), Vec::<usize>::new());
     }
 
     #[test]

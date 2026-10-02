@@ -495,7 +495,7 @@ async fn a_new_consumer_starts_where_its_deliver_policy_says() {
         .expect("subscribe");
 
     assert_eq!(waiting(&mut from_start), [b"stored".to_vec()]);
-    assert!(waiting(&mut from_now).is_empty());
+    assert_eq!(waiting(&mut from_now), Vec::<Vec<u8>>::new());
 }
 
 // A JetStream publish is acknowledged by the stream that stored it; with no stream to take it,
@@ -549,7 +549,7 @@ async fn a_named_stream_refuses_a_subject_it_does_not_serve() {
         .await
         .expect_err("ORDERS does not serve payments.created");
     assert!(matches!(err, NatsError::JetStream(_)), "got {err}");
-    assert!(waiting(&mut consumer).is_empty());
+    assert_eq!(waiting(&mut consumer), Vec::<Vec<u8>>::new());
 }
 
 // A durable consumer outlives its subscriptions: what one left unread, and a redelivery it had
@@ -859,7 +859,7 @@ async fn a_connection_without_echo_does_not_hear_itself() {
         .publish(OutgoingMessage::new("orders", b"mine"), None)
         .await
         .expect("publish");
-    assert!(waiting(&mut subscriber).is_empty());
+    assert_eq!(waiting(&mut subscriber), Vec::<Vec<u8>>::new());
 }
 
 // ------------------------------------------------------------------------------ request and reply

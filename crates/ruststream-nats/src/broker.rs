@@ -4,7 +4,18 @@
 //! [`Broker::connect`], and the connected form is the only value carrying a publish or subscribe
 //! surface. [`ConnectedBroker::shutdown`] consumes it in turn and returns the terminal witness.
 
+// Without the `testing` feature a connection link has one variant, so a `match` on it has a
+// single arm; the matches stay so that the in-process arm has its place when the feature is on.
+#![cfg_attr(
+    not(feature = "testing"),
+    allow(clippy::infallible_destructuring_match)
+)]
+
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
+#[cfg(feature = "testing")]
+use std::future::ready;
+use std::panic::resume_unwind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -12,10 +23,19 @@ use std::time::Duration;
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::{PullConsumer, pull::Config as ConsumerConfig};
 use async_nats::{Client, ConnectOptions};
+#[cfg(feature = "testing")]
+use bytes::Bytes;
+#[cfg(feature = "testing")]
+use ruststream::testing::{Coordinator, InProcess, TestableBroker};
 use ruststream::{
     AddressedCopies, Broker, ConnectedBroker, DefaultPublish, DescribeServer, ServerSpec, Subscribe,
 };
+#[cfg(feature = "testing")]
+use ruststream::{OutgoingMessage, RawMessage};
+use tokio::runtime::Handle;
 
+#[cfg(feature = "testing")]
+use crate::in_process::{self, Bus, Origin, PublishMode, RouteBook};
 use crate::{
     error::NatsError,
     publisher::{NatsPublish, NatsPublishPolicy},
@@ -27,6 +47,13 @@ use crate::{
 pub(crate) struct NatsConnection {
     client: Client,
     closed: AtomicBool,
+    /// The runtime the broker connected on, where the tasks the client starts on the broker's
+    /// behalf (a consumer's pull loop, a `JetStream` context's acknowledgement task) run whichever
+    /// thread asks for them.
+    ///
+    /// Why optional: a client adopted through `from_client` may be handed over outside any
+    /// runtime, and then the caller's runtime is the only one there is.
+    runtime: Option<Handle>,
 }
 
 impl Debug for NatsConnection {
@@ -38,10 +65,39 @@ impl Debug for NatsConnection {
 }
 
 impl NatsConnection {
-    fn new(client: Client) -> Arc<Self> {
+    fn new(client: Client, runtime: Option<Handle>) -> Arc<Self> {
         Arc::new(Self {
             client,
             closed: AtomicBool::new(false),
+            runtime,
+        })
+    }
+
+    /// A `JetStream` context on this connection. The context starts its acknowledgement task as
+    /// it is built, so it is built inside the runtime the broker connected on.
+    pub(crate) fn jetstream(&self) -> jetstream::Context {
+        let _entered = self.runtime.as_ref().map(Handle::enter);
+        jetstream::new(self.client.clone())
+    }
+
+    /// Runs `work` on the runtime the broker connected on, so a task the client spawns inside it
+    /// lands there and not on the caller's runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NatsError::JetStream`] when that runtime is shutting down and drops the work.
+    async fn on_runtime<Output: Send + 'static>(
+        &self,
+        work: impl Future<Output = Output> + Send + 'static,
+    ) -> Result<Output, NatsError> {
+        let Some(runtime) = &self.runtime else {
+            return Ok(work.await);
+        };
+        runtime.spawn(work).await.map_err(|err| {
+            if err.is_panic() {
+                resume_unwind(err.into_panic());
+            }
+            NatsError::JetStream(Box::new(err))
         })
     }
 
@@ -62,6 +118,26 @@ impl NatsConnection {
         &self.client
     }
 }
+
+/// What a connected broker and every handle paired off it speak over: the live connection, or,
+/// under the `testing` feature, the in-process transport the test harness connected instead.
+///
+/// Without the feature there is one variant, so the type is the connection handle itself and
+/// every `match` on it is irrefutable: a production build carries no second transport and no
+/// branch to it.
+#[derive(Debug, Clone)]
+pub(crate) enum Link {
+    Nats(Arc<NatsConnection>),
+    #[cfg(feature = "testing")]
+    InProcess(Arc<Bus>),
+}
+
+// The zero-cost promise of the in-process mode, held by the compiler: a build without it gives the
+// link exactly the size of the connection handle it wraps, and the connected broker nothing more.
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<Link>() == size_of::<Arc<NatsConnection>>());
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<ConnectedNatsBroker>() == size_of::<Arc<NatsConnection>>());
 
 /// A NATS broker: configuration captured, no I/O performed yet.
 ///
@@ -129,14 +205,44 @@ impl Broker for NatsBroker {
     type Connected = ConnectedNatsBroker;
 
     async fn connect(self) -> Result<Self::Connected, Self::Error> {
+        #[cfg(feature = "testing")]
+        let routes = RouteBook::new(in_process::settings(&self.options)?.no_echo);
         let client = self
             .options
             .connect(self.addrs.as_str())
             .await
             .map_err(|err| NatsError::Connect(Box::new(err)))?;
-        Ok(ConnectedNatsBroker::from_client(client))
+        Ok(ConnectedNatsBroker {
+            link: Link::Nats(NatsConnection::new(client, Some(Handle::current()))),
+            #[cfg(feature = "testing")]
+            routes,
+        })
     }
 }
+
+/// The in-process mode: the connected form a test runs the production app against, carrying the
+/// in-process transport in place of the connection.
+///
+/// The addresses are parsed as `connect` parses them, so a broker a service could not connect is
+/// not one a test can connect either, and the connection options that decide what the server
+/// delivers (`no_echo`, the inbox prefix) are the ones [`with_options`](NatsBroker::with_options)
+/// set.
+#[cfg(feature = "testing")]
+impl InProcess for NatsBroker {
+    fn connect_in_process(
+        self,
+    ) -> impl Future<Output = Result<Self::Connected, Self::Error>> + Send {
+        ready(
+            in_process::connect(&self.addrs, &self.options).map(|bus| ConnectedNatsBroker {
+                routes: RouteBook::new(bus.no_echo()),
+                link: Link::InProcess(bus),
+            }),
+        )
+    }
+}
+
+#[cfg(feature = "testing")]
+ruststream::register_testable_broker!(NatsBroker);
 
 /// `DescribeServer` reports the host and port of every configured address, which is what the
 /// `AsyncAPI` document records for the service. The live coordinates the server reports once
@@ -167,7 +273,10 @@ impl DescribeServer for NatsBroker {
 /// compile error for the owner of the handle.
 #[derive(Debug)]
 pub struct ConnectedNatsBroker {
-    connection: Arc<NatsConnection>,
+    link: Link,
+    /// The subscriptions this broker opened, which the test harness asks its routing of.
+    #[cfg(feature = "testing")]
+    routes: RouteBook,
 }
 
 impl ConnectedNatsBroker {
@@ -177,10 +286,14 @@ impl ConnectedNatsBroker {
     /// authentication flow `ConnectOptions` cannot express). Prefer
     /// [`NatsBroker::with_options`] where it fits: only the plain [`NatsBroker`] slots into the
     /// synchronous app builder.
+    ///
+    /// The broker's own tasks run on the runtime this is called on, when there is one.
     #[must_use]
     pub fn from_client(client: Client) -> Self {
         Self {
-            connection: NatsConnection::new(client),
+            link: Link::Nats(NatsConnection::new(client, Handle::try_current().ok())),
+            #[cfg(feature = "testing")]
+            routes: RouteBook::new(false),
         }
     }
 
@@ -210,9 +323,31 @@ impl ConnectedNatsBroker {
     }
 
     /// A clone of the underlying `async-nats` client, for operations this crate does not wrap.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a broker the test harness connected in process (the `testing` feature's
+    /// `connect_in_process`): that broker has no client, and what a test does through one is
+    /// outside the in-process transport.
     #[must_use]
     pub fn client(&self) -> Client {
-        self.connection.client().clone()
+        self.connection().client().clone()
+    }
+
+    /// The live connection.
+    ///
+    /// Why this can panic: under the `testing` feature the same connected type carries the
+    /// in-process transport, which has no client to hand out; without the feature the match is
+    /// irrefutable.
+    fn connection(&self) -> &Arc<NatsConnection> {
+        match &self.link {
+            Link::Nats(connection) => connection,
+            #[cfg(feature = "testing")]
+            Link::InProcess(_) => panic!(
+                "a broker connected in process has no async-nats client: `client` and \
+                 `jetstream` are for a broker connected with `connect`"
+            ),
+        }
     }
 
     /// The coordinates the server announced on this connection, which may differ from the
@@ -224,20 +359,30 @@ impl ConnectedNatsBroker {
     /// generated `AsyncAPI` document takes its server from.
     #[must_use]
     pub fn server_spec(&self) -> ServerSpec {
-        let info = self.connection.client().server_info();
+        let connection = match &self.link {
+            Link::Nats(connection) => connection,
+            #[cfg(feature = "testing")]
+            Link::InProcess(_) => return ServerSpec::in_process("nats"),
+        };
+        let info = connection.client().server_info();
         ServerSpec::new(format!("{}:{}", info.host, info.port), "nats")
             .protocol_version(info.proto.to_string())
     }
 
     /// A `JetStream` context on this connection, for stream and consumer administration
     /// (creating the stream a consumer reads, purging it, deleting it on teardown).
+    ///
+    /// # Panics
+    ///
+    /// Panics on a broker connected in process, as [`client`](Self::client) does.
     #[must_use]
     pub fn jetstream(&self) -> jetstream::Context {
-        jetstream::new(self.client())
+        self.connection().jetstream()
     }
 
-    pub(crate) fn connection(&self) -> &Arc<NatsConnection> {
-        &self.connection
+    /// What every handle paired off this broker speaks over.
+    pub(crate) const fn link(&self) -> &Link {
+        &self.link
     }
 
     /// Opens the subscription `source` describes: a Core subscription for [`CoreSubject`], a pull
@@ -253,6 +398,24 @@ impl ConnectedNatsBroker {
         source: S,
     ) -> Result<NatsSubscriber, NatsError> {
         source.ensure_subject()?;
+        #[cfg(feature = "testing")]
+        if let Link::InProcess(bus) = &self.link {
+            return in_process::subscribe(bus, &self.routes, &source);
+        }
+        #[cfg(feature = "testing")]
+        let route = in_process::route(&source);
+        let subscriber = self.subscribe_live(source).await?;
+        #[cfg(feature = "testing")]
+        if let Some(route) = route {
+            self.routes.record(route);
+        }
+        Ok(subscriber)
+    }
+
+    async fn subscribe_live<S: NatsSubscription>(
+        &self,
+        source: S,
+    ) -> Result<NatsSubscriber, NatsError> {
         let subject = source.subject();
         match source.plan() {
             SubscriptionPlan::Core { queue_group } => {
@@ -286,7 +449,7 @@ impl ConnectedNatsBroker {
         subject: &str,
         queue_group: Option<&str>,
     ) -> Result<NatsSubscriber, NatsError> {
-        let client = self.connection.live_client(subject)?;
+        let client = self.connection().live_client(subject)?;
         let subject = subject.to_owned();
         let inner = if let Some(queue) = queue_group {
             client
@@ -317,8 +480,9 @@ impl ConnectedNatsBroker {
         consumer_cfg: ConsumerConfig,
         pull_expires: Duration,
     ) -> Result<NatsSubscriber, NatsError> {
-        let client = self.connection.live_client(subject)?.clone();
-        let ctx = jetstream::new(client);
+        let connection = self.connection();
+        connection.live_client(subject)?;
+        let ctx = connection.jetstream();
         let stream = ctx
             .get_stream(stream_name)
             .await
@@ -328,9 +492,11 @@ impl ConnectedNatsBroker {
             .create_consumer(consumer_cfg)
             .await
             .map_err(|err| NatsError::JetStream(Box::new(err)))?;
-        let messages = consumer
-            .messages()
-            .await
+        // The stream spawns the consumer's pull loop as it opens.
+        let pulling = consumer.clone();
+        let messages = connection
+            .on_runtime(async move { pulling.messages().await })
+            .await?
             .map_err(|err| NatsError::JetStream(Box::new(err)))?;
 
         Ok(NatsSubscriber::from_jetstream(
@@ -348,10 +514,22 @@ impl ConnectedBroker for ConnectedNatsBroker {
     type Closed = ClosedNatsBroker;
 
     async fn shutdown(self) -> Result<Self::Closed, Self::Error> {
+        let connection = match self.link {
+            Link::Nats(connection) => connection,
+            #[cfg(feature = "testing")]
+            Link::InProcess(bus) => {
+                let (messages_sent, messages_received) = bus.close();
+                return Ok(ClosedNatsBroker {
+                    messages_sent,
+                    messages_received,
+                    connects: 1,
+                });
+            }
+        };
         // Marked closed before draining: a publisher aliasing the connection must not slip a
         // message into a connection that is already going away.
-        self.connection.closed.store(true, Ordering::Release);
-        let client = self.connection.client();
+        connection.closed.store(true, Ordering::Release);
+        let client = connection.client();
         let stats = client.statistics();
         client
             .drain()
@@ -386,6 +564,67 @@ impl Subscribe for ConnectedNatsBroker {
 
 impl DefaultPublish for ConnectedNatsBroker {
     type Policy = NatsPublish;
+}
+
+/// The harness's view of the broker: the in-process transport it injects into and reads back,
+/// the coordinator it counts in-flight deliveries with, and the routing of every subscription
+/// this broker opened, in process or live (see [`routes`](TestableBroker::routes)).
+///
+/// # Panics
+///
+/// `inject` and `published` panic on a broker connected with `connect`: the harness drives only
+/// the connection `connect_in_process` produced, and a live connection has no log to read and no
+/// synchronous way to take a message.
+#[cfg(feature = "testing")]
+impl TestableBroker for ConnectedNatsBroker {
+    fn install_coordinator(&self, coordinator: Coordinator) {
+        if let Link::InProcess(bus) = &self.link {
+            bus.install(coordinator);
+        }
+    }
+
+    fn inject(&self, message: OutgoingMessage<'_>) {
+        let bus = self.bus("inject");
+        // An external producer: another connection, so `no_echo` does not hold it back.
+        if let Err(err) = bus.publish(
+            message.name(),
+            Bytes::copy_from_slice(message.payload()),
+            message.headers(),
+            None,
+            PublishMode::Core,
+            Origin::External,
+        ) {
+            panic!(
+                "the injected message to {:?} is not one the server takes: {err}",
+                message.name()
+            );
+        }
+    }
+
+    fn published(&self, name: &str) -> Vec<RawMessage> {
+        self.bus("published").published(name)
+    }
+
+    /// NATS routing, answered from the subscriptions this broker opened: every Core subscription
+    /// whose subject matches, one member of a queue group, and the consumers of the stream that
+    /// stores the subject under their filter. See the crate's testing overview for the rules.
+    fn routes(&self, destination: &str, subscriptions: &[&str]) -> Vec<usize> {
+        self.routes.routes(destination, subscriptions)
+    }
+}
+
+#[cfg(feature = "testing")]
+impl ConnectedNatsBroker {
+    /// The in-process transport, which is all the harness drives.
+    fn bus(&self, what: &str) -> &Arc<Bus> {
+        match &self.link {
+            Link::InProcess(bus) => bus,
+            Link::Nats(_) => panic!(
+                "TestableBroker::{what} reached a broker connected with `connect`; the harness \
+                 drives the connection `connect_in_process` produces"
+            ),
+        }
+    }
 }
 
 /// The terminal witness returned by shutting down a [`ConnectedNatsBroker`].

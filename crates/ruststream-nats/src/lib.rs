@@ -4,6 +4,8 @@
 mod broker;
 mod convert;
 mod error;
+#[cfg(feature = "testing")]
+mod in_process;
 mod jetstream;
 mod message;
 mod publisher;
@@ -25,6 +27,3 @@ pub use subject::{
     CoreSubject, CoreWildcard, DeliverPolicy, JetStreamSubject, NatsSubscription, NonZeroDuration,
 };
 pub use subscriber::NatsSubscriber;
-
-#[cfg(feature = "testing")]
-pub mod testing;

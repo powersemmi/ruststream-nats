@@ -67,13 +67,80 @@ pub(crate) const EXPECTED_STREAM: &str = "Nats-Expected-Stream";
 /// # Examples
 ///
 /// ```
-/// use ruststream_nats::JetStreamOptions;
+/// # #[cfg(all(feature = "testing"))]
+/// # mod demo {
+/// use std::error::Error;
 ///
-/// let options = JetStreamOptions {
-///     message_id: Some("order-7".into()),
-///     ..JetStreamOptions::default()
-/// };
-/// assert_eq!(options.expect_last_sequence, None);
+/// use ruststream::testing::TestApp;
+/// use ruststream_nats::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "archive.orders")]
+/// struct Archived {
+///     id: u64,
+/// }
+///
+/// #[derive(OutSlot)]
+/// #[publishes(Archived)]
+/// struct Archive;
+///
+/// #[subscriber("orders.created")]
+/// async fn archive(
+///     order: &Order,
+///     Out(out): Out<impl Publisher<Options = JetStreamOptions>, Archive>,
+/// ) -> HandlerOutcome {
+///     let sent = out
+///         .message(&Archived { id: order.id })
+///         .message_id(format!("order-{}", order.id))
+///         .publish()
+///         .await;
+///     if sent.is_err() {
+///         return HandlerOutcome::retry();
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// pub fn app() -> impl App {
+///     RustStream::new(AppInfo::new("archive", "0.1.0"))
+///         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+///             b.include(archive)
+///                 .out(Archive, JetStreamPublish::default().expect_stream("ARCHIVE"))
+///                 .build();
+///         })
+/// }
+///
+/// pub async fn archives_once_per_order() -> Result<(), Box<dyn Error>> {
+///     let tb = TestApp::start(app()).await?;
+///
+///     tb.broker::<NatsBroker>()
+///         .message(&Order { id: 7 })
+///         .to("orders.created")
+///         .publish()
+///         .await?;
+///
+///     tb.out::<Archive>()
+///         .assert_called_once()
+///         .with_options(&JetStreamOptions {
+///             message_id: Some("order-7".into()),
+///             ..JetStreamOptions::default()
+///         });
+///     tb.shutdown().await?;
+///     Ok(())
+/// }
+/// # }
+/// # #[cfg(all(feature = "testing"))]
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// #     demo::archives_once_per_order().await
+/// # }
+/// # #[cfg(not(all(feature = "testing")))]
+/// # fn main() {}
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JetStreamOptions {
@@ -230,10 +297,39 @@ where
 /// # Examples
 ///
 /// ```
-/// use ruststream_nats::JetStreamPublish;
+/// # mod demo {
+/// use ruststream_nats::prelude::*;
+/// use serde::{Deserialize, Serialize};
 ///
-/// let policy = JetStreamPublish::default().expect_stream("ORDERS");
-/// # let _ = policy;
+/// #[derive(Deserialize)]
+/// struct Payment {
+///     order: u64,
+/// }
+///
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "orders.paid")]
+/// struct Paid {
+///     order: u64,
+/// }
+///
+/// #[subscriber("payments.settled", publish)]
+/// async fn record(payment: &Payment) -> Paid {
+///     Paid { order: payment.order }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             // The reply is stored, and a subject the ORDERS stream does not serve is an error.
+///             b.include(record)
+///                 .out_reply(JetStreamPublish::default().expect_stream("ORDERS"));
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]

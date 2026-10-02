@@ -455,8 +455,10 @@ both modes. The harness vocabulary is documented with the core crate:
 [`ruststream::testing`](https://docs.rs/ruststream/latest/ruststream/testing/index.html).
 
 ```rust
-# #[cfg(feature = "testing")]
+# #[cfg(all(feature = "testing"))]
 # mod demo {
+use std::error::Error;
+
 use ruststream::testing::TestApp;
 use ruststream_nats::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -485,7 +487,7 @@ pub fn app() -> impl App {
         })
 }
 
-pub async fn confirms_an_order() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn confirms_an_order() -> Result<(), Box<dyn Error>> {
     let tb = TestApp::start(app()).await?;
 
     tb.broker::<NatsBroker>()
@@ -502,14 +504,12 @@ pub async fn confirms_an_order() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 # }
-# #[cfg(feature = "testing")]
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
-#     tokio::runtime::Builder::new_multi_thread()
-#         .enable_all()
-#         .build()?
-#         .block_on(demo::confirms_an_order())
+# #[cfg(all(feature = "testing"))]
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+#     demo::confirms_an_order().await
 # }
-# #[cfg(not(feature = "testing"))]
+# #[cfg(not(all(feature = "testing")))]
 # fn main() {}
 ```
 

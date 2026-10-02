@@ -65,13 +65,49 @@ use crate::message::NatsMessage;
 /// # Examples
 ///
 /// ```
-/// use ruststream::runtime::Context;
+/// # mod demo {
+/// use ruststream::schemars::JsonSchema;
 /// use ruststream_nats::context::{JetStreamContext, keys};
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
 ///
-/// // The context a handler reads through; the runtime supplies it per delivery.
-/// fn read(ctx: &Context<'_, JetStreamContext>) -> Option<u64> {
-///     ctx.context(keys::STREAM_SEQUENCE)
+/// #[derive(Deserialize, JsonSchema)]
+/// # #[schemars(crate = "ruststream::schemars")]
+/// struct Order {
+///     id: u64,
 /// }
+///
+/// struct Ledger;
+///
+/// impl Handle<Order, (), (), JetStreamContext> for Ledger {
+///     async fn handle(
+///         &self,
+///         order: &Order,
+///         _outs: &(),
+///         ctx: &mut Context<'_, JetStreamContext>,
+///     ) -> Result<(), HandlerOutcome> {
+///         if let Some(sequence) = ctx.context(keys::STREAM_SEQUENCE) {
+///             println!("order {} is entry {sequence} of the ledger", order.id);
+///         }
+///         Ok(())
+///     }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("ledger", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.include(subscriber(
+///                 JetStreamSubject::new("orders.*", "ORDERS").durable("ledger"),
+///                 Ledger,
+///             )
+///             .build());
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JetStreamContext {

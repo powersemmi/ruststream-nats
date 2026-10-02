@@ -28,11 +28,45 @@
 //! # Examples
 //!
 //! ```
+//! # mod demo {
 //! use ruststream_nats::prelude::*;
+//! use serde::{Deserialize, Serialize};
 //!
-//! let info = AppInfo::new("orders", "0.1.0");
-//! let broker = NatsBroker::new("nats://localhost:4222");
-//! # let _ = (info, broker, Publish, JetStreamPublish::default());
+//! #[derive(Deserialize)]
+//! struct Order {
+//!     id: u64,
+//! }
+//!
+//! #[derive(Deserialize, Serialize, Outgoing)]
+//! #[outgoing(name = "orders.confirmed")]
+//! struct Confirmation {
+//!     id: u64,
+//! }
+//!
+//! #[subscriber(JetStreamSubject::new("orders.created", "ORDERS").durable("confirmer"), publish)]
+//! async fn confirm(order: &Order) -> Confirmation {
+//!     Confirmation { id: order.id }
+//! }
+//!
+//! #[subscriber(CoreSubject::new("orders.confirmed").queue_group("mailers"))]
+//! async fn mail(confirmation: &Confirmation) -> HandlerOutcome {
+//!     println!("mailing confirmation {}", confirmation.id);
+//!     HandlerOutcome::ack()
+//! }
+//!
+//! #[ruststream::app]
+//! fn app() -> impl App {
+//!     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
+//!         NatsBroker::new("nats://localhost:4222"),
+//!         |b| {
+//!             b.include(confirm)
+//!                 .out_reply(JetStreamPublish::default().expect_stream("ORDERS"));
+//!             b.include(mail);
+//!         },
+//!     )
+//! }
+//! # }
+//! # fn main() {}
 //! ```
 
 pub use ruststream::prelude::*;

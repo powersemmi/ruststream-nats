@@ -58,10 +58,38 @@ pub trait NatsPublishPolicy: PublishPolicy<ConnectedNatsBroker> + Sealed {
 /// # Examples
 ///
 /// ```
-/// use ruststream_nats::NatsPublish;
+/// # mod demo {
+/// use ruststream_nats::prelude::*;
+/// use serde::{Deserialize, Serialize};
 ///
-/// let policy = NatsPublish;
-/// # let _ = policy;
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "orders.seen")]
+/// struct Seen {
+///     id: u64,
+/// }
+///
+/// #[subscriber("orders.created", publish)]
+/// async fn acknowledge(order: &Order) -> Seen {
+///     Seen { id: order.id }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             // `Publish` is this policy under the prelude's mount-site name.
+///             b.include(acknowledge).out_reply(Publish);
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[must_use]

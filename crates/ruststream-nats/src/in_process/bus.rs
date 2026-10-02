@@ -29,7 +29,7 @@ use crate::jetstream::{
 const MAX_PAYLOAD: usize = 1024 * 1024;
 
 /// How long a stream remembers a `Nats-Msg-Id` unless it is configured otherwise.
-const DUPLICATE_WINDOW: Duration = Duration::from_secs(120);
+const DUPLICATE_WINDOW: Duration = Duration::from_mins(2);
 
 /// The part of the connection options that decides what the server delivers.
 #[derive(Debug, Clone)]

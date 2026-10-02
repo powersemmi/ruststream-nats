@@ -908,7 +908,7 @@ async fn a_request_nobody_subscribes_to_has_no_responders() {
         .publisher(NatsPublish)
         .request(
             OutgoingMessage::new("echo.absent", b"hi"),
-            Duration::from_secs(60),
+            Duration::from_mins(1),
         )
         .await
         .expect_err("no responders");

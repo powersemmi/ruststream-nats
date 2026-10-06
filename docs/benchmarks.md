@@ -72,9 +72,11 @@ framework's own cost included; the core publishes that cost alone on its
 A count depends a little on how the socket hands the client its bytes. Over seven runs the
 instructions per message moved by less than half a percent, and the allocations by one block in a
 run of 2000 deliveries. `just bench-code` fails when a scenario allocates more than the highest
-total it was seen at plus a tenth of a percent, and when it runs more than two percent more
-instructions than the previous run kept in `target/` (or the baseline `--baseline=main` names); a
-pull request that changes the cost cites its numbers.
+total it was seen at plus a tenth of a percent. Against a baseline it also fails on two percent
+more instructions in a scenario: `just bench-code --save-baseline=main` records the baseline on
+`main`, and `just bench-code --baseline=main` measures a change against it. A failed run prints
+every limit it breached, the old value beside the new one. A pull request that changes the cost
+cites its numbers.
 
 ## The machine
 
@@ -118,5 +120,7 @@ just bench-code
 ```
 
 The recipe starts the same stand, counts the code table under valgrind, stops the stand and rewrites
-the `code` section of the same document. It takes under a minute and needs valgrind and the
-benchmark runner: `cargo install --locked gungraun-runner --version =0.19.4`.
+the `code` section of the same document. It takes under a minute and needs valgrind. The recipe
+installs the benchmark runner itself, at the release `Cargo.lock` pins. A leading number measures
+over another count of deliveries, `just bench-code 5000`: the figures are steadier and the run is
+longer. The published table is measured at the default of 1000.

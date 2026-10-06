@@ -64,7 +64,7 @@ use async_nats::jetstream::{Context as JetStreamContext, new as jetstream};
 use bytes::Bytes;
 use futures::future::try_join_all;
 use futures::{StreamExt, TryStreamExt, stream};
-use gungraun::{Callgrind, Dhat, DhatMetric, EntryPoint, EventKind, LibraryBenchmarkConfig};
+use gungraun::{Callgrind, Dhat, DhatMetric, EntryPoint, LibraryBenchmarkConfig};
 use ruststream::runtime::{AppInfo, BrokerScope, Identity, RunningApp, RustStream};
 use ruststream_nats::NatsBroker;
 use serde::Deserialize;
@@ -94,10 +94,43 @@ pub struct Order {
     pub quantity: u32,
 }
 
-/// Deliveries per measured run: large enough that entering and leaving the region is lost in the
-/// per-message number, small enough that a scenario stays within seconds of valgrind time.
-/// `scripts/bench_results.py` divides by the same count.
-pub const MESSAGES: usize = 1_000;
+/// Deliveries per measured run.
+///
+/// The default is large enough that entering and leaving the region is lost in the per-message
+/// number, and small enough that a scenario stays within seconds of valgrind time.
+/// `RUSTSTREAM_BENCH_MESSAGES` at build time overrides it (`just bench-code 5000`) for a steadier
+/// number at the price of a longer run; the published document is measured at the default, and
+/// the allocation limits scale with the count through [`config`]. The recipe hands the same count
+/// to `scripts/bench_results.py`, which divides by it.
+pub const MESSAGES: usize = messages(option_env!("RUSTSTREAM_BENCH_MESSAGES"));
+
+/// The count a run measures when nothing names one.
+const DEFAULT_MESSAGES: usize = 1_000;
+
+/// The configured count, or the default; a value that is not a positive number is a build error
+/// naming the variable, so a typo cannot silently measure the default.
+const fn messages(configured: Option<&str>) -> usize {
+    let Some(text) = configured else {
+        return DEFAULT_MESSAGES;
+    };
+    let bytes = text.as_bytes();
+    let mut count = 0usize;
+    let mut index = 0;
+    while index < bytes.len() {
+        let digit = bytes[index];
+        assert!(
+            digit.is_ascii_digit(),
+            "RUSTSTREAM_BENCH_MESSAGES must be a positive number of deliveries"
+        );
+        count = count * 10 + (digit - b'0') as usize;
+        index += 1;
+    }
+    assert!(
+        count > 0,
+        "RUSTSTREAM_BENCH_MESSAGES must be a positive number of deliveries"
+    );
+    count
+}
 
 /// The measurement configuration every gated scenario shares.
 ///
@@ -106,9 +139,10 @@ pub const MESSAGES: usize = 1_000;
 /// longest run of the scenario (twice [`MESSAGES`] deliveries) is held to. A scenario sets them to
 /// the highest total its runs were seen at plus a tenth of a percent, at least one block: a count
 /// that moves by a block with how the socket hands over its bytes never fails an unchanged tree,
-/// and one allocation more per delivery always does. The instruction limit is relative:
-/// `just bench-code --save-baseline=main` records a baseline and `just bench-code --baseline=main`
-/// compares against it.
+/// and one allocation more per delivery always does. The instruction limit is relative, and
+/// `just bench-code` sets it only for a run against a named baseline:
+/// `just bench-code --save-baseline=main` records one, and `just bench-code --baseline=main` fails
+/// on two percent more instructions than it.
 pub fn config(steady: u64, cold: u64) -> LibraryBenchmarkConfig {
     config_every(steady, 1, cold)
 }
@@ -121,9 +155,7 @@ pub fn config_every(steady: u64, per: u64, cold: u64) -> LibraryBenchmarkConfig 
         // The runner clears the environment of the measured process, and the service needs to know
         // where the server is.
         .pass_through_env(URL)
-        // Two percent over the previous run: on the stand the longest runs moved by at most 0.2
-        // percent from one run to the next.
-        .tool(callgrind().soft_limits([(EventKind::Ir, 2f64)]))
+        .tool(callgrind())
         .tool(dhat().hard_limits([(DhatMetric::TotalBlocks, blocks(steady, per, cold))]));
     config
 }

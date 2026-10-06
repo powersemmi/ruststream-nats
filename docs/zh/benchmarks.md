@@ -58,8 +58,10 @@ Core NATS 是这些数字能落在的最薄的底座：那里的一次投递就�
 
 计数会随套接字把字节交给客户端的方式略有变化。七次运行里，每条消息的指令数变动不到百分之零点五，
 分配次数在 2000 次投递的运行里差一个块。`just bench-code` 在分配次数超过场景出现过的最大总数再加
-千分之一时失败；指令数比保存在 `target/` 里的上一次运行（或 `--baseline=main` 指定的基线）多出百分之二以上
-也算失败。改变开销的合并请求要附上自己的数字。
+千分之一时失败。与基线对照时，某个场景的指令数多出百分之二以上也算失败：
+`just bench-code --save-baseline=main` 在 `main` 上记录基线，`just bench-code --baseline=main`
+拿改动与它对照。运行失败时，会列出它超出的每一个限制，旧值与新值并列。改变开销的合并请求要附上
+自己的数字。
 
 ## 机器 { #the-machine }
 
@@ -99,4 +101,6 @@ just bench-code
 ```
 
 这条 recipe 起同一个测试台，在 valgrind 下统计代码表，再停掉测试台，并重写同一份文档里的 `code`
-部分。它不到一分钟，需要 valgrind 和基准测试运行器：`cargo install --locked gungraun-runner --version =0.19.4`。
+部分。它不到一分钟，需要 valgrind。recipe 会自行安装基准测试运行器，版本与 `Cargo.lock` 锁定的
+一致。开头的数字指定每次运行的投递次数，例如 `just bench-code 5000`：数字更稳定，运行也更久。
+公布的表格按默认的 1000 次测量。

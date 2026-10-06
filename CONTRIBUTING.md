@@ -39,7 +39,7 @@ git clone https://github.com/powersemmi/ruststream-nats.git
 | `just typo`, `just zizmor` | uv | the uv documentation |
 | rendering a scaffold under `templates/` | cargo-generate | `cargo install cargo-generate --locked` |
 | `just bench` | Python 3 | the system package manager |
-| `just bench-code` | valgrind and the benchmark runner | the system package manager, then `cargo install --locked gungraun-runner --version =0.19.4` |
+| `just bench-code` | valgrind and Python 3 | the system package manager; the recipe installs the benchmark runner itself, at the release `Cargo.lock` pins |
 | the documentation site | Python 3.12 | `pip install -r docs/requirements.txt`, then `properdocs serve` |
 
 ## Checking a change
@@ -63,7 +63,10 @@ branch by CI's lint job whenever they or the crate change. `cargo generate --pat
 client on the same stand and rewrites `docs/benchmarks/results.json`. It takes minutes and wants
 the machine to itself. `just bench-code` counts what a message costs on the service's thread (the
 framework, this crate and the client) in instructions and allocations, on the same stand, and
-rewrites the code table of the same document; it takes under a minute.
+rewrites the code table of the same document; it takes under a minute. Every run fails on more
+allocations than a scenario declares. `just bench-code --save-baseline=main` on `main` records a
+baseline, and `just bench-code --baseline=main` on a change also fails on two percent more
+instructions than it. A failed run prints every limit it breached.
 
 ## Testing against a local core
 

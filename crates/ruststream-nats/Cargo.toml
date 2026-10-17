@@ -358,3 +358,70 @@ name = "manual_nats_settlement_out_retry"
 path = "examples/manual/nats_settlement_out_retry.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "nats_publishing_publish"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_publishing_publish"
+path = "examples/manual/nats_publishing_publish.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_publishing_headers"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_publishing_headers"
+path = "examples/manual/nats_publishing_headers.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_jetstream"
+path = "examples/manual/nats_jetstream.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_publishing_expect_stream"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_publishing_expect_stream"
+path = "examples/manual/nats_publishing_expect_stream.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_publishing_expectations"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_publishing_expectations"
+path = "examples/manual/nats_publishing_expectations.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_request_reply"
+path = "examples/manual/nats_request_reply.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_request_reply_responder"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_request_reply_responder"
+path = "examples/manual/nats_request_reply_responder.rs"
+required-features = ["testing"]
+test = true

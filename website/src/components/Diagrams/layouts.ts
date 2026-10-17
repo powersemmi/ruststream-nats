@@ -4,6 +4,8 @@ import type {Box, Lane, Link} from './flow';
 import {lanes} from './lanes';
 import {lifecycle} from './lifecycle';
 import {path} from './path';
+import {retries} from './retries';
+import {settlement} from './settlement';
 import {streams} from './streams';
 import {subjects} from './subjects';
 import type {Words} from './words';
@@ -23,6 +25,8 @@ export const LAYOUTS = {
   lifecycle,
   path,
   lanes,
+  settlement,
+  retries,
 } satisfies Record<string, (words: Words) => Layout>;
 
 export type DiagramName = keyof typeof LAYOUTS;

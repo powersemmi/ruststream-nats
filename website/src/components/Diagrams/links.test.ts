@@ -98,4 +98,22 @@ describe('a box that names a component', () => {
       jetStreamSettle: '/components/settlement/',
     });
   });
+
+  it('links to that component page in the settlement, the retries and the lanes', () => {
+    expect(hrefs('settlement')).toEqual({
+      retryAfter: '/components/settlement/retry-after/',
+      unsettledEffect: '/components/settlement/ack-wait/',
+      core: '/components/settlement/at-most-once/',
+    });
+    expect(hrefs('retries')).toEqual({
+      outcome: '/components/settlement/retries/',
+      cap: '/components/settlement/retries/',
+      named: '/components/settlement/out-retry/',
+      deadLetter: '/components/settlement/dead-letters/',
+    });
+    expect(hrefs('lanes')).toEqual({
+      keyed: '/components/subscriptions/keys/',
+      scale: '/components/subscriptions/queue-groups/',
+    });
+  });
 });

@@ -9,10 +9,13 @@ const translationTree = /^(ru|zh)\/docusaurus-plugin-content-docs\/current\/(.*)
 /**
  * Resolves the Markdown links Docusaurus cannot.
  *
- * A translated page links to its neighbours by relative path, and Docusaurus looks for them
- * only in the translation's own folder. A neighbour with no translation yet is served from the
- * English file, so the link goes to that page's address in the same language, where the
- * build's link check still verifies it. Any other unresolved link fails the build.
+ * A page links to its neighbours by relative path, and a language build knows each page by the
+ * file it serves: the translation where there is one, the English file where there is none. A
+ * translated page linking to a neighbour with no translation yet, and an English page standing in
+ * for a missing translation linking to a translated neighbour, both name a file the build does
+ * not know. Either neighbour exists in the language, so the link goes to that page's address in
+ * the same language, where the build's link check still verifies it. Any other unresolved link
+ * fails the build.
  */
 export function resolveMarkdownLinks(): MarkdownConfig['hooks']['onBrokenMarkdownLinks'] {
   return ({url, sourceFilePath}) => {
@@ -24,7 +27,7 @@ export function resolveMarkdownLinks(): MarkdownConfig['hooks']['onBrokenMarkdow
     const page = path.relative(docsRoot, target).replace(/\.md$/, '');
     const address = page.replace(/(^|\/)index$/, '');
     const suffix = `${address}${address ? '/' : ''}${hash ? `#${hash}` : ''}`;
-    if (translated && !page.startsWith('..') && fs.existsSync(target)) {
+    if (!page.startsWith('..') && fs.existsSync(target)) {
       return `/${suffix}`;
     }
     throw new Error(`Markdown link '${url}' in '${sourceFilePath}' does not resolve`);

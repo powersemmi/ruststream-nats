@@ -61,4 +61,41 @@ describe('a box that names a component', () => {
       redelivery: '/components/settlement/ack-wait/',
     });
   });
+
+  it('links to that component page in the design of the crate', () => {
+    expect(hrefs('design')).toEqual({
+      subscriber: '/architecture/path/',
+      publishers: '/components/publishing/',
+      context: '/components/context/',
+      inProcess: '/components/testing/',
+      broker: '/components/broker/',
+      descriptors: '/components/subscriptions/',
+      jetstream: '/architecture/nats/consumers/',
+    });
+  });
+
+  it('links to that component page in the lifecycle', () => {
+    expect(hrefs('lifecycle')).toEqual({
+      unconnected: '/components/broker/',
+      dial: '/components/broker/connect-options/',
+      core: '/components/subscriptions/core-subject/',
+      jetstream: '/components/subscriptions/jetstream-subject/',
+      closed: '/components/broker/shutdown/',
+      drain: '/components/broker/shutdown/',
+      afterShutdown: '/components/broker/shutdown/',
+    });
+  });
+
+  it('links to that component page on the path of a message', () => {
+    expect(hrefs('path')).toEqual({
+      coreSource: '/architecture/nats/',
+      jetStreamSource: '/architecture/nats/consumers/',
+      jetStreamMessage: '/components/context/',
+      dispatch: '/architecture/lanes/',
+      body: '/components/subscriptions/',
+      publisher: '/components/publishing/',
+      coreSettle: '/components/settlement/at-most-once/',
+      jetStreamSettle: '/components/settlement/',
+    });
+  });
 });

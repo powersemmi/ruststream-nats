@@ -36,14 +36,12 @@ A client built entirely outside the framework becomes a connected broker with
 
 A `#[subscriber("subject")]` handler binds straight to a NATS subject:
 
-```rust
---8<-- "crates/ruststream-nats/examples/nats_core.rs:handler"
+```rust reference="examples/nats_core.rs#handler"
 ```
 
 Wire it onto the broker; the `with_broker` / `include` part is identical to the in-memory broker.
 
-```rust
---8<-- "crates/ruststream-nats/examples/nats_core.rs:app"
+```rust reference="examples/nats_core.rs#app"
 ```
 
 ## JetStream durable consumer
@@ -53,14 +51,12 @@ To consume from JetStream instead, describe the source in the `#[subscriber(..)]
 macro follows the builder chain, so the definition carries its own source. The handler's
 `HandlerResult::Ack` acks back to JetStream. This is what the `nats-js` CLI scaffold generates.
 
-```rust
---8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:handler"
+```rust reference="examples/nats_jetstream.rs#handler"
 ```
 
 The mount site names no source, and the codec resolves the same way as for a by-name handler:
 
-```rust
---8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:mount"
+```rust reference="examples/nats_jetstream.rs#mount"
 ```
 
 Beyond `jetstream` and `durable`, the builder carries `queue_group` (Core NATS load balancing),
@@ -98,8 +94,7 @@ with the broker at startup. Naming a policy picks the transport:
   the server checks before accepting a publish: `expect_stream`, `expect_last_sequence`,
   `expect_last_subject_sequence`, `expect_last_message_id`.
 
-```rust
---8<-- "crates/ruststream-nats/examples/nats_jetstream.rs:publish"
+```rust reference="examples/nats_jetstream.rs#publish"
 ```
 
 ## Request-reply
@@ -108,12 +103,11 @@ NATS supports request-reply natively, so `NatsPublisher` implements the `Request
 `request(msg, timeout)` publishes with a reply inbox and resolves with the reply message, or fails
 with a timeout error when nothing answers in time:
 
-```rust
+```rust reference="examples/nats_request_reply.rs#request"
 use std::time::Duration;
 
 use ruststream::{IncomingMessage, OutgoingMessage, RequestReply};
 
---8<-- "crates/ruststream-nats/examples/nats_request_reply.rs:request"
 ```
 
 Any NATS responder answers it: another service, or `nats reply questions 'pong'` from the CLI. The

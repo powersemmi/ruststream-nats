@@ -278,3 +278,25 @@ name = "manual_nats_asyncapi"
 path = "examples/manual/nats_asyncapi.rs"
 required-features = ["asyncapi"]
 test = true
+
+[[example]]
+name = "nats_testing"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_testing_live"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_testing"
+path = "examples/manual/nats_testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_testing_live"
+path = "examples/manual/nats_testing_live.rs"
+required-features = ["testing"]
+test = true

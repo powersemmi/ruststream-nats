@@ -466,3 +466,15 @@ name = "manual_guide_streams_and_consumers"
 path = "examples/manual/guide/streams_and_consumers.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_acknowledgement"
+path = "examples/guide/acknowledgement.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_acknowledgement"
+path = "examples/manual/guide/acknowledgement.rs"
+required-features = ["testing"]
+test = true

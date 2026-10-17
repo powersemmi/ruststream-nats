@@ -1,4 +1,19 @@
 {
+  "$schema": "https://context7.com/schema/context7.json",
+  "folders": [
+    "docs",
+    "crates/ruststream-nats/src",
+    "crates/ruststream-nats/examples",
+    "website/static"
+  ],
+  "excludeFolders": [
+    "docs/benchmarks",
+    "website/i18n",
+    "website/build",
+    "website/.docusaurus",
+    "website/node_modules",
+    "target"
+  ],
   "rules": [
     "Import `ruststream_nats::prelude::*` in a routes file, where the broker is already chosen; a handler body imports `ruststream::prelude::*` and bounds its injected slot on a capability (`Out<impl Publisher>`, `Out<impl RequestReply>`), so it names no broker.",
     "One subscription form is one descriptor: `CoreSubject` for one Core NATS subject (a bare `#[subscriber(\"orders.created\")]` resolves to it), `CoreWildcard` for a `*` or `>` pattern, `JetStreamSubject::new(subject, stream).durable(name)` for a pull consumer; a setting of the other model is not a method on it and does not compile.",

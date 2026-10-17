@@ -43,7 +43,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
-# The nats_* examples are the docs-site snippet sources; keep them runnable and snippet-checked here.
 [package.metadata.docs.rs]
 all-features = true
 

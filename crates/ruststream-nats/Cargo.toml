@@ -44,15 +44,6 @@ tokio.workspace = true
 tracing.workspace = true
 
 # The nats_* examples are the docs-site snippet sources; keep them runnable and snippet-checked here.
-[[example]]
-name = "nats_jetstream"
-
-[[example]]
-name = "nats_request_reply"
-
-[[example]]
-name = "nats_retry"
-
 [package.metadata.docs.rs]
 all-features = true
 
@@ -298,5 +289,72 @@ test = true
 [[example]]
 name = "manual_nats_testing_live"
 path = "examples/manual/nats_testing_live.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: settlement ---
+
+[[example]]
+name = "nats_settlement_ack"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_settlement_ack"
+path = "examples/manual/nats_settlement_ack.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_settlement_core"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_settlement_core"
+path = "examples/manual/nats_settlement_core.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_settlement_ack_wait"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_settlement_ack_wait"
+path = "examples/manual/nats_settlement_ack_wait.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_retry"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_jetstream"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_request_reply"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_retry"
+path = "examples/manual/nats_retry.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_settlement_out_retry"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_settlement_out_retry"
+path = "examples/manual/nats_settlement_out_retry.rs"
 required-features = ["testing"]
 test = true

@@ -1,3 +1,8 @@
+---
+title: Benchmarks
+description: "What ruststream-nats costs on every message: throughput against the raw async-nats client, and instructions and allocations of its code."
+---
+
 # Benchmarks
 
 A framework between the NATS client and your handler costs time on every message: the subscription

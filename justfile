@@ -40,7 +40,7 @@ test-brokers: brokers-up
 
 # What this crate costs over the async-nats client it wraps: one scenario run as a RustStream
 # service and as a hand-written loop, against the stand the tests use. On demand only - it takes
-# minutes and it wants the machine to itself. The page it feeds is docs/benchmarks.md.
+# minutes and it wants the machine to itself. It feeds the site's benchmarks pages.
 bench *ARGS: brokers-up
     #!/usr/bin/env bash
     set -euo pipefail
@@ -56,9 +56,9 @@ bench *ARGS: brokers-up
 # What a message costs in this crate, the framework and the client's work on the service's thread,
 # counted under valgrind: instructions through callgrind and allocations through DHAT, each
 # scenario a service on the production broker against the stand the tests use. The counts depend
-# on how the socket hands the client its bytes, so they are read over three runs. The page it
-# feeds is the code table of docs/benchmarks.md. RUSTFLAGS is cleared because valgrind aborts on
-# the instructions a recent CPU advertises. Needs valgrind.
+# on how the socket hands the client its bytes, so they are read over three runs. It feeds the
+# code table of the site's benchmarks pages. RUSTFLAGS is cleared because valgrind aborts on the
+# instructions a recent CPU advertises. Needs valgrind.
 #
 # The benchmarks hand the measurement to gungraun's runner, which has to be the release of the
 # library the lock file pins. The recipe installs that release into `target/gungraun-runner` on

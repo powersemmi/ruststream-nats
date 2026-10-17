@@ -1,4 +1,9 @@
-# 基准测试 { #benchmarks }
+---
+title: 基准测试
+description: "ruststream-nats 在每条消息上的开销：与裸 async-nats 客户端对比的吞吐量，以及其代码的指令数和内存分配次数。"
+---
+
+# 基准测试 {/* #benchmarks */}
 
 在 NATS 客户端和你的处理器之间，框架在每条消息上都要花时间：订阅的流、解码、分发、ack。这一页
 说明它花了多少，参照物是同样的活用 `async-nats` 手写一遍。
@@ -15,7 +20,7 @@
 自己的开销就是两列之间的距离，它按 Broker 分别公布，因为运行时占比在不同 Broker 之间有差别，这
 本身就是关于传输和运行时如何相接的事实。
 
-## 数字 { #the-numbers }
+## 数字 {/* #the-numbers */}
 
 三个交错轮次中的最佳值，括号里是中位的一轮。越大越好。
 
@@ -39,7 +44,7 @@ Core NATS 是这些数字能落在的最薄的底座：那里的一次投递就�
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-nats/latest/benchmarks/results.json)，
 框架的站点用它拼出跨 Broker 的汇总表。
 
-## crate 自身的代码 { #the-crates-own-code }
+## crate 自身的代码 {/* #the-crates-own-code */}
 
 <div id="benchmark-code"></div>
 
@@ -63,14 +68,14 @@ Core NATS 是这些数字能落在的最薄的底座：那里的一次投递就�
 拿改动与它对照。运行失败时，会列出它超出的每一个限制，旧值与新值并列。改变开销的合并请求要附上
 自己的数字。
 
-## 机器 { #the-machine }
+## 机器 {/* #the-machine */}
 
 <div id="benchmark-environment"></div>
 
 构建标志和数字一起公布，因为它们会改变这些数字。用 `-C target-cpu=native` 构建出的二进制给出的
 结果，换一台机器就复现不了，所以这条 recipe 在构建前先把这个变量清空。
 
-## 这些数字不代表什么 { #what-they-do-not-mean }
+## 这些数字不代表什么 {/* #what-they-do-not-mean */}
 
 这里只有一个消费者、一个 subject、一个很小的消息体，以及一台跑在回环地址上的服务器。它测的是一次
 投递在这个 crate 里的开销，不是 NATS 能扛多少。这里的一行也不能拿去和另一个 Broker 公布的一行
@@ -86,7 +91,7 @@ JetStream 的数字取自一个内存存储、work-queue 保留策略的流。�
 这些数字是一台机器在某一天的快照。
 它们由人手工重测，测量期间机器只跑这一项：这一页要讲的差值，比与其他任务共用的机器上的噪声还小。
 
-## 自己跑一遍 { #running-it-yourself }
+## 自己跑一遍 {/* #running-it-yourself */}
 
 ```bash
 just bench

@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://powersemmi.github.io/ruststream-nats/">Documentation</a></b>
+  <b><a href="https://powersemmi.github.io/ruststream-nats/latest/">Documentation</a></b>
 </p>
 
 ---

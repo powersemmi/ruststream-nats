@@ -1,29 +1,30 @@
-//! The imports a mount site on NATS writes every time, in one glob.
+//! The imports a service on NATS writes every time, in one glob.
 //!
-//! The broker, the three subscription descriptors ([`CoreSubject`] for one Core NATS subject,
-//! [`CoreWildcard`] for a pattern, [`JetStreamSubject`] for a pull consumer), the publish policies ([`Publish`] is plain Core NATS, [`JetStreamPublish`]
-//! waits for the stream's acknowledgement), the [`RequestReply`] capability, and the whole core
-//! prelude.
+//! `use ruststream_nats::prelude::*;` carries the core's own prelude plus this crate's broker, its
+//! three subscription descriptors ([`CoreSubject`], [`CoreWildcard`], [`JetStreamSubject`]), the
+//! publish policies ([`Publish`] for plain Core NATS, [`JetStreamPublish`] for a stream), the
+//! [`RequestReply`] capability [`Publish`] serves, and the steps of a per-message `JetStream`
+//! setting. The
+//! [Prelude](https://powersemmi.github.io/ruststream-nats/latest/components/broker/prelude/)
+//! page shows it in a service.
 //!
-//! Two vocabularies, one per file. A **handler body** names capabilities: it imports
-//! `ruststream::prelude::*` and bounds an injected slot with the trait it needs
-//! (`Out<impl Publisher>`, `Out<impl RequestReply>`), so the body says what it does with the slot
-//! and never which broker fills it. A **routes file** names policies: it imports this prelude and
-//! attaches one at the mount, where the broker is already chosen. The two never meet in a file, so
-//! the mount-site names are uniform across brokers - `Publish` is whatever plain publishing is on
-//! this transport - and a routes file reads the same whichever transport it was written against.
+//! # Two vocabularies, two files
 //!
-//! There is no separate `Request` policy here: NATS correlates replies on the plain publisher, so
-//! [`Publish`] pairs into the live form that carries [`RequestReply`] as well. A broker that opens
-//! request-reply as a mode of its own aliases that policy `Request`.
+//! A handler body imports `ruststream::prelude::*` and bounds an injected slot with the
+//! **capability trait** it needs (`Out<impl Publisher>`, `Out<impl RequestReply>`), so it names no
+//! broker type at all. A mount site imports this prelude, which carries the core one plus the
+//! **policies** under their concept names: [`Publish`] is whatever plain publishing is on this
+//! transport, and [`JetStreamPublish`] keeps its own name. Include sites therefore read the same on
+//! every broker, and the two vocabularies never meet in one file.
 //!
-//! The one place a handler body reaches for this glob is a per-message `JetStream` setting.
-//! [`JetStreamPublishSteps`] puts `message_id` and the three expectations on the publish builder,
-//! and a body that calls one bounds its slot `Out<impl Publisher<Options = JetStreamOptions>, _>`.
-//! Such a body is tied to `JetStream`, and its signature says so.
+//! One handler body imports this prelude too: the one that writes a per-message `JetStream`
+//! setting. [`JetStreamPublishSteps`] puts `message_id` and the three expectations on the publish
+//! builder, and a body that calls one bounds its slot
+//! `Out<impl Publisher<Options = JetStreamOptions>, _>`; that bound is the stated exception to the
+//! rule above.
 //!
-//! Globbing this beside another broker's prelude is safe: the core items they share resolve to the
-//! same types.
+//! Globbing two broker preludes conflicts on these names where one is used (E0659); the prefixed
+//! types at the crate root are the disambiguation.
 //!
 //! # Examples
 //!
@@ -50,7 +51,7 @@
 //!
 //! #[subscriber(CoreSubject::new("orders.confirmed").queue_group("mailers"))]
 //! async fn mail(confirmation: &Confirmation) -> HandlerOutcome {
-//!     println!("mailing confirmation {}", confirmation.id);
+//!     tracing::info!(confirmation.id, "mailed");
 //!     HandlerOutcome::ack()
 //! }
 //!

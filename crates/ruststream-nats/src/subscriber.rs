@@ -102,6 +102,51 @@ impl Subscriber for CoreSubscriber {
 /// (full ack/nack/term). Construct via [`ConnectedNatsBroker::subscribe_with`] with
 /// [`CoreSubject`] or [`JetStreamSubject`], or let the runtime resolve either source at startup.
 ///
+/// A handler over `&[T]` takes its deliveries in batches, and the mount site sets the largest
+/// batch with `batch(n)`. On `JetStream` one batch is one pull request for at most `n` messages,
+/// and [`pull_expires`](crate::JetStreamSubject::pull_expires) closes a short one early. Core NATS
+/// has no batch on the wire, so the client assembles one and closes a partial batch 10 ms after
+/// its first delivery.
+///
+/// # Examples
+///
+/// ```
+/// # mod demo {
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("orders-worker"))]
+/// async fn handle(order: &Order) -> HandlerOutcome {
+///     tracing::info!(order.id, "handled");
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("orders-reconciler"))]
+/// async fn reconcile(orders: &[Order]) -> HandlerOutcome {
+///     tracing::info!(count = orders.len(), "reconciled");
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.include(handle);
+///             // One pull request fetches at most six messages.
+///             b.include(reconcile.batch(nonzero!(6)));
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
+/// ```
+///
 /// [`ConnectedNatsBroker::subscribe_with`]: crate::ConnectedNatsBroker::subscribe_with
 /// [`CoreSubject`]: crate::CoreSubject
 /// [`JetStreamSubject`]: crate::JetStreamSubject

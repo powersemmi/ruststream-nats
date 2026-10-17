@@ -6,12 +6,11 @@
 //! this transport as a variant of their own, so a service's descriptors and publish policies run
 //! against it unchanged. It has no configuration of its own: the addresses are parsed as the
 //! client parses them, and the connection options that change what the server delivers
-//! (`no_echo`, the inbox prefix) are read from the broker. It never succeeds where a server
-//! fails. A publish, a subscription or an acknowledgement the client or the server refuses (a
-//! subject the frame cannot carry, a header with no NATS form, a message over the server's
-//! payload limit, a `JetStream` publish no stream takes or whose expectation does not hold, a
-//! request nobody answers, a handle outliving its connection) is refused here with the same
-//! error.
+//! (`no_echo`, the inbox prefix) are read from the broker. A publish, a subscription or an
+//! acknowledgement the client or the server refuses (a subject the frame cannot carry, a header
+//! with no NATS form, a message over the server's payload limit, a `JetStream` publish no stream
+//! takes or whose expectation does not hold, a request nobody answers, a handle outliving its
+//! connection) is refused here with the same error.
 //!
 //! What it models: subject matching with `*` and `>`; queue groups, keyed by name as the server
 //! keys them; request and reply, with the immediate "no responders"; streams that store what
@@ -22,8 +21,8 @@
 //! live mode: a stream's own subject list and its limits (a stream here stores what a consumer
 //! of the app reads, a publish that names a stream reaches it until a consumer of the app says
 //! what that stream serves, and from then on a subject outside it is refused), `max_ack_pending`,
-//! a subscription's pending limits, and a stream or consumer the service expects to find (a
-//! subscription here finds every stream it names).
+//! a subscription's pending limits, and whether a stream exists: a subscription here finds every
+//! stream it names, where a server refuses to open one on a stream it does not have.
 
 mod bus;
 mod delivery;

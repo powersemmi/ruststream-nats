@@ -448,6 +448,93 @@ const _: () = assert!(size_of::<JetStreamLink>() == size_of::<(Arc<NatsConnectio
 /// violated expectation, storage failure) is an error rather than a silent drop. Like the Core
 /// publisher it aliases the connection and may outlive it: after the broker shuts down every
 /// publish reports [`NatsError::Closed`].
+///
+/// A service reaches one wherever a mount site names [`JetStreamPublish`]: a reply, an `Out` slot,
+/// or a startup hook that publishes outside any delivery.
+///
+/// # Examples
+///
+/// ```
+/// # mod demo {
+/// use std::io;
+///
+/// use ruststream::OutgoingMessage;
+/// use ruststream_nats::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "confirmations")]
+/// struct Confirmation {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "archive.orders")]
+/// struct Archived {
+///     id: u64,
+/// }
+///
+/// #[derive(OutSlot)]
+/// #[publishes(Archived)]
+/// struct Archive;
+///
+/// #[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("confirmer"), reply)]
+/// async fn confirm(order: &Order) -> Confirmation {
+///     Confirmation { id: order.id }
+/// }
+///
+/// #[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("archiver"))]
+/// async fn archive(
+///     order: &Order,
+///     Out(out): Out<impl Publisher<Options = JetStreamOptions>, Archive>,
+/// ) -> HandlerOutcome {
+///     let archived = Archived { id: order.id };
+///     if out
+///         .message(&archived)
+///         .message_id(format!("order-{}", order.id))
+///         .publish()
+///         .await
+///         .is_err()
+///     {
+///         return HandlerOutcome::retry();
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.include(confirm)
+///                 .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"));
+///
+///             b.include(archive)
+///                 .out(Archive, JetStreamPublish::default().expect_stream("ARCHIVE"))
+///                 .build();
+///
+///             b.after_startup(
+///                 JetStreamPublish::default().expect_stream("ORDERS"),
+///                 async move |publisher| -> io::Result<()> {
+///                     let ack = publisher
+///                         .publish_ack(OutgoingMessage::new("orders.created", br#"{"id":1}"#), None)
+///                         .await
+///                         .map_err(io::Error::other)?;
+///                     tracing::info!(stream = %ack.stream, ack.sequence, "seeded");
+///                     Ok(())
+///                 },
+///             );
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
+/// ```
 #[derive(Clone)]
 pub struct JetStreamPublisher {
     link: JetStreamLink,

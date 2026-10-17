@@ -65,7 +65,7 @@ const DEFAULT_PULL_EXPIRES: Duration = Duration::from_secs(5);
 /// )]
 /// async fn reconcile(orders: &[Order]) -> HandlerOutcome {
 ///     let total: u64 = orders.iter().map(|order| order.amount).sum();
-///     println!("reconciling {} orders worth {total}", orders.len());
+///     tracing::info!(count = orders.len(), total, "reconciled");
 ///     HandlerOutcome::ack()
 /// }
 ///
@@ -165,6 +165,74 @@ mod sealed {
 /// A NATS subscription descriptor: [`CoreSubject`], [`CoreWildcard`] or [`JetStreamSubject`].
 ///
 /// Sealed, because the two delivery models NATS has are the two this crate ships.
+///
+/// The three differ in where a delayed copy of a delivery goes. A [`CoreSubject`] is its own
+/// destination, so the framework publishes the copy back to it. A [`CoreWildcard`] names many
+/// subjects and none in particular, so its mount site names one with `out_retry(..).to(..)`. A
+/// [`JetStreamSubject`] needs no copy: the server holds the message for the delay.
+///
+/// # Examples
+///
+/// ```
+/// # mod demo {
+/// use std::time::Duration;
+///
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Payment {
+///     id: u64,
+///     settled: bool,
+/// }
+///
+/// #[subscriber("payments.settled")]
+/// async fn reconcile(payment: &Payment) -> HandlerOutcome {
+///     if payment.settled {
+///         return HandlerOutcome::ack();
+///     }
+///     HandlerOutcome::retry_after(Duration::from_secs(30))
+/// }
+///
+/// #[subscriber(CoreWildcard::new("payments.*"))]
+/// async fn audit(payment: &Payment) -> HandlerOutcome {
+///     tracing::warn!(payment.id, "audit pending");
+///     HandlerOutcome::retry_after(Duration::from_secs(30))
+/// }
+///
+/// #[subscriber(JetStreamSubject::new("payments.stored", "PAYMENTS").durable("reconciler"))]
+/// async fn store(payment: &Payment) -> HandlerOutcome {
+///     tracing::warn!(payment.id, "store pending");
+///     HandlerOutcome::retry_after(Duration::from_secs(30))
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             // One subject is its own destination.
+///             b.include(reconcile)
+///                 .max_attempts(nonzero!(5u32))
+///                 .dead_letter("payments.dead");
+///
+///             // A pattern is not, so the mount site names where a copy lands.
+///             b.include(audit)
+///                 .max_attempts(nonzero!(5u32))
+///                 .dead_letter("dead.payments")
+///                 .out_retry(Publish)
+///                 .to("payments.settled");
+///
+///             // The server holds the message, so nothing is published at all.
+///             b.include(store)
+///                 .max_attempts(nonzero!(5u32))
+///                 .dead_letter("payments.dead");
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
+/// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not describe a NATS subscription",
     label = "not a subscription descriptor",
@@ -196,8 +264,9 @@ pub trait NatsSubscription: Sealed {
 
 /// Whether `subject` carries a NATS wildcard: `*` for one token, `>` for the rest of them.
 ///
-/// The server matches a wildcard on delivery and refuses it on publish, so a subject that carries
-/// one is a subscription pattern and not a destination.
+/// A wildcard is matched on delivery. A publish takes it as a literal token (a pedantic connection
+/// refuses it), so a copy published to a pattern would not reach the subject its delivery came
+/// from, and this crate treats a pattern as a subscription and never as a destination.
 fn has_wildcard(subject: &str) -> bool {
     subject.split('.').any(|token| token == "*" || token == ">")
 }
@@ -215,9 +284,9 @@ pub(crate) fn publish_destination(subject: &str) -> Result<RedeliveryAddress, Na
     }
     if has_wildcard(subject) {
         return Err(NatsError::InvalidOptions(format!(
-            "`{subject}` is a subscription pattern, and a NATS server refuses a publish to `*` \
-             or `>`. Subscribe to a pattern with `CoreWildcard`, which leaves the mount site to \
-             name where a retry copy goes"
+            "`{subject}` is a subscription pattern, not a subject a delayed copy can be \
+             published to. Subscribe to a pattern with `CoreWildcard`, which leaves the mount \
+             site to name where a retry copy goes"
         )));
     }
     Ok(RedeliveryAddress::new(subject.to_owned()))
@@ -248,7 +317,7 @@ pub(crate) fn publish_destination(subject: &str) -> Result<RedeliveryAddress, Na
 /// // Every replica joins `workers`, so each order reaches one of them.
 /// #[subscriber(CoreSubject::new("orders.created").queue_group("workers"))]
 /// async fn fulfil(order: &Order) -> HandlerOutcome {
-///     println!("fulfilling order {}", order.id);
+///     tracing::info!(order.id, "fulfilled");
 ///     HandlerOutcome::ack()
 /// }
 ///
@@ -315,8 +384,8 @@ impl Sealed for CoreSubject {
 ///
 /// The same subscription as [`CoreSubject`], on many subjects instead of one. That is the whole
 /// difference between the two types, and it is the difference that matters to a retry: a pattern
-/// is matched on delivery and refused on publish, so this subscription cannot say where a copy of
-/// a delivery would reach it again. The mount site says it instead, with
+/// names many subjects and none of them in particular, so this subscription cannot say where a
+/// copy of a delivery would reach it again. The mount site says it instead, with
 /// `.out_retry(Publish).to("orders.created")` or with a transform that reads the delivery and
 /// names its own subject; a registration that says neither refuses to start.
 ///
@@ -446,7 +515,7 @@ impl NatsSubscription for CoreSubject {
 ///         .ack_wait(NonZeroDuration::from_secs(nonzero!(30)))
 /// )]
 /// async fn bill(order: &Order) -> HandlerOutcome {
-///     println!("billing order {}", order.id);
+///     tracing::info!(order.id, "billed");
 ///     HandlerOutcome::ack()
 /// }
 ///
@@ -678,7 +747,7 @@ impl NatsSubscription for JetStreamSubject {
 ///         _outs: &(),
 ///         _ctx: &mut Context<'_>,
 ///     ) -> Result<(), HandlerOutcome> {
-///         println!("auditing order {}", order.id);
+///         tracing::info!(order.id, "audited");
 ///         Ok(())
 ///     }
 /// }

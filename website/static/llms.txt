@@ -2,25 +2,86 @@
 
 > `ruststream-nats` is the NATS broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them. Over the `async-nats` client a handler binds to a Core NATS subject or to a JetStream pull consumer, a service sends requests and awaits the reply NATS matches to them, and a JetStream publish states what it expects of the stream.
 
-A subscription is one of three descriptors: `CoreSubject` (one subject), `CoreWildcard` (a pattern with `*` and `>`) and `JetStreamSubject` (a stream through a pull consumer); a bare `#[subscriber("orders.created")]` is a `CoreSubject`. A routes file imports `ruststream_nats::prelude::*`, which offers `NatsPublish` as `Publish` (plain Core NATS) and `JetStreamPublish` (awaits the stream's acknowledgement). Two `cargo generate` templates, `templates/nats` and `templates/nats-js`, scaffold a service.
+A subscription is one of three descriptors: `CoreSubject` (one subject), `CoreWildcard` (a pattern with `*` and `>`) and `JetStreamSubject` (a stream through a pull consumer); a bare `#[subscriber("orders.created")]` is a `CoreSubject`. A service imports `ruststream_nats::prelude::*`, which offers `NatsPublish` as `Publish` (plain Core NATS, which also makes requests) and `JetStreamPublish` (awaits the stream's acknowledgement); a deduplication id and the position a publish expects of the stream are its per-message settings. Two `cargo generate` templates, `templates/nats` and `templates/nats-js`, scaffold a service.
 
 This site holds the guides, one page per component and the architecture of the crate; the API reference is on docs.rs, and the framework itself is documented on the RustStream site.
 
 ## Guides
 
 - [Guides](https://powersemmi.github.io/ruststream-nats/latest/): building a NATS service with the crate, on Core NATS and on JetStream
+- [Getting started](https://powersemmi.github.io/ruststream-nats/latest/guides/getting-started/): installation, a local NATS server, a first subscriber against it and its test without a server
+- [Subjects, wildcards and queue groups](https://powersemmi.github.io/ruststream-nats/latest/guides/subjects-and-queue-groups/): Core NATS subjects, many read with a wildcard, work shared in a queue group and the order of each key kept in parallel lanes
+- [Streams and consumers](https://powersemmi.github.io/ruststream-nats/latest/guides/streams-and-consumers/): a JetStream stream read through durable and ephemeral pull consumers, where a consumer starts, a delivery's metadata and batches
+- [Acknowledgement and delivery guarantees](https://powersemmi.github.io/ruststream-nats/latest/guides/acknowledgement/): JetStream deliveries settled by the handler's outcome, `ack_wait` for slow handlers, redeliveries, and what Core NATS promises
+- [Publishing to streams](https://powersemmi.github.io/ruststream-nats/latest/guides/publishing-to-streams/): replies and messages stored in streams, a repeat stored once by its message id, and a write from a stale version refused
+- [Retries and dead letters](https://powersemmi.github.io/ruststream-nats/latest/guides/retries/): a retry now or later, the attempt cap and a dead-letter stream, on a stream, a subject or a pattern
+- [Request-reply](https://powersemmi.github.io/ruststream-nats/latest/guides/request-reply/): a request to another service and its answer, responders on the request's inbox, timeouts, no responders and scaled responders
+- [Testing a NATS service](https://powersemmi.github.io/ruststream-nats/latest/guides/testing/): `TestApp` on the production app with streams, replies and delays, and the same test against a NATS server
+- [Connecting to production](https://powersemmi.github.io/ruststream-nats/latest/guides/production/): several servers, a `.creds` file, TLS with the cluster's certificate authority, and a test of the configuration
 
 ## Components
 
 - [Components](https://powersemmi.github.io/ruststream-nats/latest/components/): the parts of the crate a NATS service uses, one page each
+- [NatsBroker](https://powersemmi.github.io/ruststream-nats/latest/components/broker/): the broker type, its server addresses and its lazy connection
+- [ConnectOptions](https://powersemmi.github.io/ruststream-nats/latest/components/broker/connect-options/): `with_options`, the `async-nats` connection options: name, pings, reconnects, `no_echo` and the inbox prefix
+- [Security](https://powersemmi.github.io/ruststream-nats/latest/components/broker/security/): a user and password, a token, an NKey, a creds file and TLS as connection options
+- [Startup](https://powersemmi.github.io/ruststream-nats/latest/components/broker/startup/): the connect within `connection_timeout`, and each subscription opened against the server
+- [Shutdown](https://powersemmi.github.io/ruststream-nats/latest/components/broker/shutdown/): the drain of the connection, and `NatsError::Closed` for a publisher used afterwards
+- [Prelude](https://powersemmi.github.io/ruststream-nats/latest/components/broker/prelude/): `ruststream_nats::prelude`, the one glob a NATS service imports
+- [Errors](https://powersemmi.github.io/ruststream-nats/latest/components/broker/errors/): `NatsError`, the one error type of the crate
+- [Subscriptions](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/): a subject in `#[subscriber]` and the descriptors that carry every other setting
+- [CoreSubject](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/core-subject/): one Core NATS subject, which stores nothing
+- [CoreWildcard](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/core-wildcard/): every Core NATS subject a `*` or `>` pattern matches
+- [queue_group](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/queue-group/): a Core NATS queue group, where one member takes each message
+- [JetStreamSubject](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/jetstream-subject/): a stream read through a pull consumer
+- [durable](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/durable/): a named consumer that keeps its position across restarts and is shared by its subscriptions
+- [filter_subject](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/filter-subject/): the subjects of the stream a consumer reads
+- [DeliverPolicy](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/deliver-policy/): where a newly created consumer starts
+- [max_ack_pending](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/max-ack-pending/): how many unacknowledged deliveries a consumer holds at once
+- [Batches](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/batches/): slice handlers over a JetStream pull fetch or a Core NATS batch the client assembles
+- [Keys](https://powersemmi.github.io/ruststream-nats/latest/components/subscriptions/keys/): the `nats-partition-key` header that keys the lanes of `workers(n, by_key)`
+- [Acknowledgement](https://powersemmi.github.io/ruststream-nats/latest/components/settlement/): what `ack`, `retry` and `drop` send to the server for a JetStream delivery
+- [ack_wait](https://powersemmi.github.io/ruststream-nats/latest/components/settlement/ack-wait/): how long the server waits for a settlement before it delivers again
+- [At most once](https://powersemmi.github.io/ruststream-nats/latest/components/settlement/at-most-once/): a Core NATS delivery, which nothing stores or acknowledges
+- [Retries](https://powersemmi.github.io/ruststream-nats/latest/components/settlement/retries/): `max_attempts`, counted by the server on JetStream and in a header on Core NATS
+- [retry_after](https://powersemmi.github.io/ruststream-nats/latest/components/settlement/retry-after/): a delay the server holds on JetStream, and a copy the framework publishes on Core NATS
+- [Dead letters](https://powersemmi.github.io/ruststream-nats/latest/components/settlement/dead-letters/): `dead_letter`, the subject a spent delivery is published to
+- [out_retry](https://powersemmi.github.io/ruststream-nats/latest/components/settlement/out-retry/): the subject a pattern's delayed copies go to, named at the mount site
+- [JetStreamContext](https://powersemmi.github.io/ruststream-nats/latest/components/context/): a delivery's stream, consumer, sequences, delivery count and pending count, read through `Ctx<K>`
+- [NatsPublish](https://powersemmi.github.io/ruststream-nats/latest/components/publishing/): the plain Core NATS publish policy, `Publish` in the prelude
+- [Headers](https://powersemmi.github.io/ruststream-nats/latest/components/publishing/headers/): what a header must be to travel over NATS, and the publish that fails without it
+- [JetStreamPublish](https://powersemmi.github.io/ruststream-nats/latest/components/publishing/jetstream-publish/): a publish stored in a stream and acknowledged by it
+- [expect_stream](https://powersemmi.github.io/ruststream-nats/latest/components/publishing/jetstream-publish/expect-stream/): the stream a publisher's subjects must be stored by
+- [message_id](https://powersemmi.github.io/ruststream-nats/latest/components/publishing/jetstream-publish/message-id/): `Nats-Msg-Id`, so a repeat inside the deduplication window is stored once
+- [Expectations](https://powersemmi.github.io/ruststream-nats/latest/components/publishing/jetstream-publish/expectations/): a publish the stream refuses unless it is still at the position the writer saw
+- [publish_ack](https://powersemmi.github.io/ruststream-nats/latest/components/publishing/jetstream-publish/publish-ack/): the stream's acknowledgement: the stream, the sequence and the duplicate flag
+- [RequestReply](https://powersemmi.github.io/ruststream-nats/latest/components/request-reply/): `request` on the Core publisher, answered on an inbox or timed out
+- [Responders](https://powersemmi.github.io/ruststream-nats/latest/components/request-reply/responders/): a handler that answers on the inbox the `reply-to` header carries
+- [NATS bindings](https://powersemmi.github.io/ruststream-nats/latest/components/asyncapi/): the NATS parts of the AsyncAPI document behind the `asyncapi` feature
+- [Server](https://powersemmi.github.io/ruststream-nats/latest/components/asyncapi/server/): the host and port of each address, never a credential
+- [Channels](https://powersemmi.github.io/ruststream-nats/latest/components/asyncapi/channels/): a consumer's and a stream-bound publisher's settings under `x-ruststream-jetstream`
+- [Operations](https://powersemmi.github.io/ruststream-nats/latest/components/asyncapi/operations/): the queue group of each receive operation in the `nats` binding
+- [Replies](https://powersemmi.github.io/ruststream-nats/latest/components/asyncapi/replies/): a reply answered on the request's inbox, addressed through the `reply-to` header
+- [Testing](https://powersemmi.github.io/ruststream-nats/latest/components/testing/): `TestApp::start` with `NatsBroker` in process behind the `testing` feature
+- [Live](https://powersemmi.github.io/ruststream-nats/latest/components/testing/live/): `TestApp::start_live`, the same test body against a running NATS server
 
 ## Architecture
 
 - [Architecture](https://powersemmi.github.io/ruststream-nats/latest/architecture/): how NATS works, where the crate sits between NATS and the RustStream runtime, and what that costs
+- [Subjects](https://powersemmi.github.io/ruststream-nats/latest/architecture/nats/): Core NATS delivery to every matching subscription and to one member of a queue group, with nothing stored
+- [Streams](https://powersemmi.github.io/ruststream-nats/latest/architecture/nats/streams/): a JetStream stream stores what is published to its subjects under a sequence and acknowledges each publish
+- [Consumers](https://powersemmi.github.io/ruststream-nats/latest/architecture/nats/consumers/): a pull consumer hands out the batches the client asks for and waits for an answer to each message
+- [Design](https://powersemmi.github.io/ruststream-nats/latest/architecture/design/): every subscription and publisher on one connection, between the runtime and the `async-nats` client
+- [Lifecycle](https://powersemmi.github.io/ruststream-nats/latest/architecture/lifecycle/): `new`, `connect`, each subject subscribed or consumer created at startup, and the drain at shutdown
+- [Path](https://powersemmi.github.io/ruststream-nats/latest/architecture/path/): one message through the subscription, the handler, the reply and the settlement, on Core and on JetStream
+- [Lanes](https://powersemmi.github.io/ruststream-nats/latest/architecture/lanes/): one subscription's messages in turn, and `workers(n, by_key)` lanes keyed by the `nats-partition-key` header
+- [Settlement](https://powersemmi.github.io/ruststream-nats/latest/architecture/settlement/): what `ack`, drop, retry and `retry_after` become: an acknowledgement on JetStream, copies on Core
 - [Benchmarks](https://powersemmi.github.io/ruststream-nats/latest/architecture/benchmarks/): what the crate and the framework's runtime cost over the raw `async-nats` client, and the cost of the crate's own code
+- [Benchmarks: Numbers](https://powersemmi.github.io/ruststream-nats/latest/architecture/benchmarks/numbers/): what each published number measures, and what it does not allow you to conclude
+- [Benchmarks: Methodology](https://powersemmi.github.io/ruststream-nats/latest/architecture/benchmarks/methodology/): the three loops, the run on a real server, the broker-bound arithmetic and the code count
 
 ## Optional
 
-- [API reference](https://docs.rs/ruststream-nats): the full rustdoc of the crate
+- [API reference](https://docs.rs/ruststream-nats): the full rustdoc of the crate, whose overview maps each topic to its pages here
 - [RustStream llms.txt](https://powersemmi.github.io/ruststream/llms.txt): the index of the framework's own documentation
 - [Source](https://github.com/powersemmi/ruststream-nats): the crate's repository and its templates

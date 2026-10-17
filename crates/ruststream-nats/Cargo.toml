@@ -454,3 +454,15 @@ name = "manual_guide_subjects_and_queue_groups"
 path = "examples/manual/guide/subjects_and_queue_groups.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_streams_and_consumers"
+path = "examples/guide/streams_and_consumers.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_streams_and_consumers"
+path = "examples/manual/guide/streams_and_consumers.rs"
+required-features = ["testing"]
+test = true

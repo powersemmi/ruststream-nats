@@ -2,7 +2,7 @@
 //! descriptor that names the window is built in a function and passed to `subscriber`.
 //!
 //! ```text
-//! nats stream add INVOICES --subjects 'invoices.requested' --defaults
+//! nats stream add BILLING_REQUESTS --subjects 'billing.requested' --defaults
 //! cargo test --example manual_nats_settlement_ack_wait --features testing
 //! NATS_TEST_URL=nats://127.0.0.1:4222 RUSTSTREAM_REQUIRE_LIVE=1 \
 //!     cargo test --example manual_nats_settlement_ack_wait --features testing
@@ -25,7 +25,7 @@ mod live;
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing, JsonSchema)]
 #[schemars(crate = "ruststream::schemars")]
-#[outgoing(name = "invoices.requested")]
+#[outgoing(name = "billing.requested")]
 struct Invoice {
     id: u64,
     lines: u32,
@@ -44,7 +44,7 @@ async fn render_pdf(invoice: &Invoice) -> Result<u32, String> {
 /// Rendering a long invoice takes up to a minute, so the consumer waits two minutes for the
 /// settlement before it delivers the request again.
 fn invoices() -> JetStreamSubject {
-    JetStreamSubject::new("invoices.requested", "INVOICES")
+    JetStreamSubject::new("billing.requested", "BILLING_REQUESTS")
         .durable("invoicer")
         .ack_wait(NonZeroDuration::from_secs(nonzero!(120)))
 }
@@ -104,7 +104,7 @@ mod tests {
             .await?;
 
         tb.broker::<NatsBroker>()
-            .subscriber("invoices.requested")
+            .subscriber("billing.requested")
             .assert_called_once()
             .with(&invoice)
             .settled(HandlerOutcome::ack());
@@ -130,11 +130,11 @@ mod tests {
         // an interrupted run is replaced.
         let admin = NatsBroker::new(url.as_str()).connect().await?;
         let jetstream = admin.jetstream();
-        let _ = jetstream.delete_stream("INVOICES").await;
+        let _ = jetstream.delete_stream("BILLING_REQUESTS").await;
         jetstream
             .create_stream(StreamConfig {
-                name: "INVOICES".to_owned(),
-                subjects: vec!["invoices.requested".to_owned()],
+                name: "BILLING_REQUESTS".to_owned(),
+                subjects: vec!["billing.requested".to_owned()],
                 ..StreamConfig::default()
             })
             .await?;
@@ -142,7 +142,7 @@ mod tests {
         let outcome = async {
             let tb = TestApp::start_live(app(&url)).await?;
             let consumer = jetstream
-                .get_stream("INVOICES")
+                .get_stream("BILLING_REQUESTS")
                 .await?
                 .consumer_info("invoicer")
                 .await?;
@@ -153,7 +153,7 @@ mod tests {
         }
         .await;
 
-        jetstream.delete_stream("INVOICES").await?;
+        jetstream.delete_stream("BILLING_REQUESTS").await?;
         admin.shutdown().await?;
         outcome
     }

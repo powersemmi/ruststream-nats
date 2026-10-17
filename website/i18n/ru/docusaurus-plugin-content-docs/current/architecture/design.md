@@ -13,7 +13,7 @@ export const words = {
   "handlers": ["#[subscriber]", "обработчики-подписчики"],
   "app": ["RustStream::new(..)", ".with_broker(..)"],
   "core": "Ядро RustStream",
-  "runtime": ["Рантайм: диспетчер, партиции воркеров,", "завершение, повторы"],
+  "runtime": ["Рантайм: диспетчер, партиции воркеров,", "завершение, переобработка"],
   "crate": "ruststream-nats",
   "subscriber": ["NatsSubscriber", "выдаёт NatsMessage"],
   "publishers": ["NatsPublisher,", "JetStreamPublisher"],
@@ -40,7 +40,7 @@ export const words = {
 [`async-nats`](https://docs.rs/async-nats/0.50.0/async_nats/) и ничего не добавляет к протоколу.
 Рантайм над ним один для всех брокеров. Всё, что относится к NATS, лежит в этом крейте:
 [дескрипторы](../components/subscriptions/index.md), [смысл ack](../components/settlement/index.md),
-[адрес копии для повтора](../components/settlement/retries.md) и [метаданные
+[адрес копии для переобработки](../components/settlement/retries.md) и [метаданные
 доставки](../components/context/index.md).
 
 Подключённый брокер держит один клиент, и этот клиент делят все издатели, которых брокер

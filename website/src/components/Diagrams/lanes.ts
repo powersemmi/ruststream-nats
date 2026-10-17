@@ -50,7 +50,7 @@ export function lanes(words: Words): {boxes: Box[]; links: Link[]} {
       h: 44,
       kind: 'note',
       lines: lines(words, 'scale'),
-      href: '/components/subscriptions/queue-groups/',
+      href: '/components/subscriptions/queue-group/',
     },
   ];
   const links: Link[] = [

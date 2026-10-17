@@ -45,7 +45,7 @@ describe('a box that links to a page', () => {
 describe('a box that names a component', () => {
   it('links to that component page in the model of NATS', () => {
     expect(hrefs('subjects')).toEqual({
-      queue: '/components/subscriptions/queue-groups/',
+      queue: '/components/subscriptions/queue-group/',
     });
     expect(hrefs('streams')).toEqual({
       publisher: '/components/publishing/jetstream-publish/',
@@ -113,7 +113,7 @@ describe('a box that names a component', () => {
     });
     expect(hrefs('lanes')).toEqual({
       keyed: '/components/subscriptions/keys/',
-      scale: '/components/subscriptions/queue-groups/',
+      scale: '/components/subscriptions/queue-group/',
     });
   });
 });

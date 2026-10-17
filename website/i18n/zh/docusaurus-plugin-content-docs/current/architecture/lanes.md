@@ -30,6 +30,6 @@ export const words = {
 
 `workers(n, by_key)` 运行 `n` 个工作分区。消息进入其键的哈希所对应的工作分区，每个工作分区按顺序运行自己的消息。NATS 没有自己的分区，所以键就是 [`nats-partition-key`](../components/subscriptions/keys.md) 消息头，由发送方设置。同一个键的消息保持顺序，不同的键并行运行。
 
-跨进程时，由服务器分担工作。[队列组](../components/subscriptions/queue-groups.md)把每条 Core 消息交给一个成员，顺序由服务器决定。绑定同一个[持久化](../components/subscriptions/durable.md)消费者的订阅轮流取得每条 JetStream 消息。[`max_ack_pending`](../components/subscriptions/max-ack-pending.md) 限制一个消费者在它的所有成员中同时等待应答的消息数。
+跨进程时，由服务器分担工作。[队列组](../components/subscriptions/queue-group.md)把每条 Core 消息交给一个成员，顺序由服务器决定。绑定同一个[持久化](../components/subscriptions/durable.md)消费者的订阅轮流取得每条 JetStream 消息。[`max_ack_pending`](../components/subscriptions/max-ack-pending.md) 限制一个消费者在它的所有成员中同时等待应答的消息数。
 
 [批处理器](../components/subscriptions/batches.md)最多接收挂载点指定的大小。在 JetStream 上，一个批就是一次拉取，`pull_expires` 到期时提前结束。在 Core 上，批在客户端组装，达到该大小或第一条消息之后 10 毫秒时结束。

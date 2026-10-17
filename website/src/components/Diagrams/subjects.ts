@@ -91,7 +91,7 @@ export function subjects(words: Words): {boxes: Box[]; links: Link[]} {
     h: GROUP_H,
     kind: 'group',
     lines: lines(words, 'queue'),
-    href: '/components/subscriptions/queue-groups/',
+    href: '/components/subscriptions/queue-group/',
   });
   QUEUE_GROUP.members.forEach((member, index) => {
     const y = groupY + 26 + index * (MEMBER_H + 8);

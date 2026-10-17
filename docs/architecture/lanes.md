@@ -35,7 +35,7 @@ its messages in order. NATS has no partition of its own, so the key is the
 [`nats-partition-key`](../components/subscriptions/keys.md) header, which the sender sets. Messages
 of one key keep their order, and different keys run side by side.
 
-Across processes the server shares the work. A [queue group](../components/subscriptions/queue-groups.md)
+Across processes the server shares the work. A [queue group](../components/subscriptions/queue-group.md)
 hands each Core message to one member, in the order the server picks. Subscriptions that bind one
 [durable](../components/subscriptions/durable.md) consumer take each JetStream message in turn.
 [`max_ack_pending`](../components/subscriptions/max-ack-pending.md) bounds how many messages of a

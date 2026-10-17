@@ -502,3 +502,15 @@ name = "manual_guide_retries"
 path = "examples/manual/guide/retries.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_request_reply"
+path = "examples/guide/request_reply.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_request_reply"
+path = "examples/manual/guide/request_reply.rs"
+required-features = ["testing"]
+test = true

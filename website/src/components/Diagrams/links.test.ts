@@ -41,3 +41,24 @@ describe('a box that links to a page', () => {
     }
   });
 });
+
+describe('a box that names a component', () => {
+  it('links to that component page in the model of NATS', () => {
+    expect(hrefs('subjects')).toEqual({
+      queue: '/components/subscriptions/queue-groups/',
+    });
+    expect(hrefs('streams')).toEqual({
+      publisher: '/components/publishing/jetstream-publish/',
+      ack: '/components/publishing/jetstream-publish/publish-ack/',
+      dedup: '/components/publishing/jetstream-publish/message-id/',
+      durable: '/components/subscriptions/durable/',
+    });
+    expect(hrefs('consumers')).toEqual({
+      consumer: '/components/subscriptions/jetstream-subject/',
+      ack: '/components/settlement/',
+      nak: '/components/settlement/retry-after/',
+      term: '/components/settlement/',
+      redelivery: '/components/settlement/ack-wait/',
+    });
+  });
+});

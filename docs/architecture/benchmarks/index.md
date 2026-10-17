@@ -3,129 +3,57 @@ title: Benchmarks
 description: "What ruststream-nats costs on every message: throughput against the raw async-nats client, and instructions and allocations of its code."
 ---
 
+import {Environment, MovedSections, Results} from '@site/src/components/Benchmarks';
+import {nats} from '@site/src/components/Benchmarks/nats';
+
+export const labels = {"loading": "Loading the results...", "scenario": "Scenario", "raw": "Raw client", "adapter": "Broker crate", "framework": "RustStream", "overhead": "Overhead", "against": "({percent} over the client)", "indistinguishable": "indistinguishable", "brokerBound": "broker-bound", "measured": "measured", "details": "How the numbers were taken", "pending": "No results published yet: {brokers}.", "instructions": "Instructions", "allocations": "Allocations", "cold": "Cold start", "table": "Show the numbers as a table", "axis": "How far each loop falls below the raw client's best round", "rounds": "rounds, best to slowest", "best": "best round", "median": "median round", "noise": "spread of the rounds", "comparison": "Against a raw client", "code": "Cost of the code", "broker": "The broker", "plugin": "The {plugin} plugin", "pluginRaw": "Without the plugin", "pluginAdapter": "Plugin written by hand", "pluginFramework": "The crate's plugin", "pluginAxis": "How far each loop falls below the best round of the app without the plugin", "pluginAgainst": "({percent} over no plugin)", "pluginOverhead": "Over the plugin by hand", "pluginOverHand": "({percent} over by hand)"};
+
+export const machine = {"cpu": "Processor", "architecture": "Architecture", "cpu_frequency": "Frequency", "cores": "Cores", "memory": "Memory", "memory_speed": "Memory speed", "os": "Operating system", "broker": "Broker", "rustc": "Compiler", "profile": "Build profile", "features": "Features", "rustflags": "RUSTFLAGS", "round_trip": "Round trip", "valgrind": "Valgrind"};
+
 # Benchmarks
 
-A framework between the NATS client and your handler costs time on every message: the subscription
-stream, the decode, the dispatch, the ack. This page says how much, measured against the same work
-written by hand on `async-nats`.
+What `ruststream-nats` costs on every message: throughput against the raw `async-nats` client, and
+instructions and allocations of its code.
 
-One process runs the same scenario three ways. **Raw** drives `async-nats` directly. **Adapter**
-drives this crate's own types by hand, with no handler and no runtime above them. **Service** is the
-application a user writes. Everything else is held equal - the connection options, the subscription,
-the consumer configuration, the position of the ack, the decode into the same type, the payload
-bytes, the tokio runtime and the build. The procedure is the framework's own and is described on the
-[RustStream benchmarks page](https://powersemmi.github.io/ruststream/latest/benchmarks/#methodology);
-this page publishes what it produced here.
+## Against a raw client
 
-Two differences come out of that. Adapter against raw is what this crate's consumer and publisher
-cost over the client they wrap: the number this repository answers for. Service against raw is what
-a whole service costs, adapter and runtime together. What the runtime costs on its own is the
-distance between the two columns, and it is published here per broker because a runtime share that
-differs between brokers is a fact about how the transport and the runtime meet.
+The first chart runs each scenario three ways on a real NATS server. `Raw client` drives
+`async-nats` directly. `Broker crate` drives this crate's subscription with a loop of its own and
+no runtime. `RustStream` is the service a user writes, a `#[subscriber]` handler in an app. The
+first gap is what this crate costs over the client it wraps, and the second is what the runtime
+adds on top.
 
-## The numbers
+Each loop is a bar from its best round to its slowest, with a dot at the best round and a notch at
+the median. The zero of the axis is the raw client's best round, and a dot right of zero is slower.
+A hollow dot is a loop whose difference from the raw client is smaller than the spread of the
+rounds. The table under the chart prints the best round with the median in parentheses.
 
-The best of three interleaved rounds, with the median round in parentheses. Higher is better.
+The two scenarios are the two models. On a [Core NATS subject](../../components/subscriptions/core-subject.md)
+the server pushes each match and settles nothing. On a
+[JetStream pull consumer](../../components/subscriptions/jetstream-subject.md) the client asks for
+messages in batches and [acknowledges](../../components/settlement/index.md) each one, as
+[Path](../path.md) draws.
 
-<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "adapter": "ruststream-nats", "framework": "RustStream service", "adapterOverhead": "Adapter over raw", "overhead": "Service over raw", "indistinguishable": "indistinguishable", "brokerBound": "broker-bound", "machine": "Machine", "os": "OS", "broker": "Broker", "build": "Build", "versions": "Versions", "measured": "Measured", "instructions": "Instructions per message", "allocations": "Allocations per message", "cold": "Cold start (instructions / allocations)", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
+## Cost of the code
 
-The table is read in your browser from the document the last run wrote, so nothing on this page is
-a copy that could have gone stale.
+The second chart counts what one message costs on the service's thread: instructions under
+callgrind and allocations under DHAT, in the steady state. Each scenario is a service on
+[`NatsBroker`](../../components/broker/index.md) reading a JetStream pull consumer on the same
+server. The service runs on one thread, and the `async-nats` connection task runs there too, so the
+count holds the framework, this crate and the client's own work on the socket. The producer's
+thread is not counted. `Cold start` is what connecting, finding the stream, creating the consumer
+and taking the first message cost once.
 
-Core NATS is the thinnest thing the numbers can sit on: a delivery there is a subject match and a
-body, and the server settles nothing, so what each column adds to the one before it is visible
-without a transport cost around it.
+## Results
 
-A row reported as `indistinguishable` is one whose two halves differ by less than the spread between
-runs of either. That is the honest outcome wherever the transport costs far more than the dispatch:
-every JetStream delivery carries an acknowledgement back to the server, and a difference this small
-disappears inside one. A figure below the run-to-run noise would read as precision that was never
-measured, so none is published.
-
-A row marked `broker-bound` is one where the transport makes the consumer wait for the server
-often enough to account for half of what a message costs. There the number says more about the
-server and the loopback than about this crate. Core NATS charges the consumer no round trip per
-delivery: the server pushes a match down the subscription. A JetStream pull consumer charges one
-pull request per batch, and an acknowledgement it sends without waiting for an answer. The round
-trip those are counted against is the probe below the machine, so the sum can be redone.
-
-The machine-readable form of the same run, which the framework's site reads to build its
-cross-broker table, is at
-[`benchmarks/results.json`](https://powersemmi.github.io/ruststream-nats/latest/benchmarks/results.json).
-
-## The crate's own code
-
-<div id="benchmark-code"></div>
-
-The second table is counted rather than timed: instructions under callgrind and allocations under
-DHAT. Each scenario is the service a user writes, built on `NatsBroker` against the stand the table
-above uses and started on a single-threaded runtime. Every scenario reads a JetStream pull consumer.
-A producer on another thread fills the stream before the drain begins, and waits until the stream
-has acknowledged every message; Core NATS keeps nothing for a consumer that is not reading, and a
-stream does.
-
-What is counted is everything the service's thread runs: the framework, this crate, and the work of
-the `async-nats` client on that thread, which is where its connection task runs. The producer's
-thread is not counted, and neither is the kernel's side of a system call.
-
-Instructions and allocations are per message in the steady state: the slope between a run of 1000
-deliveries and a run of 2000. The last column is what starting the service cost once: the connect,
-the stream lookup, the consumer's creation and the first delivery. The numbers are absolute, the
-framework's own cost included; the core publishes that cost alone on its
-[benchmarks page](https://powersemmi.github.io/ruststream/latest/benchmarks/).
-
-A count depends a little on how the socket hands the client its bytes. Over seven runs the
-instructions per message moved by less than half a percent, and the allocations by one block in a
-run of 2000 deliveries. `just bench-code` fails when a scenario allocates more than the highest
-total it was seen at plus a tenth of a percent. Against a baseline it also fails on two percent
-more instructions in a scenario: `just bench-code --save-baseline=main` records the baseline on
-`main`, and `just bench-code --baseline=main` measures a change against it. A failed run prints
-every limit it breached, the old value beside the new one. A pull request that changes the cost
-cites its numbers.
+<Results entry={nats} labels={labels} details="/architecture/benchmarks/methodology/" />
 
 ## The machine
 
-<div id="benchmark-environment"></div>
+<Environment entry={nats} labels={machine} />
 
-The build flags are published with the numbers because they change them: a binary built with
-`-C target-cpu=native` produces a figure no other machine can reproduce, so the recipe clears the
-variable before it builds.
+The numbers come from `docs/benchmarks/results.json` of this version, written by the benchmark
+recipe. [Methodology](methodology.md) says how they were taken, and [Numbers](numbers.md) what
+they allow you to conclude.
 
-## What they do not mean
-
-This is one consumer, one subject, a small body and a server on the loopback. It measures what a
-delivery costs in this crate, not what NATS can carry, and a row here is not comparable with a row
-published for another broker: the transports do different work per message.
-
-The window a run measures opens at the first delivery and closes when the last handler returns,
-on both halves alike. The framework acknowledges a delivery after the handler is done, which is a
-point the handler itself cannot observe, so one acknowledgement out of the millions a run carries
-sits outside the number on both sides.
-
-The JetStream figure is taken on a memory-backed stream with work-queue retention. That keeps the
-disk under the server out of a measurement that is about dispatch; a stream on a file store answers
-a different question, and answers it about the server rather than about this crate.
-
-The numbers are a snapshot of one machine on one day. They are re-measured by hand, on a machine
-given to the run alone: the difference this page is about is smaller than the noise of a shared one.
-
-## Running it yourself
-
-```bash
-just bench
-```
-
-The recipe starts the stand from `docker-compose.test.yml`, runs both scenarios, stops the stand
-and rewrites `docs/benchmarks/results.json` with what it measured. It takes a few minutes and
-wants the machine to itself. The message count is not fixed: a probe run sets it so that every
-measured run lasts at least five seconds on whatever machine it is taken on.
-
-```bash
-just bench-code
-```
-
-The recipe starts the same stand, counts the code table under valgrind, stops the stand and rewrites
-the `code` section of the same document. It takes under a minute and needs valgrind. The recipe
-installs the benchmark runner itself, at the release `Cargo.lock` pins. A leading number measures
-over another count of deliveries, `just bench-code 5000`: the figures are steadier and the run is
-longer. The published table is measured at the default of 1000.
+<MovedSections />

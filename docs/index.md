@@ -14,19 +14,14 @@ ruststream-nats = "0.3"
 serde = { version = "1", features = ["derive"] }
 ```
 
-```rust
---8<-- "crates/ruststream-nats/examples/nats_core.rs:app"
+```rust reference="examples/nats_core.rs#app"
 ```
 
 ## Where to go next
 
-<div class="grid cards" markdown>
-
-- :material-transit-connection-variant: **[NATS guide](nats.md)** - Core subscriptions, JetStream, request/reply, and testing.
-- :material-book-open-variant: **[RustStream docs](https://powersemmi.github.io/ruststream/)** - the framework itself: subscribers, routing, codecs, middleware, the CLI.
-- :material-language-rust: **[API reference](https://docs.rs/ruststream-nats)** - the crate's rustdoc on docs.rs.
-
-</div>
+- **[NATS guide](nats.md)** - Core subscriptions, JetStream, request/reply, and testing.
+- **[RustStream docs](https://powersemmi.github.io/ruststream/)** - the framework itself: subscribers, routing, codecs, middleware, the CLI.
+- **[API reference](https://docs.rs/ruststream-nats)** - the crate's rustdoc on docs.rs.
 
 ## How this site relates to the RustStream docs
 

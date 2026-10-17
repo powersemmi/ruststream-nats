@@ -478,3 +478,15 @@ name = "manual_guide_acknowledgement"
 path = "examples/manual/guide/acknowledgement.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_publishing_to_streams"
+path = "examples/guide/publishing_to_streams.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_publishing_to_streams"
+path = "examples/manual/guide/publishing_to_streams.rs"
+required-features = ["testing"]
+test = true

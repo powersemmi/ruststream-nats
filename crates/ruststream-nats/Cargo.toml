@@ -45,9 +45,6 @@ tracing.workspace = true
 
 # The nats_* examples are the docs-site snippet sources; keep them runnable and snippet-checked here.
 [[example]]
-name = "nats_core"
-
-[[example]]
 name = "nats_jetstream"
 
 [[example]]
@@ -189,5 +186,84 @@ test = true
 [[example]]
 name = "manual_nats_context"
 path = "examples/manual/nats_context.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: broker ---
+
+[[example]]
+name = "nats_core"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_core"
+path = "examples/manual/nats_core.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_broker_options"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_broker_options"
+path = "examples/manual/nats_broker_options.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_broker_security"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_broker_startup"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_broker_shutdown"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_broker_prelude"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_broker_errors"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_broker_security"
+path = "examples/manual/nats_broker_security.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_broker_startup"
+path = "examples/manual/nats_broker_startup.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_broker_shutdown"
+path = "examples/manual/nats_broker_shutdown.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_broker_prelude"
+path = "examples/manual/nats_broker_prelude.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_broker_errors"
+path = "examples/manual/nats_broker_errors.rs"
 required-features = ["testing"]
 test = true

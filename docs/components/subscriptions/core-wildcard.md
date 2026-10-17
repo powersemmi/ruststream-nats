@@ -17,7 +17,7 @@ A subject is a list of tokens separated by dots.
 [`CoreWildcard::new`](api:ruststream_nats::CoreWildcard::new) takes the pattern, and its one setting is the [queue group](./queue-group.md).
 The subscription's name is the pattern itself.
 A pattern names many subjects and none of them in particular, so the crate does not choose where a delayed retry copy goes.
-The mount site names that subject with [`out_retry(Publish).to(subject)`](api:ruststream::runtime::Mounting::out_retry).
+The mount site names that subject with [`out_retry(Publish).to(subject)`](../settlement/out-retry.md).
 A registration over a pattern that names none stops the service at startup, with an error naming the subscription.
 A subject the pattern matches brings the copy back to the same handler.
 

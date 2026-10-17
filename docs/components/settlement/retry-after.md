@@ -20,7 +20,7 @@ A Core subject has no acknowledgement to carry a delay.
 The framework waits out the delay in the service's memory and publishes a copy of the message, payload and headers, back to the subject the subscription reads.
 The copy carries [`RETRY_COUNT_HEADER`](api:ruststream::runtime::RETRY_COUNT_HEADER), raised by one on every copy.
 A process that exits before the delay is over loses the copy.
-A [`CoreWildcard`](api:ruststream_nats::CoreWildcard) reads many subjects, so its mount site names where the copy goes with [`out_retry`](./out-retry.md).
+A [`CoreWildcard`](../subscriptions/core-wildcard.md) reads many subjects, so its mount site names where the copy goes with [`out_retry`](./out-retry.md).
 A [cap](./retries.md) declared at the mount site ends the retries of one message.
 
 ## Example

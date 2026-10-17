@@ -16,7 +16,7 @@ The handler reads it with `ctx.headers().reply_to()`.
 The answer leaves through an `Out` slot with `.to(inbox)`, so the answer type declares no subject of its own.
 The answer is an ordinary Core publish to the inbox, and the requester's client matches it to the waiting request.
 A message without an inbox was not a request, and a redelivery would not add one, so the handler drops it.
-A responder reads a [`CoreSubject`](api:ruststream_nats::CoreSubject), the bare name form, or a [`CoreWildcard`](api:ruststream_nats::CoreWildcard).
+A responder reads a [`CoreSubject`](../subscriptions/core-subject.md), the bare name form, or a [`CoreWildcard`](../subscriptions/core-wildcard.md).
 On a JetStream delivery the reply field is the consumer's acknowledgement subject, so no `reply-to` header is surfaced there.
 Any NATS client's request reaches the responder, `nats request` included, and a [`RequestReply`](./index.md) slot of another service is one of them.
 With a queue group on the subscription, each request is answered by one member of the group.

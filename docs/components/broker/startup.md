@@ -18,7 +18,7 @@ A server that refuses the connection or does not answer in time fails startup wi
 A Core NATS subscription is open once the server has confirmed it.
 The broker sends the subscription and waits for one round trip to the server, so everything published after startup reaches it.
 
-A JetStream subscription looks up the stream its [`JetStreamSubject`](api:ruststream_nats::JetStreamSubject) names and creates its consumer there.
+A JetStream subscription looks up the stream its [`JetStreamSubject`](../subscriptions/jetstream-subject.md) names and creates its consumer there.
 A durable consumer that already exists takes the descriptor's settings.
 The stream itself belongs to the server: it is created before the service starts, with `nats stream add` or through [`jetstream`](api:ruststream_nats::ConnectedNatsBroker::jetstream).
 A stream the server lacks fails startup with [`NatsError::JetStream`](api:ruststream_nats::NatsError::JetStream).

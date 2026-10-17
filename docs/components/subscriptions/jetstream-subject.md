@@ -16,7 +16,7 @@ A stream stores the messages published to its subjects, and a consumer reads the
 At startup the subscription finds the stream and creates its consumer; a stream the server does not have stops the service.
 The crate creates no stream: the service's deployment does, for example with `nats stream add`.
 Without [`durable`](./durable.md) the consumer is ephemeral, and the server discards it once the subscription closes.
-Each delivery settles on the server: an `ack` acknowledges it, and a retry or a delay is a negative acknowledgement the server acts on.
+Each delivery [settles on the server](../settlement/index.md): an `ack` acknowledges it, and a retry or a delay is a negative acknowledgement the server acts on.
 The settings and their defaults:
 
 | Setting | Default | What it does |
@@ -25,7 +25,7 @@ The settings and their defaults:
 | [`filter_subject`](./filter-subject.md) | the subject | narrows what the consumer reads from the stream |
 | [`deliver_policy`](./deliver-policy.md) | `DeliverPolicy::All` | where a new consumer starts |
 | [`max_ack_pending`](./max-ack-pending.md) | 1024 | how many deliveries the consumer holds unacknowledged |
-| [`ack_wait`](api:ruststream_nats::JetStreamSubject::ack_wait) | 30 seconds | how long the server waits for a settlement before it delivers again |
+| [`ack_wait`](../settlement/ack-wait.md) | 30 seconds | how long the server waits for a settlement before it delivers again |
 | [`pull_expires`](./batches.md) | 5 seconds | how long one fetch of a batch waits for messages |
 
 The subscription's name is the subject the descriptor names.

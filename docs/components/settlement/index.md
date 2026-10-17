@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 A JetStream delivery settles on the server: [`ack`](api:ruststream::runtime::HandlerOutcome::ack) acknowledges it, [`retry`](api:ruststream::runtime::HandlerOutcome::retry) sends a negative acknowledgement, [`drop`](api:ruststream::runtime::HandlerOutcome::drop) terminates it.
 
-A [`JetStreamSubject`](api:ruststream_nats::JetStreamSubject) reads a stream through a consumer, and the consumer tracks every message it hands out until the message is settled.
+A [`JetStreamSubject`](../subscriptions/jetstream-subject.md) reads a stream through a consumer, and the consumer tracks every message it hands out until the message is settled.
 The handler's outcome becomes the acknowledgement the server receives.
 `ack` sends `+ACK`, and the consumer moves past the message.
 `retry` sends `-NAK`, and the consumer delivers the message again at once, with its delivery count raised by one.

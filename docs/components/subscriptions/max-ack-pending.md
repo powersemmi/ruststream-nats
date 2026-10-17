@@ -16,7 +16,7 @@ Once the consumer holds that many, the server stops delivering until a settlemen
 The cap belongs to the consumer, so every subscription that shares a [durable](./durable.md) counts against one cap.
 It bounds the work in flight from the server's side, whatever the service does.
 `workers(n)` runs up to `n` handlers at once in one subscription; with a cap below `n`, the cap is the limit.
-A delivery the consumer holds counts against its `ack_wait` from the moment it is handed out, so a large cap over slow handlers lets deliveries wait out their `ack_wait` and come back.
+A delivery the consumer holds counts against its [`ack_wait`](../settlement/ack-wait.md) from the moment it is handed out, so a large cap over slow handlers lets deliveries wait out their `ack_wait` and come back.
 The cap is enforced by the server, so a test of it runs against a live server.
 
 ## Example

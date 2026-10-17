@@ -15,7 +15,7 @@ The [`nats-partition-key`](api:ruststream_nats::PARTITION_KEY_HEADER) header key
 Messages with one key run in order on one lane, and different keys run at once.
 NATS has no partitions or message keys, so the key travels in the `nats-partition-key` header.
 The sender sets it: any NATS client writes the header, and a RustStream message type declares it in its typed header contract.
-The value is text, because a NATS header is; a value that is not a single line of UTF-8 fails the publish.
+The value is text, because a NATS header is; a value that is not a single line of UTF-8 [fails the publish](../publishing/headers.md).
 A message without the header has no key and rotates over the lanes.
 The lanes work the same on Core NATS and on a stream.
 The manual form writes the lanes as [`workers_by_key(n)`](api:ruststream::runtime::SubscriberSettings::workers_by_key) on the mount chain.

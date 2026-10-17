@@ -27,7 +27,7 @@ Every key reads `None` on a Core NATS delivery, so one handler works on both kin
 The keys are imported from `context::keys`.
 A body that reads several fields may take `ctx: &mut Context<'_, JetStreamContext>` instead and call `ctx.context(key)` per field, as the manual form does.
 There each key is also a constant, such as `keys::STREAM_SEQUENCE`, and a name reads as `Option<&str>`.
-The stream sequence is what a publish states as its expected last sequence, and `Delivered` tells a redelivery from a first delivery.
+The stream sequence is what a publish states as its [expected last sequence](../publishing/jetstream-publish/expectations.md), and `Delivered` tells a redelivery from a first delivery.
 
 ## Example
 

@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 The server reports the host and port of each configured address, never credentials; the protocol version is read once connected.
 
 A broker registered with `with_broker_labeled` is a server of the document, under its label.
-Its `host` is the host and port of every address [`NatsBroker::new`](api:ruststream_nats::NatsBroker::new) took, joined with commas.
+Its `host` is the host and port of every address [`NatsBroker::new`](../broker/index.md) took, joined with commas.
 The scheme and any user, password or token an address carries stay out of it.
 The `protocol` is `nats`.
 

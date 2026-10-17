@@ -13,8 +13,8 @@ import TabItem from '@theme/TabItem';
 
 [`CoreSubject::new`](api:ruststream_nats::CoreSubject::new) takes the subject, and its one setting is the [queue group](./queue-group.md).
 The server delivers a message to every subscription on the subject at that moment and keeps nothing for later.
-A subject is published to and subscribed to under one name, so a delayed retry needs nothing from the mount site.
-A [`retry_after(delay)`](api:ruststream::runtime::HandlerOutcome::retry_after) settles the delivery, and after the delay the runtime publishes a copy back to the subject.
+A subject is published to and subscribed to under one name, so a delayed [retry](../settlement/retries.md) needs nothing from the mount site.
+A [`retry_after(delay)`](../settlement/retry-after.md) settles the delivery, and after the delay the runtime publishes a copy back to the subject.
 The copy waits in the service's memory, so a process that exits before the timer fires loses it.
 A subject with `*` or `>` in it is a pattern, which is [`CoreWildcard`](./core-wildcard.md); `CoreSubject` given one stops the service at startup.
 An empty subject stops it too.

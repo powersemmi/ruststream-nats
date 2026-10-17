@@ -21,7 +21,7 @@ They are publish steps of [`JetStreamPublishSteps`](api:ruststream_nats::JetStre
 
 A refused publish fails with [`NatsError::JetStream`](api:ruststream_nats::NatsError::JetStream), and nothing is stored.
 This is optimistic concurrency: a writer that read the stream at some position writes only if nobody wrote after it.
-A handler reading a stream knows where its delivery sits through the [`StreamSequence`](api:ruststream_nats::context::keys::StreamSequence) key, so a write to the subject it read can expect that sequence.
+A handler reading a stream knows where its delivery sits through the [`StreamSequence`](../../context/index.md) key, so a write to the subject it read can expect that sequence.
 The publish error wraps the client's error, so a handler that treats a refusal apart from a failed send finds [`NatsError::JetStream`](api:ruststream_nats::NatsError::JetStream) in its source chain.
 As with [`message_id`](./message-id.md), the body imports this crate's prelude and bounds its slot on `JetStreamOptions`.
 

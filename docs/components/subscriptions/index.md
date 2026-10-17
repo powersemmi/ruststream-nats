@@ -19,7 +19,7 @@ Every other setting belongs to a descriptor, one type per delivery model:
 | --- | --- | --- |
 | [`CoreSubject`](./core-subject.md) | one Core NATS subject | [`queue_group`](./queue-group.md) |
 | [`CoreWildcard`](./core-wildcard.md) | every Core NATS subject a pattern matches | [`queue_group`](./queue-group.md) |
-| [`JetStreamSubject`](./jetstream-subject.md) | a stream, through a pull consumer | [`durable`](./durable.md), [`filter_subject`](./filter-subject.md), [`deliver_policy`](./deliver-policy.md), [`max_ack_pending`](./max-ack-pending.md), `ack_wait`, `pull_expires` |
+| [`JetStreamSubject`](./jetstream-subject.md) | a stream, through a pull consumer | [`durable`](./durable.md), [`filter_subject`](./filter-subject.md), [`deliver_policy`](./deliver-policy.md), [`max_ack_pending`](./max-ack-pending.md), [`ack_wait`](../settlement/ack-wait.md), [`pull_expires`](./batches.md) |
 
 A setting of the other model is not a method of the descriptor, so naming one does not compile.
 A descriptor goes where the subject goes, as the attribute's first argument.

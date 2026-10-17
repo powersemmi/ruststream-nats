@@ -13,7 +13,7 @@ One glob, [`ruststream_nats::prelude`](api:ruststream_nats::prelude), brings the
 
 `use ruststream_nats::prelude::*;` is the one import a NATS service writes.
 It carries the core's own prelude, so `#[subscriber]`, `RustStream`, `HandlerOutcome` and `Out` come with it.
-It adds [`NatsBroker`](./index.md), the descriptors [`CoreSubject`](api:ruststream_nats::CoreSubject), [`CoreWildcard`](api:ruststream_nats::CoreWildcard) and [`JetStreamSubject`](api:ruststream_nats::JetStreamSubject), and [`NonZeroDuration`](api:ruststream_nats::NonZeroDuration) for their time settings.
+It adds [`NatsBroker`](./index.md), the descriptors [`CoreSubject`](../subscriptions/core-subject.md), [`CoreWildcard`](../subscriptions/core-wildcard.md) and [`JetStreamSubject`](../subscriptions/jetstream-subject.md), and [`NonZeroDuration`](api:ruststream_nats::NonZeroDuration) for their time settings.
 
 The publish policies come under the names a mount site uses on every broker.
 `Publish` is [`NatsPublish`](../publishing/index.md), plain Core NATS publishing.

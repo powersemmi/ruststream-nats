@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 A JetStream consumer, and a publisher that requires a stream, describe themselves under `x-ruststream-jetstream` on the channel.
 
 A channel's `address` is the subject.
-A channel read by a [`JetStreamSubject`](api:ruststream_nats::JetStreamSubject) reports the consumer's settings:
+A channel read by a [`JetStreamSubject`](../subscriptions/jetstream-subject.md) reports the consumer's settings:
 
 | Field | Value |
 |---|---|
@@ -23,7 +23,7 @@ A channel read by a [`JetStreamSubject`](api:ruststream_nats::JetStreamSubject) 
 | `maxAckPending` | how many unacknowledged deliveries the consumer may hold |
 | `deliverPolicy` | where a new consumer starts: `all`, `new`, `last`, `last_per_subject`, `by_start_sequence` or `by_start_time` |
 
-A channel a [`JetStreamPublish`](../publishing/jetstream-publish/index.md) with [`expect_stream`](api:ruststream_nats::JetStreamPublish::expect_stream) publishes to reports `expectedStream` and `subject`.
+A channel a [`JetStreamPublish`](../publishing/jetstream-publish/index.md) with [`expect_stream`](../publishing/jetstream-publish/expect-stream.md) publishes to reports `expectedStream` and `subject`.
 The subject is the destination the mount site resolved, the one the stream has to store.
 A Core NATS subscription, a JetStream publish that requires no stream and a plain `Publish` add nothing to the channel.
 

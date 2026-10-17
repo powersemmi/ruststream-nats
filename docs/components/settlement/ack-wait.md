@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 
 [`ack_wait`](api:ruststream_nats::JetStreamSubject::ack_wait) is how long the server waits for a settlement; a delivery left unsettled comes back after it and counts as an attempt.
 
-It is a setting of the consumer, so [`JetStreamSubject`](api:ruststream_nats::JetStreamSubject) carries it, and the server keeps it with the consumer it creates at startup.
+It is a setting of the consumer, so [`JetStreamSubject`](../subscriptions/jetstream-subject.md) carries it, and the server keeps it with the consumer it creates at startup.
 The default is 30 seconds.
 The window opens when the server hands out a delivery and closes when the handler's outcome reaches it as an acknowledgement.
 A delivery still unsettled at the end of the window is delivered again: the handler took longer than the window, or the process stopped before it settled.

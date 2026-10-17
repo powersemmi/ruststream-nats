@@ -58,3 +58,136 @@ name = "nats_retry"
 
 [package.metadata.docs.rs]
 all-features = true
+
+# --- examples: subscriptions ---
+[[example]]
+name = "nats_subscriptions_name"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_name"
+path = "examples/manual/nats_subscriptions_name.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_core"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_wildcard"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_queue"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_jetstream"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_durable"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_filter"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_deliver"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_pending"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_batches"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_subscriptions_keys"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "nats_context"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_core"
+path = "examples/manual/nats_subscriptions_core.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_wildcard"
+path = "examples/manual/nats_subscriptions_wildcard.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_queue"
+path = "examples/manual/nats_subscriptions_queue.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_jetstream"
+path = "examples/manual/nats_subscriptions_jetstream.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_durable"
+path = "examples/manual/nats_subscriptions_durable.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_filter"
+path = "examples/manual/nats_subscriptions_filter.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_deliver"
+path = "examples/manual/nats_subscriptions_deliver.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_pending"
+path = "examples/manual/nats_subscriptions_pending.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_batches"
+path = "examples/manual/nats_subscriptions_batches.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_subscriptions_keys"
+path = "examples/manual/nats_subscriptions_keys.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_nats_context"
+path = "examples/manual/nats_context.rs"
+required-features = ["testing"]
+test = true

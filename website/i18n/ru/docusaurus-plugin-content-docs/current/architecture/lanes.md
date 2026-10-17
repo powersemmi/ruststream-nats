@@ -36,7 +36,7 @@ export const words = {
 [`nats-partition-key`](../components/subscriptions/keys.md), который задаёт издатель. Сообщения
 одного ключа сохраняют порядок, а разные ключи выполняются параллельно.
 
-Между процессами работу делит сервер. [Очередь](../components/subscriptions/queue-groups.md)
+Между процессами работу делит сервер. [Очередь](../components/subscriptions/queue-group.md)
 отдаёт каждое сообщение Core одному участнику, в порядке, который выбирает сервер. Подписки,
 привязанные к одному [durable-консьюмеру](../components/subscriptions/durable.md), берут сообщения
 JetStream по очереди. [`max_ack_pending`](../components/subscriptions/max-ack-pending.md)

@@ -300,8 +300,8 @@ zh = "inbox"
 [[term]]
 en = "dead letter"
 en_match = "dead[- ]letter"
-ru = "мёртвые письма"
-ru_match = "м[ёе]ртв\\w* пис(ьм|ем)"
+ru = "недоставленные сообщения"
+ru_match = "недоставленн\\w*"
 zh = "死信"
 
 # NATS's load balancing: the server hands each message to one member of the group.

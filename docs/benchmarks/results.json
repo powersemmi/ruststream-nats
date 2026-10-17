@@ -2,8 +2,8 @@
   "schema": 3,
   "crate": "ruststream-nats",
   "crate_version": "0.7.0",
-  "core_version": "0.7.0-rc.9",
-  "measured_at": "2026-09-23",
+  "core_version": "0.7.0",
+  "measured_at": "2026-10-18",
   "environment": {
     "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
     "architecture": "x86_64",
@@ -11,11 +11,11 @@
     "cores": "12 physical, 24 logical",
     "memory": "62.4 GiB",
     "memory_speed": "unknown",
-    "os": "Linux 7.2.6-x64v3-xanmod1-1",
+    "os": "Linux 7.2.10-x64v3-xanmod1-1",
     "broker": "nats:2-alpine in Docker on localhost",
-    "round_trip": "61.0 us (median of 30000 request/reply round trips on one connection)",
-    "rustc": "1.98.1",
-    "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
+    "round_trip": "68.3 us (median of 30000 request/reply round trips on one connection)",
+    "rustc": "1.99.0",
+    "profile": "bench, inheriting release (opt-level = 3, lto = fat, codegen-units = 16, debug = line-tables-only)",
     "features": "ruststream-nats default (none), ruststream macros,json",
     "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)",
     "valgrind": "3.25.1"
@@ -24,52 +24,52 @@
     {
       "name": "Core NATS, 512 B JSON",
       "unit": "msg/s",
-      "messages": 10726274,
+      "messages": 9230427,
       "pairs": 3,
       "raw": {
-        "best": 1572989,
-        "median": 1529161,
-        "worst": 1235864
+        "best": 1569899,
+        "median": 1539255,
+        "worst": 1175275
       },
       "adapter": {
-        "best": 1517318,
-        "median": 1388559,
-        "worst": 903061
+        "best": 1471311,
+        "median": 1394551,
+        "worst": 1254811
       },
       "framework": {
-        "best": 1538720,
-        "median": 1452357,
-        "worst": 1115541
+        "best": 1489165,
+        "median": 1414937,
+        "worst": 1380967
       },
-      "adapter_overhead_percent": 3.5,
+      "adapter_overhead_percent": 6.3,
       "adapter_verdict": "indistinguishable",
-      "overhead_percent": 2.2,
+      "overhead_percent": 5.1,
       "verdict": "indistinguishable",
       "broker_bound": false
     },
     {
       "name": "JetStream pull consumer, 512 B JSON, ack each",
       "unit": "msg/s",
-      "messages": 1502854,
+      "messages": 1455399,
       "pairs": 3,
       "raw": {
-        "best": 238615,
-        "median": 235035,
-        "worst": 227820
+        "best": 226164,
+        "median": 218628,
+        "worst": 214818
       },
       "adapter": {
-        "best": 234350,
-        "median": 233144,
-        "worst": 232960
+        "best": 220256,
+        "median": 217097,
+        "worst": 143171
       },
       "framework": {
-        "best": 238750,
-        "median": 235916,
-        "worst": 233188
+        "best": 220367,
+        "median": 215485,
+        "worst": 188205
       },
-      "adapter_overhead_percent": 1.8,
+      "adapter_overhead_percent": 2.6,
       "adapter_verdict": "indistinguishable",
-      "overhead_percent": -0.1,
+      "overhead_percent": 2.6,
       "verdict": "indistinguishable",
       "broker_bound": false
     }
@@ -79,12 +79,12 @@
       "name": "JetStream pull consumer, JSON decode into a small struct, ack each",
       "messages": 1000,
       "framework": {
-        "instructions": 9897.4,
+        "instructions": 8679.9,
         "allocations": 7.1
       },
       "cold": {
-        "instructions": 349697,
-        "allocations": 274
+        "instructions": 292434,
+        "allocations": 295
       },
       "gated": true
     },
@@ -92,12 +92,12 @@
       "name": "JetStream pull consumer, reply published by NatsPublisher on Core NATS",
       "messages": 1000,
       "framework": {
-        "instructions": 14048.0,
+        "instructions": 12165.1,
         "allocations": 11.1
       },
       "cold": {
-        "instructions": 356051,
-        "allocations": 279
+        "instructions": 297315,
+        "allocations": 300
       },
       "gated": true
     },
@@ -105,12 +105,12 @@
       "name": "JetStream fetches of 64, ack each",
       "messages": 1000,
       "framework": {
-        "instructions": 9469.3,
+        "instructions": 8469.6,
         "allocations": 6.4
       },
       "cold": {
-        "instructions": 375223,
-        "allocations": 301
+        "instructions": 316037,
+        "allocations": 322
       },
       "gated": true
     }

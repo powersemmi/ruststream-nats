@@ -1,0 +1,26 @@
+# ruststream-nats
+
+> `ruststream-nats` is the NATS broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them. Over the `async-nats` client a handler binds to a Core NATS subject or to a JetStream pull consumer, a service sends requests and awaits the reply NATS matches to them, and a JetStream publish states what it expects of the stream.
+
+A subscription is one of three descriptors: `CoreSubject` (one subject), `CoreWildcard` (a pattern with `*` and `>`) and `JetStreamSubject` (a stream through a pull consumer); a bare `#[subscriber("orders.created")]` is a `CoreSubject`. A routes file imports `ruststream_nats::prelude::*`, which offers `NatsPublish` as `Publish` (plain Core NATS) and `JetStreamPublish` (awaits the stream's acknowledgement). Two `cargo generate` templates, `templates/nats` and `templates/nats-js`, scaffold a service.
+
+This site holds the guides, one page per component and the architecture of the crate; the API reference is on docs.rs, and the framework itself is documented on the RustStream site.
+
+## Guides
+
+- [Guides](https://powersemmi.github.io/ruststream-nats/latest/): building a NATS service with the crate, on Core NATS and on JetStream
+
+## Components
+
+- [Components](https://powersemmi.github.io/ruststream-nats/latest/components/): the parts of the crate a NATS service uses, one page each
+
+## Architecture
+
+- [Architecture](https://powersemmi.github.io/ruststream-nats/latest/architecture/): how NATS works, where the crate sits between NATS and the RustStream runtime, and what that costs
+- [Benchmarks](https://powersemmi.github.io/ruststream-nats/latest/architecture/benchmarks/): what the crate and the framework's runtime cost over the raw `async-nats` client, and the cost of the crate's own code
+
+## Optional
+
+- [API reference](https://docs.rs/ruststream-nats): the full rustdoc of the crate
+- [RustStream llms.txt](https://powersemmi.github.io/ruststream/llms.txt): the index of the framework's own documentation
+- [Source](https://github.com/powersemmi/ruststream-nats): the crate's repository and its templates

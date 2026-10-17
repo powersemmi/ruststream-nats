@@ -5,6 +5,7 @@
 //! cargo test --example manual_nats_testing --features testing
 //! ```
 
+use std::future::{Future, ready};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -37,16 +38,17 @@ impl MessageHeaders for Payment {
 struct Accept;
 
 impl Handle<Payment> for Accept {
-    async fn handle(
+    fn handle(
         &self,
         payment: &Payment,
         _outs: &(),
         _ctx: &mut Context<'_>,
-    ) -> Result<(), HandlerOutcome> {
-        if payment.amount == 0 {
-            return Err(HandlerOutcome::drop());
-        }
-        Ok(())
+    ) -> impl Future<Output = Result<(), HandlerOutcome>> {
+        ready(if payment.amount == 0 {
+            Err(HandlerOutcome::drop())
+        } else {
+            Ok(())
+        })
     }
 }
 
@@ -70,18 +72,19 @@ impl MessageHeaders for Capture {
 struct Book;
 
 impl Handle<Capture, (), (), JetStreamContext> for Book {
-    async fn handle(
+    fn handle(
         &self,
         capture: &Capture,
         _outs: &(),
         ctx: &mut Context<'_, JetStreamContext>,
-    ) -> Result<(), HandlerOutcome> {
+    ) -> impl Future<Output = Result<(), HandlerOutcome>> {
         let delivered = ctx.context(keys::DELIVERED);
         tracing::info!(capture.amount, ?delivered, "capture booked");
-        if delivered == Some(1) {
-            return Err(HandlerOutcome::retry_after(HOLD));
-        }
-        Ok(())
+        ready(if delivered == Some(1) {
+            Err(HandlerOutcome::retry_after(HOLD))
+        } else {
+            Ok(())
+        })
     }
 }
 

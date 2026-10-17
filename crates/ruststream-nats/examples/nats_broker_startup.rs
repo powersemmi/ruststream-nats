@@ -1,4 +1,4 @@
-//! Startup against a server: the connect bounded by `connection_timeout`, then a JetStream
+//! Startup against a server: the connect bounded by `connection_timeout`, then a `JetStream`
 //! subscription that finds its stream or fails the start. The tests run against a real server and
 //! skip without one.
 //!

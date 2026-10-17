@@ -1,5 +1,5 @@
 //! The `AsyncAPI` document of a NATS service: the server's coordinates, the queue group of each
-//! receive operation, the JetStream settings of each consumer and of each publisher that requires
+//! receive operation, the `JetStream` settings of each consumer and of each publisher that requires
 //! a stream, and where a reply's address is read from. The tests read the document the app
 //! generates.
 //!

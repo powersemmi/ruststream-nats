@@ -106,6 +106,7 @@ impl MessageHeaders for Shipment {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::future::{Future, ready};
 
     use ruststream::testing::TestApp;
     use ruststream_nats::NatsError;
@@ -194,14 +195,14 @@ mod tests {
         struct Nowhere;
 
         impl Handle<Order> for Nowhere {
-            async fn handle(
+            fn handle(
                 &self,
                 order: &Order,
                 _outs: &(),
                 _ctx: &mut Context<'_>,
-            ) -> Result<(), HandlerOutcome> {
+            ) -> impl Future<Output = Result<(), HandlerOutcome>> {
                 let _ = order.id;
-                Ok(())
+                ready(Ok(()))
             }
         }
         let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(

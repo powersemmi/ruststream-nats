@@ -267,3 +267,14 @@ name = "manual_nats_broker_errors"
 path = "examples/manual/nats_broker_errors.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "nats_asyncapi"
+required-features = ["asyncapi"]
+test = true
+
+[[example]]
+name = "manual_nats_asyncapi"
+path = "examples/manual/nats_asyncapi.rs"
+required-features = ["asyncapi"]
+test = true

@@ -128,6 +128,44 @@ impl NatsPublishPolicy for NatsPublish {
 /// Exists only from a [`ConnectedNatsBroker`], so it always has a connection. It aliases that
 /// connection, though, and may outlive it: after the broker shuts down every publish reports
 /// [`NatsError::Closed`] instead of silently succeeding against a dead connection.
+///
+/// NATS correlates a reply with its request natively, so this publisher implements
+/// [`RequestReply`](ruststream::RequestReply): `request(msg, timeout)` publishes with a reply
+/// inbox and resolves with the reply, or with [`NatsError::RequestTimeout`] when nothing answers
+/// in time.
+///
+/// # Examples
+///
+/// ```
+/// # mod demo {
+/// use std::io;
+/// use std::time::Duration;
+///
+/// use ruststream::OutgoingMessage;
+/// use ruststream_nats::prelude::*;
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("requester", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.after_startup(Publish, async move |requester| -> io::Result<()> {
+///                 let reply = requester
+///                     .request(
+///                         OutgoingMessage::new("questions", b"what is the answer?"),
+///                         Duration::from_secs(2),
+///                     )
+///                     .await
+///                     .map_err(io::Error::other)?;
+///                 tracing::info!(answer = %String::from_utf8_lossy(reply.payload()), "replied");
+///                 Ok(())
+///             });
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
+/// ```
 #[derive(Clone)]
 pub struct NatsPublisher {
     link: Link,

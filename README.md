@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://powersemmi.github.io/ruststream-nats/">Documentation</a></b>
+  <b><a href="https://powersemmi.github.io/ruststream-nats/latest/">Documentation</a></b>
 </p>
 
 ---
@@ -127,8 +127,16 @@ tb.broker::<NatsBroker>()
 
 ## Documentation
 
-- This crate: <https://docs.rs/ruststream-nats>
-- The framework: <https://powersemmi.github.io/ruststream/latest>
+- [Getting started](https://powersemmi.github.io/ruststream-nats/latest/guides/getting-started/) - installation and a first service against a
+  local NATS server.
+- [Guides](https://powersemmi.github.io/ruststream-nats/latest/) - subjects and queue groups, streams and consumers, acknowledgement,
+  publishing to streams, retries, request-reply, testing and a production cluster.
+- [Components](https://powersemmi.github.io/ruststream-nats/latest/components/) - one page per part of the crate: the broker, subscriptions,
+  settlement, the JetStream context, publishing, request-reply, AsyncAPI and testing.
+- [Architecture](https://powersemmi.github.io/ruststream-nats/latest/architecture/) - how the crate sits between `async-nats` and the runtime.
+- [Benchmarks](https://powersemmi.github.io/ruststream-nats/latest/architecture/benchmarks/) - what the crate costs over the raw client.
+- [API reference](https://docs.rs/ruststream-nats) - every item on docs.rs.
+- The framework: <https://powersemmi.github.io/ruststream/latest/>
 
 ## Minimum supported Rust version
 

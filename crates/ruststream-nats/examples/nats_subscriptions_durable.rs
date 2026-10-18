@@ -1,0 +1,158 @@
+//! `durable`: a named consumer, whose position the server keeps and whose subscriptions take
+//! messages in turn. Each scenario is a test; the restart needs a server.
+//!
+//! ```text
+//! cargo test --example nats_subscriptions_durable --features testing
+//! NATS_TEST_URL=nats://127.0.0.1:4222 cargo test --example nats_subscriptions_durable --features testing
+//! nats stream add INVOICES --subjects 'invoices.*' --defaults
+//! cargo run --example nats_subscriptions_durable --features testing -- run
+//! ```
+
+use ruststream_nats::prelude::*;
+use serde::{Deserialize, Serialize};
+
+#[cfg(test)]
+#[path = "../tests/live/mod.rs"]
+mod live;
+
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+struct Invoice {
+    id: u64,
+}
+
+// --8<-- [start:descriptor]
+/// Every replica reads through the consumer `billing`: each invoice is billed once, and a
+/// restarted service resumes where the consumer stopped.
+#[subscriber(JetStreamSubject::new("invoices.*", "INVOICES").durable("billing"))]
+async fn bill(invoice: &Invoice) -> HandlerOutcome {
+    tracing::info!(invoice.id, "invoice billed");
+    HandlerOutcome::ack()
+}
+
+#[ruststream::app]
+fn app() -> impl App {
+    RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(
+        NatsBroker::new("nats://localhost:4222"),
+        |b| {
+            b.include(bill);
+        },
+    )
+}
+// --8<-- [end:descriptor]
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use async_nats::jetstream::stream::Config as StreamConfig;
+    use ruststream::testing::TestApp;
+    use ruststream::{Broker, ConnectedBroker};
+    use ruststream_nats::prelude::*;
+
+    use super::{Invoice, bill, live};
+
+    /// The service on the server at `url`, as `main` builds it on its configured address.
+    fn app_at(url: &str) -> impl App {
+        RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(NatsBroker::new(url), |b| {
+            b.include(bill);
+        })
+    }
+
+    #[tokio::test]
+    async fn the_subscriptions_of_one_durable_take_turns() -> Result<(), Box<dyn Error>> {
+        // Two replicas of the service, as two subscriptions on one connection.
+        let replicas = RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(
+            NatsBroker::new("nats://localhost:4222"),
+            |b| {
+                b.include(bill);
+                b.include(bill);
+            },
+        );
+        let tb = TestApp::start(replicas).await?;
+
+        for id in 1..=4 {
+            tb.broker::<NatsBroker>()
+                .message(&Invoice { id })
+                .to("invoices.issued")
+                .publish()
+                .await?;
+        }
+
+        let mut billed: Vec<u64> = tb
+            .broker::<NatsBroker>()
+            .subscriber("invoices.*")
+            .received::<Invoice>()
+            .iter()
+            .map(|invoice| invoice.id)
+            .collect();
+        billed.sort_unstable();
+        assert_eq!(billed, [1, 2, 3, 4]);
+        tb.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_restarted_service_resumes_where_the_consumer_stopped() -> Result<(), Box<dyn Error>>
+    {
+        let Some(url) = live::url("NATS_TEST_URL") else {
+            return Ok(());
+        };
+        let admin = NatsBroker::new(url.as_str()).connect().await?;
+        let jetstream = admin.jetstream();
+        let _ = jetstream.delete_stream("INVOICES").await;
+        jetstream
+            .create_stream(StreamConfig {
+                name: "INVOICES".to_owned(),
+                subjects: vec!["invoices.*".to_owned()],
+                ..StreamConfig::default()
+            })
+            .await?;
+
+        let outcome = async {
+            let tb = TestApp::start_live(app_at(&url)).await?;
+            tb.broker::<NatsBroker>()
+                .message(&Invoice { id: 1 })
+                .to("invoices.issued")
+                .publish()
+                .await?;
+            tb.broker::<NatsBroker>()
+                .subscriber("invoices.*")
+                .assert_called_once()
+                .with(&Invoice { id: 1 });
+            tb.shutdown().await?;
+
+            // Issued while the service is down: the stream keeps it for the consumer.
+            jetstream
+                .publish(
+                    "invoices.issued",
+                    serde_json::to_vec(&Invoice { id: 2 })?.into(),
+                )
+                .await?
+                .await?;
+
+            // The consumer resumes in order: the invoice issued during the restart comes first,
+            // and the one billed before it is not read again.
+            let tb = TestApp::start_live(app_at(&url)).await?;
+            tb.broker::<NatsBroker>()
+                .message(&Invoice { id: 3 })
+                .to("invoices.issued")
+                .publish()
+                .await?;
+            let billed: Vec<u64> = tb
+                .broker::<NatsBroker>()
+                .subscriber("invoices.*")
+                .received::<Invoice>()
+                .iter()
+                .map(|invoice| invoice.id)
+                .collect();
+            assert_eq!(billed.first(), Some(&2));
+            tb.shutdown().await?;
+            Ok::<_, Box<dyn Error>>(())
+        }
+        .await;
+
+        jetstream.delete_stream("INVOICES").await?;
+        admin.shutdown().await?;
+        outcome
+    }
+}

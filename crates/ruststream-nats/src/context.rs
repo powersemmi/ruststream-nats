@@ -1,52 +1,17 @@
-//! Optional typed per-delivery context exposing native `JetStream` metadata.
+//! Native `JetStream` metadata of a delivery, read by a handler through `Ctx<K>`.
 //!
-//! A handler reads native `JetStream` delivery metadata - the stream and consumer names, the stream
-//! and consumer sequence numbers, the server-side redelivery count, and the pending count - by
-//! binding a compile-time key from [`keys`] as a `Ctx<K>` parameter. The key names the context it
-//! reads, so nothing else in the signature changes. A handler that already takes a
-//! `&mut Context<'_, JetStreamContext>` reads the same keys with `ctx.context(KEY)` instead. The
-//! runtime builds the context once per delivery via [`BuildContext`]; resolving a key is a direct
-//! field read, with no hashing, boxing, or downcasting.
+//! A handler binds one field as a parameter with the core's `Ctx<K>` extractor and a key from
+//! [`keys`], or types its context parameter as `Context<'_, JetStreamContext>`.
 //!
-//! This is purely additive: the default context is `()` (no fields), so existing handlers are
-//! unaffected. Opting in means naming one of these keys.
+//! - [JetStreamContext][context]: [`JetStreamContext`], the stream, the consumer, the stream and
+//!   consumer sequences, the delivery count and the pending count of a delivery, under the keys
+//!   [`keys::Stream`], [`keys::Consumer`], [`keys::StreamSequence`], [`keys::ConsumerSequence`],
+//!   [`keys::Delivered`] and [`keys::Pending`]. Every key reads `None` on a Core NATS delivery.
+//! - [Expectations][expectations]: [`keys::StreamSequence`] is the position a write to the
+//!   subject a handler read can expect.
 //!
-//! These fields are genuinely native: they come from the `JetStream` `$JS.ACK` reply subject, not
-//! from the payload or the message [`HeaderMap`](ruststream::HeaderMap), so they are not reachable
-//! any other way. Core (non-JetStream) NATS deliveries carry no such metadata - their only native
-//! datum is the reply inbox, already surfaced as the `reply-to` header - so Core handlers should
-//! keep the default `()` context. A handler bound to [`JetStreamContext`] still works on a Core
-//! subscription; every key just reads `None` there.
-//!
-//! # Examples
-//!
-//! ```
-//! use ruststream_nats::context::keys::{Delivered, StreamSequence};
-//! use ruststream_nats::prelude::*;
-//! use serde::Deserialize;
-//!
-//! #[derive(Deserialize)]
-//! struct Order {
-//!     id: u64,
-//! }
-//!
-//! #[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("worker"))]
-//! async fn handle(
-//!     order: &Order,
-//!     Ctx(sequence): Ctx<StreamSequence>,
-//!     Ctx(delivered): Ctx<Delivered>,
-//! ) -> HandlerOutcome {
-//!     // `None` on a core delivery; the stream sequence on a JetStream one.
-//!     if let Some(sequence) = sequence {
-//!         println!("order {} sits at stream sequence {sequence}", order.id);
-//!     }
-//!     // The server-side delivery count distinguishes a first delivery from a redelivery.
-//!     if delivered.is_some_and(|n| n > 1) {
-//!         println!("redelivery");
-//!     }
-//!     HandlerOutcome::ack()
-//! }
-//! ```
+//! [context]: https://powersemmi.github.io/ruststream-nats/latest/components/context/
+//! [expectations]: https://powersemmi.github.io/ruststream-nats/latest/components/publishing/jetstream-publish/expectations/
 
 use ruststream::BuildContext;
 
@@ -87,7 +52,7 @@ use crate::message::NatsMessage;
 ///         ctx: &mut Context<'_, JetStreamContext>,
 ///     ) -> Result<(), HandlerOutcome> {
 ///         if let Some(sequence) = ctx.context(keys::STREAM_SEQUENCE) {
-///             println!("order {} is entry {sequence} of the ledger", order.id);
+///             tracing::info!(order.id, sequence, "entered in the ledger");
 ///         }
 ///         Ok(())
 ///     }
@@ -159,6 +124,52 @@ const _: fn() = || {
 /// Each key is a zero-sized selector exported both as a type (for naming in bounds) and as a
 /// `const` value (for use at the call site, `ctx.context(keys::STREAM_SEQUENCE)`). Every key reads
 /// `None` on a core delivery or when the `JetStream` reply subject could not be parsed.
+///
+/// The fields come from the `JetStream` acknowledgement subject, not from the payload or the
+/// headers, so these keys are the one way to reach them.
+///
+/// # Examples
+///
+/// ```
+/// # mod demo {
+/// use ruststream_nats::context::keys::{Delivered, StreamSequence};
+/// use ruststream_nats::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+/// }
+///
+/// #[subscriber(JetStreamSubject::new("orders.*", "ORDERS").durable("worker"))]
+/// async fn handle(
+///     order: &Order,
+///     Ctx(sequence): Ctx<StreamSequence>,
+///     Ctx(delivered): Ctx<Delivered>,
+/// ) -> HandlerOutcome {
+///     // `None` on a core delivery; the stream sequence on a JetStream one.
+///     if let Some(sequence) = sequence {
+///         tracing::info!(order.id, sequence, "stored");
+///     }
+///     // The server-side delivery count tells a redelivery from a first delivery.
+///     if delivered.is_some_and(|n| n > 1) {
+///         tracing::warn!(order.id, "redelivered");
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.include(handle);
+///         },
+///     )
+/// }
+/// # }
+/// # fn main() {}
+/// ```
 pub mod keys {
     use ruststream::{ContextField, Field};
 

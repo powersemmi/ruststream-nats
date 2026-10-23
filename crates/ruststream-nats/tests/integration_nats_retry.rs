@@ -26,7 +26,7 @@ use ruststream_nats::{ConnectedNatsBroker, NatsError, NatsMessage};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
-mod live;
+use crate::live;
 
 /// How long a delivery that is expected may take to arrive.
 const WAIT: Duration = Duration::from_secs(10);

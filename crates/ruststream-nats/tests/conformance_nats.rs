@@ -21,7 +21,7 @@
 //!
 //! ```bash
 //! just brokers-up
-//! NATS_TEST_URL=nats://127.0.0.1:4222 cargo test -p ruststream-nats --test conformance_nats
+//! NATS_TEST_URL=nats://127.0.0.1:4222 cargo test -p ruststream-nats --test suite conformance_nats::
 //! ```
 //!
 //! In CI, the `broker-integration` job spins up `docker-compose.test.yml` first.
@@ -46,7 +46,7 @@ use ruststream_nats::{
     NatsBroker, NatsMessage, NatsPublish, NonZeroDuration, PARTITION_KEY_HEADER,
 };
 
-mod live;
+use crate::live;
 
 /// The address the service's broker is built with. The in-process mode dials nothing.
 const URL: &str = "nats://localhost:4222";

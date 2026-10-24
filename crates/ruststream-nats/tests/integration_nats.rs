@@ -12,7 +12,7 @@
 //!
 //! ```bash
 //! just brokers-up
-//! NATS_TEST_URL=nats://127.0.0.1:4222 cargo test -p ruststream-nats --test integration_nats
+//! NATS_TEST_URL=nats://127.0.0.1:4222 cargo test -p ruststream-nats --test suite integration_nats::
 //! ```
 //!
 //! In CI, the `broker-integration` job spins up `docker-compose.test.yml` first.
@@ -37,7 +37,7 @@ use ruststream_nats::{
 };
 use tokio::time::timeout;
 
-mod live;
+use crate::live;
 
 const WAIT: Duration = Duration::from_secs(2);
 /// How long a drain waits for one more delivery before calling the stream quiet. Short, because

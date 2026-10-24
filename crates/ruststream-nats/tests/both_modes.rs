@@ -17,7 +17,7 @@ use ruststream_nats::context::keys::Delivered;
 use ruststream_nats::prelude::*;
 use serde::{Deserialize, Serialize};
 
-mod live;
+use crate::live;
 
 /// The stream the consumer reads. The live leg creates it before the app starts and deletes it
 /// afterwards; in process a subscription finds the stream it names.

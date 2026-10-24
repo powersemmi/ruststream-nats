@@ -28,7 +28,7 @@ use tokio::runtime::Builder;
 use tokio::task::block_in_place;
 use tokio::time::timeout;
 
-mod live;
+use crate::live;
 
 /// How long a delivery that is expected may take to arrive.
 const WAIT: Duration = Duration::from_secs(5);

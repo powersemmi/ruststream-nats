@@ -15,7 +15,7 @@ use bytes::Bytes;
 use ruststream::{Broker, BytesMut, ConnectedBroker, OutgoingMessage, Publisher};
 use ruststream_nats::{ConnectedNatsBroker, NatsBroker, NatsPublish};
 
-mod live;
+use crate::live;
 
 /// Publishes one measurement takes. Enough that the command channel's occasional block is a
 /// fraction of a block per publish, and short enough to stay a test.

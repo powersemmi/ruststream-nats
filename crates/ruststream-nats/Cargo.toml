@@ -11,6 +11,8 @@ authors.workspace = true
 readme = "../../README.md"
 keywords = ["nats", "messaging", "jetstream", "broker", "ruststream"]
 categories = ["asynchronous", "network-programming"]
+# Every file under `tests/` is a module of one test binary: one link instead of one per file.
+autotests = false
 
 [lints]
 workspace = true
@@ -29,6 +31,10 @@ asyncapi = ["ruststream/asyncapi", "dep:serde"]
 # The conformance harness drives the testing-feature broker; macros + json power the runnable
 # nats_* examples (the docs site embeds their snippets), and serde decodes their message types.
 ruststream = { workspace = true, features = ["conformance", "testing", "macros", "json", "asyncapi"] }
+# Builds the examples' tests into one test binary (`tests/examples.rs`) instead of a test binary
+# per example. It lives in the core repository and is not published: a dev-dependency without a
+# version is dropped on publish.
+ruststream-example-suite = { git = "https://github.com/powersemmi/ruststream", branch = "main" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
@@ -46,384 +52,325 @@ tracing.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+[[test]]
+name = "suite"
+path = "tests/main.rs"
+
+# The tests of the examples, one module per example, in a binary of their own beside the suite.
+[[test]]
+name = "examples"
+path = "tests/examples.rs"
+
 # --- examples: subscriptions ---
 [[example]]
 name = "nats_subscriptions_name"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_name"
 path = "examples/manual/nats_subscriptions_name.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_core"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_wildcard"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_queue"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_jetstream"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_durable"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_filter"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_deliver"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_pending"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_batches"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_subscriptions_keys"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_context"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_core"
 path = "examples/manual/nats_subscriptions_core.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_wildcard"
 path = "examples/manual/nats_subscriptions_wildcard.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_queue"
 path = "examples/manual/nats_subscriptions_queue.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_jetstream"
 path = "examples/manual/nats_subscriptions_jetstream.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_durable"
 path = "examples/manual/nats_subscriptions_durable.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_filter"
 path = "examples/manual/nats_subscriptions_filter.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_deliver"
 path = "examples/manual/nats_subscriptions_deliver.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_pending"
 path = "examples/manual/nats_subscriptions_pending.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_batches"
 path = "examples/manual/nats_subscriptions_batches.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_subscriptions_keys"
 path = "examples/manual/nats_subscriptions_keys.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_context"
 path = "examples/manual/nats_context.rs"
 required-features = ["testing"]
-test = true
 
 # --- examples: broker ---
 
 [[example]]
 name = "nats_core"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_core"
 path = "examples/manual/nats_core.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_broker_options"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_broker_options"
 path = "examples/manual/nats_broker_options.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_broker_security"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_broker_startup"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_broker_shutdown"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_broker_prelude"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_broker_errors"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_broker_security"
 path = "examples/manual/nats_broker_security.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_broker_startup"
 path = "examples/manual/nats_broker_startup.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_broker_shutdown"
 path = "examples/manual/nats_broker_shutdown.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_broker_prelude"
 path = "examples/manual/nats_broker_prelude.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_broker_errors"
 path = "examples/manual/nats_broker_errors.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_asyncapi"
 required-features = ["asyncapi"]
-test = true
 
 [[example]]
 name = "manual_nats_asyncapi"
 path = "examples/manual/nats_asyncapi.rs"
 required-features = ["asyncapi"]
-test = true
 
 [[example]]
 name = "nats_testing"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_testing_live"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_testing"
 path = "examples/manual/nats_testing.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_testing_live"
 path = "examples/manual/nats_testing_live.rs"
 required-features = ["testing"]
-test = true
 
 # --- examples: settlement ---
 
 [[example]]
 name = "nats_settlement_ack"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_settlement_ack"
 path = "examples/manual/nats_settlement_ack.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_settlement_core"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_settlement_core"
 path = "examples/manual/nats_settlement_core.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_settlement_ack_wait"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_settlement_ack_wait"
 path = "examples/manual/nats_settlement_ack_wait.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_retry"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_jetstream"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_request_reply"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_retry"
 path = "examples/manual/nats_retry.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_settlement_out_retry"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_settlement_out_retry"
 path = "examples/manual/nats_settlement_out_retry.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_publishing_publish"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_publishing_publish"
 path = "examples/manual/nats_publishing_publish.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_publishing_headers"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_publishing_headers"
 path = "examples/manual/nats_publishing_headers.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_jetstream"
 path = "examples/manual/nats_jetstream.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_publishing_expect_stream"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_publishing_expect_stream"
 path = "examples/manual/nats_publishing_expect_stream.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_publishing_expectations"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_publishing_expectations"
 path = "examples/manual/nats_publishing_expectations.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_request_reply"
 path = "examples/manual/nats_request_reply.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "nats_request_reply_responder"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_nats_request_reply_responder"
 path = "examples/manual/nats_request_reply_responder.rs"
 required-features = ["testing"]
-test = true
 
 # --- examples: guides ---
 
@@ -434,106 +381,88 @@ test = true
 name = "guide_getting_started"
 path = "examples/guide/getting_started.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_guide_getting_started"
 path = "examples/manual/guide/getting_started.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "guide_subjects_and_queue_groups"
 path = "examples/guide/subjects_and_queue_groups.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_guide_subjects_and_queue_groups"
 path = "examples/manual/guide/subjects_and_queue_groups.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "guide_streams_and_consumers"
 path = "examples/guide/streams_and_consumers.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_guide_streams_and_consumers"
 path = "examples/manual/guide/streams_and_consumers.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "guide_acknowledgement"
 path = "examples/guide/acknowledgement.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_guide_acknowledgement"
 path = "examples/manual/guide/acknowledgement.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "guide_publishing_to_streams"
 path = "examples/guide/publishing_to_streams.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_guide_publishing_to_streams"
 path = "examples/manual/guide/publishing_to_streams.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "guide_retries"
 path = "examples/guide/retries.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_guide_retries"
 path = "examples/manual/guide/retries.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "guide_request_reply"
 path = "examples/guide/request_reply.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_guide_request_reply"
 path = "examples/manual/guide/request_reply.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "guide_testing"
 path = "examples/guide/testing.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_guide_testing"
 path = "examples/manual/guide/testing.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "guide_production"
 path = "examples/guide/production.rs"
 required-features = ["testing"]
-test = true
 
 [[example]]
 name = "manual_guide_production"
 path = "examples/manual/guide/production.rs"
 required-features = ["testing"]
-test = true

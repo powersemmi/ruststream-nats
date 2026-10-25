@@ -18,7 +18,7 @@ use ruststream_nats::{
 };
 use tokio::time::timeout;
 
-mod live;
+use crate::live;
 
 const WAIT: Duration = Duration::from_secs(2);
 

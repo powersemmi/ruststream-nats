@@ -22,7 +22,7 @@ ruststream-nats = { path = "crates/ruststream-nats" }
 
 ruststream = { version = "0.7", default-features = false }
 
-async-nats = "0.50"
+async-nats = "0.51"
 bytes = "1"
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }

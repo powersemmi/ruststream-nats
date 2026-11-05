@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 # out_retry
 
-A pattern names no subject of its own, so [`out_retry(Publish).to(subject)`](api:ruststream::runtime::Mounting::out_retry) says where its delayed copies go; without it the app refuses to start.
+A pattern names no subject of its own, so [`out_retry(Publish).to(subject)`](api:ruststream::runtime::RouterWith::out_retry) says where its delayed copies go; without it the app refuses to start.
 
 A [`CoreWildcard`](../subscriptions/core-wildcard.md) reads every subject its pattern matches, and a copy has to go to one of them.
 This crate does not take the pattern itself as a destination, so the mount site names the subject.

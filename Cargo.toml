@@ -9,7 +9,7 @@ members = ["crates/ruststream-nats", "crates/ruststream-nats-bench"]
 exclude = ["templates"]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.8.0-rc.1"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -20,7 +20,8 @@ authors = ["RustStream contributors"]
 [workspace.dependencies]
 ruststream-nats = { path = "crates/ruststream-nats" }
 
-ruststream = { version = "0.7", default-features = false }
+# The crate's client runs on tokio, so the library names the core's tokio runner in every build.
+ruststream = { version = "0.8.0-rc.1", default-features = false, features = ["tokio"] }
 
 async-nats = "0.50"
 bytes = "1"

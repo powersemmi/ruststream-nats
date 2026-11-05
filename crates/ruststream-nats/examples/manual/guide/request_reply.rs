@@ -207,8 +207,7 @@ fn app() -> impl App<State = ()> {
                 .build(),
             )
             .out(Answers, Publish)
-            .build();
-            b.include(
+            .include(
                 subscriber(
                     JetStreamSubject::new("orders.placed", "ORDERS").durable("pricer"),
                     PriceOrder,
@@ -218,7 +217,6 @@ fn app() -> impl App<State = ()> {
             )
             .out_reply(Publish)
             .out(Pricing, Publish)
-            .build();
         },
     )
 }

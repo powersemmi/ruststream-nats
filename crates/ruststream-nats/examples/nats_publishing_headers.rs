@@ -59,12 +59,10 @@ async fn issue(order: &Order, Out(invoices): Out<impl Publisher, Invoices>) -> H
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(issue).out(Invoices, Publish).build();
-        },
-    )
+    RustStream::new(AppInfo::new("billing", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(issue).out(Invoices, Publish)
+        })
 }
 
 #[cfg(test)]

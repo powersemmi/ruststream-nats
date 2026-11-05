@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 # Retries
 
-[`max_attempts(n)`](api:ruststream::runtime::Mounting::max_attempts) caps the deliveries of one message; on JetStream it counts the server's own deliveries, on Core the copies in a header.
+[`max_attempts(n)`](api:ruststream::runtime::RouterWith::max_attempts) caps the deliveries of one message; on JetStream it counts the server's own deliveries, on Core the copies in a header.
 
 It is declared at the mount site, and the first delivery counts as one.
 A JetStream consumer reports how many times it has delivered a message, so the cap reads that number.

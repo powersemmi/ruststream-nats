@@ -47,13 +47,14 @@ async fn settle_on_redelivery(order: &Order, Ctx(delivered): Ctx<Delivered>) -> 
 
 /// The service's app, built as `main` builds it, on the address its configuration names.
 fn app(url: &str) -> RustStream {
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(url), |b| {
-        b.include(settle_on_redelivery);
-    })
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(NatsBroker::new(url), |b| b.include(settle_on_redelivery))
 }
 
 /// The test body both modes run: the consumer holds the message for the delay, and the handler
 /// settles it on the redelivery.
+// The body is awaited on the test's own task; the harness's app carries no Send.
+#[allow(clippy::future_not_send)]
 async fn a_held_message_comes_back_after_the_delay(tb: TestApp<()>) -> Result<(), Box<dyn Error>> {
     tb.broker::<NatsBroker>()
         .message(&Order { id: 1 })

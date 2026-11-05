@@ -23,13 +23,10 @@ async fn mail(confirmation: &Confirmation) -> HandlerOutcome {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(confirm).out_reply(Publish);
-            b.include(mail);
-        },
-    )
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(confirm).out_reply(Publish).include(mail)
+        })
 }
 // --8<-- [end:app]
 

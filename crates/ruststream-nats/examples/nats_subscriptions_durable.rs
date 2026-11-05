@@ -31,12 +31,10 @@ async fn bill(invoice: &Invoice) -> HandlerOutcome {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(bill);
-        },
-    )
+    RustStream::new(AppInfo::new("billing", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(bill)
+        })
 }
 // --8<-- [end:descriptor]
 
@@ -53,21 +51,17 @@ mod tests {
 
     /// The service on the server at `url`, as `main` builds it on its configured address.
     fn app_at(url: &str) -> impl App {
-        RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(NatsBroker::new(url), |b| {
-            b.include(bill);
-        })
+        RustStream::new(AppInfo::new("billing", "0.1.0"))
+            .with_broker(NatsBroker::new(url), |b| b.include(bill))
     }
 
     #[tokio::test]
     async fn the_subscriptions_of_one_durable_take_turns() -> Result<(), Box<dyn Error>> {
         // Two replicas of the service, as two subscriptions on one connection.
-        let replicas = RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(
-            NatsBroker::new("nats://localhost:4222"),
-            |b| {
-                b.include(bill);
-                b.include(bill);
-            },
-        );
+        let replicas = RustStream::new(AppInfo::new("billing", "0.1.0"))
+            .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+                b.include(bill).include(bill)
+            });
         let tb = TestApp::start(replicas).await?;
 
         for id in 1..=4 {

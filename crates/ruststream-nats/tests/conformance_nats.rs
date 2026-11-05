@@ -37,6 +37,7 @@ use async_nats::jetstream::stream::Config as StreamConfig;
 use ruststream::conformance::harness::InProcessBroker;
 use ruststream::conformance::helpers::unique_subject;
 use ruststream::conformance::in_process::{self, Refusal};
+use ruststream::conformance::lifecycle::Unsent;
 use ruststream::conformance::message_shape::{self, OptionCases};
 use ruststream::conformance::{capabilities, harness, lifecycle, retry, settlement};
 use ruststream::testing::Backlog;
@@ -389,6 +390,45 @@ async fn shutdown_flushes_a_consumer() {
     )
     .await;
     delete_stream(admin, &stream).await;
+}
+
+// A publisher that outlives its broker is refused before the client takes the message, so the
+// refusal hands the message back, on both publish surfaces and in both modes.
+#[allow(clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn in_process_a_refused_publish_returns_the_message() {
+    lifecycle::refused_publish_returns_message(
+        in_process,
+        |connected| connected.publisher(NatsPublish),
+        Unsent::Returned,
+    )
+    .await;
+    lifecycle::refused_publish_returns_message(
+        in_process,
+        |connected| connected.publisher(JetStreamPublish::default()),
+        Unsent::Returned,
+    )
+    .await;
+}
+
+#[allow(clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_publish_returns_the_message() {
+    let Some(url) = nats_url() else {
+        return;
+    };
+    lifecycle::refused_publish_returns_message(
+        || NatsBroker::new(url.clone()),
+        |connected| connected.publisher(NatsPublish),
+        Unsent::Returned,
+    )
+    .await;
+    lifecycle::refused_publish_returns_message(
+        || NatsBroker::new(url.clone()),
+        |connected| connected.publisher(JetStreamPublish::default()),
+        Unsent::Returned,
+    )
+    .await;
 }
 
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]

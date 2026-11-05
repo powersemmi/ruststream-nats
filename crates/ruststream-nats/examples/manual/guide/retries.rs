@@ -199,20 +199,20 @@ fn app() -> impl App<State = Clients> {
             )
             // Five deliveries of one payment, the first included; then the dead-letter subject.
             .max_attempts(nonzero!(5u32))
-            .dead_letter("dead.payments");
-            b.include(
+            .dead_letter("dead.payments")
+            .include(
                 subscriber(
                     JetStreamSubject::new("dead.payments", "DEAD").durable("review"),
                     Review,
                 )
                 .build(),
-            );
+            )
             // A pattern is no subject to publish a copy to, so the mount site names one.
-            b.include(subscriber(CoreWildcard::new("refunds.*"), SendRefund).build())
-                .max_attempts(nonzero!(3u32))
-                .dead_letter("dead.refunds")
-                .out_retry(Publish)
-                .to("refunds.retry");
+            .include(subscriber(CoreWildcard::new("refunds.*"), SendRefund).build())
+            .max_attempts(nonzero!(3u32))
+            .dead_letter("dead.refunds")
+            .out_retry(Publish)
+            .to("refunds.retry")
         })
 }
 

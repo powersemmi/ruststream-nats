@@ -72,6 +72,7 @@ async fn quote(order: &Order) -> Quote {
 
 /// Answers on the inbox the request named; a delivery that named none is answered on the mount
 /// site's subject.
+#[derive(Clone)]
 struct ReplyTo;
 
 impl<Cx, Options> PublishTransform<ForReply<Cx>, Options> for ReplyTo {
@@ -103,11 +104,13 @@ fn broker(password: &str) -> NatsBroker {
 // --8<-- [start:app]
 fn service(broker: NatsBroker) -> impl App<State = ()> {
     RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker_labeled("nats", broker, |b| {
-        b.include(confirm);
-        b.include(archive);
-        b.include(issue)
-            .out_reply(JetStreamPublish::default().expect_stream("RECEIPTS"));
-        b.include(quote).out_reply(Publish).transform(ReplyTo);
+        b.include(confirm)
+            .include(archive)
+            .include(issue)
+            .out_reply(JetStreamPublish::default().expect_stream("RECEIPTS"))
+            .include(quote)
+            .out_reply(Publish)
+            .transform(ReplyTo)
     })
 }
 

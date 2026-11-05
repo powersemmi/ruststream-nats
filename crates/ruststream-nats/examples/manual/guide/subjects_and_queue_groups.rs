@@ -137,18 +137,17 @@ fn app() -> impl App<State = ()> {
                     Pack,
                 )
                 .build(),
-            );
-            b.include(
+            )
+            .include(
                 subscriber("orders.eu.created", Bill)
                     .workers_by_key(nonzero!(8usize))
                     .build(),
             )
             .out(Invoices, Publish)
-            .build();
             // A pattern is no subject to publish a retry copy to, so the mount site names one.
-            b.include(subscriber(CoreWildcard::new("orders.>"), Audit).build())
-                .out_retry(Publish)
-                .to("orders.retry");
+            .include(subscriber(CoreWildcard::new("orders.>"), Audit).build())
+            .out_retry(Publish)
+            .to("orders.retry")
         },
     )
 }

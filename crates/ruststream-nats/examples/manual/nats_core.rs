@@ -34,12 +34,10 @@ impl Handle<Order> for Receive {
 // --8<-- [end:handler]
 
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(subscriber("orders.created", Receive).build());
-        },
-    )
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(subscriber("orders.created", Receive).build())
+        })
 }
 // --8<-- [end:app]
 

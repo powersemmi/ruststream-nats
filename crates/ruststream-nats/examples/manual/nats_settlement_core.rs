@@ -53,12 +53,10 @@ impl Handle<Shipped> for Notify {
 // --8<-- [end:handler]
 
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("notifications", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(subscriber("orders.shipped", Notify).build());
-        },
-    )
+    RustStream::new(AppInfo::new("notifications", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(subscriber("orders.shipped", Notify).build())
+        })
 }
 
 fn main() -> ExitCode {

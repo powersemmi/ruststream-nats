@@ -32,12 +32,10 @@ async fn ship(order: &Order, Out(shipments): Out<impl Publisher, Shipments>) -> 
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(ship).out(Shipments, Publish).build();
-        },
-    )
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(ship).out(Shipments, Publish)
+        })
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
@@ -123,12 +121,10 @@ mod tests {
     #[tokio::test]
     async fn an_address_the_client_cannot_parse_fails_startup_with_connect() {
         // The client takes `nats://`, `tls://` and bare addresses only.
-        let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-            NatsBroker::new("http://localhost:4222"),
-            |b| {
-                b.include(ship).out(Shipments, Publish).build();
-            },
-        );
+        let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+            .with_broker(NatsBroker::new("http://localhost:4222"), |b| {
+                b.include(ship).out(Shipments, Publish)
+            });
 
         let failed = TestApp::start(app).await.err();
         let failed = failed.expect("startup took an http:// address");
@@ -145,12 +141,10 @@ mod tests {
             let _ = order.id;
             HandlerOutcome::ack()
         }
-        let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-            NatsBroker::new("nats://localhost:4222"),
-            |b| {
-                b.include(nowhere);
-            },
-        );
+        let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+            .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+                b.include(nowhere)
+            });
 
         let failed = TestApp::start(app).await.err();
         let failed = failed.expect("startup took an empty subject");

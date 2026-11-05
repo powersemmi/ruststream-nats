@@ -49,13 +49,10 @@ async fn book(capture: &Capture, Ctx(delivered): Ctx<Delivered>) -> HandlerOutco
 /// The app `main` runs in production, and the one a test hands the harness unchanged.
 #[ruststream::app]
 fn app() -> impl App<State = ()> {
-    RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(accept);
-            b.include(book);
-        },
-    )
+    RustStream::new(AppInfo::new("payments", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(accept).include(book)
+        })
 }
 
 #[cfg(test)]

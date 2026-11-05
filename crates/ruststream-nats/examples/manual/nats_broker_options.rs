@@ -68,8 +68,8 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("pricing", "0.1.0")).with_broker(
         broker("nats://localhost:4222"),
         |b| {
-            b.include(subscriber("prices.updated", Reprice).reply().build());
-            b.include(subscriber("cache.invalidate", Evict).build());
+            b.include(subscriber("prices.updated", Reprice).reply().build())
+                .include(subscriber("cache.invalidate", Evict).build())
         },
     )
 }

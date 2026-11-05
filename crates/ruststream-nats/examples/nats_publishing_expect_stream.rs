@@ -66,8 +66,7 @@ fn app() -> impl App {
                     Shipments,
                     JetStreamPublish::default().expect_stream("SHIPMENTS"),
                 )
-                .build();
-            b.include(dispatch);
+                .include(dispatch)
         },
     )
 }

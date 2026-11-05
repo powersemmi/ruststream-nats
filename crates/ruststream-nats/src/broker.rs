@@ -173,9 +173,7 @@ const _: () = assert!(size_of::<ConnectedNatsBroker>() == size_of::<Arc<NatsConn
 /// fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
 ///         NatsBroker::new("nats://nats-1:4222,nats://nats-2:4222"),
-///         |b| {
-///             b.include(handle);
-///         },
+///         |b| b.include(handle),
 ///     )
 /// }
 /// # }
@@ -214,7 +212,7 @@ const _: () = assert!(size_of::<ConnectedNatsBroker>() == size_of::<Arc<NatsConn
 /// pub fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("orders", "0.1.0"))
 ///         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
-///             b.include(confirm).out_reply(Publish);
+///             b.include(confirm).out_reply(Publish)
 ///         })
 /// }
 ///
@@ -288,9 +286,8 @@ impl NatsBroker {
     ///         ConnectOptions::with_user_and_password("orders".into(), "secret".into())
     ///             .require_tls(true),
     ///     );
-    ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
-    ///         b.include(handle);
-    ///     })
+    ///     RustStream::new(AppInfo::new("orders", "0.1.0"))
+    ///         .with_broker(broker, |b| b.include(handle))
     /// }
     /// # }
     /// # fn main() {}
@@ -336,9 +333,7 @@ impl Broker for NatsBroker {
 /// set.
 #[cfg(feature = "testing")]
 impl InProcess for NatsBroker {
-    fn connect_in_process(
-        self,
-    ) -> impl Future<Output = Result<Self::Connected, Self::Error>> + Send {
+    fn connect_in_process(self) -> impl Future<Output = Result<Self::Connected, Self::Error>> {
         ready(
             in_process::connect(&self.addrs, &self.options).map(|bus| ConnectedNatsBroker {
                 routes: RouteBook::new(bus.no_echo()),

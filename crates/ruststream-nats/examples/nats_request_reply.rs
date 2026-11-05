@@ -114,8 +114,10 @@ fn app() -> impl App {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             // The plain policy pairs into the Core publisher, which also serves requests.
-            b.include(price).out(Pricing, Publish).build();
-            b.include(quote_price).out(Answers, Publish).build();
+            b.include(price)
+                .out(Pricing, Publish)
+                .include(quote_price)
+                .out(Answers, Publish)
         },
     )
 }

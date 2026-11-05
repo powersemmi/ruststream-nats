@@ -69,9 +69,9 @@ fn app() -> impl App<State = ()> {
     RustStream::new(AppInfo::new("shop", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
-            b.include(fulfil);
-            b.include(show);
-            b.include(reconcile.batch(nonzero!(100)));
+            b.include(fulfil)
+                .include(show)
+                .include(reconcile.batch(nonzero!(100)))
         },
     )
 }

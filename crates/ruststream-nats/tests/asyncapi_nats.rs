@@ -50,6 +50,7 @@ struct Receipt {
 
 /// Answers on the inbox the requester named, and leaves the mount site's own subject standing for
 /// a delivery that named none.
+#[derive(Clone)]
 struct ReplyTo;
 
 impl<Cx, Options> PublishTransform<ForReply<Cx>, Options> for ReplyTo {
@@ -77,9 +78,11 @@ fn document() -> serde_json::Value {
     let app = RustStream::new(AppInfo::new("orders", "1.0.0")).with_broker(
         NatsBroker::new("nats://nats.example.com:4222"),
         |b| {
-            b.include(confirm);
-            b.include(store);
-            b.include(answer).out_reply(Publish).transform(ReplyTo);
+            b.include(confirm)
+                .include(store)
+                .include(answer)
+                .out_reply(Publish)
+                .transform(ReplyTo)
         },
     );
     let json = build_spec(&app)
@@ -155,7 +158,7 @@ fn a_jetstream_publisher_reports_the_stream_it_requires() {
         NatsBroker::new("nats://nats.example.com:4222"),
         |b| {
             b.include(answer)
-                .out_reply(JetStreamPublish::default().expect_stream("RECEIPTS"));
+                .out_reply(JetStreamPublish::default().expect_stream("RECEIPTS"))
         },
     );
     let json = build_spec(&app)
@@ -179,7 +182,7 @@ fn a_redirected_reply_still_names_the_subject_its_stream_serves() {
         |b| {
             b.include(answer)
                 .out_reply(JetStreamPublish::default().expect_stream("RECEIPTS"))
-                .transform(ReplyTo);
+                .transform(ReplyTo)
         },
     );
     let json = build_spec(&app)

@@ -31,12 +31,10 @@ async fn reconcile(orders: &[Order]) -> HandlerOutcome {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("reconciliation", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(reconcile.batch(nonzero!(50)));
-        },
-    )
+    RustStream::new(AppInfo::new("reconciliation", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(reconcile.batch(nonzero!(50)))
+        })
 }
 // --8<-- [end:batch]
 

@@ -44,12 +44,10 @@ async fn produce(report: &Report) -> HandlerOutcome {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("reports", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(produce);
-        },
-    )
+    RustStream::new(AppInfo::new("reports", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(produce)
+        })
 }
 // --8<-- [end:descriptor]
 
@@ -102,12 +100,8 @@ mod tests {
             .await?;
 
         let outcome = async {
-            let service = RustStream::new(AppInfo::new("reports", "0.1.0")).with_broker(
-                NatsBroker::new(url.as_str()),
-                |b| {
-                    b.include(produce);
-                },
-            );
+            let service = RustStream::new(AppInfo::new("reports", "0.1.0"))
+                .with_broker(NatsBroker::new(url.as_str()), |b| b.include(produce));
             let tb = TestApp::start_live(service).await?;
 
             let reports: Vec<Report> = (1..=6).map(|id| Report { id }).collect();

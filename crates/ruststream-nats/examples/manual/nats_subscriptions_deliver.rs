@@ -49,12 +49,10 @@ fn prices() -> JetStreamSubject {
 }
 
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("ticker", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(subscriber(prices(), Tick).build());
-        },
-    )
+    RustStream::new(AppInfo::new("ticker", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(subscriber(prices(), Tick).build())
+        })
 }
 // --8<-- [end:descriptor]
 
@@ -120,12 +118,10 @@ mod tests {
             .await?;
 
         let outcome = async {
-            let service = RustStream::new(AppInfo::new("ticker", "0.1.0")).with_broker(
-                NatsBroker::new(url.as_str()),
-                |b| {
-                    b.include(subscriber(prices(), Tick).build());
-                },
-            );
+            let service = RustStream::new(AppInfo::new("ticker", "0.1.0"))
+                .with_broker(NatsBroker::new(url.as_str()), |b| {
+                    b.include(subscriber(prices(), Tick).build())
+                });
             let tb = TestApp::start_live(service).await?;
             tb.broker::<NatsBroker>()
                 .message(&price(250))

@@ -42,7 +42,7 @@ fn app() -> impl App {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             let orders = JetStreamSubject::new("orders.*", "ORDERS");
-            b.include(subscriber(orders, Ship).build());
+            b.include(subscriber(orders, Ship).build())
         },
     )
 }

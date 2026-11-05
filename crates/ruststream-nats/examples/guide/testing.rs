@@ -7,6 +7,9 @@
 //! NATS_TEST_URL=nats://localhost:4222 cargo test --example guide_testing --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
+
 use std::time::Duration;
 
 use ruststream_nats::prelude::*;
@@ -62,7 +65,7 @@ fn service(broker: NatsBroker) -> RustStream {
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(broker, |b| {
         b.include(charge)
             .max_attempts(nonzero!(3u32))
-            .dead_letter("card.review");
+            .dead_letter("card.review")
     })
 }
 

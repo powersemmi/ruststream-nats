@@ -56,12 +56,10 @@ fn reports() -> JetStreamSubject {
 }
 
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("reports", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(subscriber(reports(), Produce).workers(nonzero!(6)).build());
-        },
-    )
+    RustStream::new(AppInfo::new("reports", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(subscriber(reports(), Produce).workers(nonzero!(6)).build())
+        })
 }
 // --8<-- [end:descriptor]
 
@@ -118,12 +116,10 @@ mod tests {
             .await?;
 
         let outcome = async {
-            let service = RustStream::new(AppInfo::new("reports", "0.1.0")).with_broker(
-                NatsBroker::new(url.as_str()),
-                |b| {
-                    b.include(subscriber(reports(), Produce).workers(nonzero!(6)).build());
-                },
-            );
+            let service = RustStream::new(AppInfo::new("reports", "0.1.0"))
+                .with_broker(NatsBroker::new(url.as_str()), |b| {
+                    b.include(subscriber(reports(), Produce).workers(nonzero!(6)).build())
+                });
             let tb = TestApp::start_live(service).await?;
 
             let reports: Vec<Report> = (1..=6).map(|id| Report { id }).collect();

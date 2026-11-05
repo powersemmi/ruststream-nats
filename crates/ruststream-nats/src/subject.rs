@@ -71,12 +71,10 @@ const DEFAULT_PULL_EXPIRES: Duration = Duration::from_secs(5);
 ///
 /// #[ruststream::app]
 /// fn app() -> impl App {
-///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-///         NatsBroker::new("nats://localhost:4222"),
-///         |b| {
-///             b.include(reconcile.batch(nonzero!(50)));
-///         },
-///     )
+///     RustStream::new(AppInfo::new("orders", "0.1.0"))
+///         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+///             b.include(reconcile.batch(nonzero!(50)))
+///         })
 /// }
 /// # }
 /// # fn main() {}
@@ -214,19 +212,17 @@ mod sealed {
 ///             // One subject is its own destination.
 ///             b.include(reconcile)
 ///                 .max_attempts(nonzero!(5u32))
-///                 .dead_letter("payments.dead");
-///
-///             // A pattern is not, so the mount site names where a copy lands.
-///             b.include(audit)
+///                 .dead_letter("payments.dead")
+///                 // A pattern is not, so the mount site names where a copy lands.
+///                 .include(audit)
 ///                 .max_attempts(nonzero!(5u32))
 ///                 .dead_letter("dead.payments")
 ///                 .out_retry(Publish)
-///                 .to("payments.settled");
-///
-///             // The server holds the message, so nothing is published at all.
-///             b.include(store)
+///                 .to("payments.settled")
+///                 // The server holds the message, so nothing is published at all.
+///                 .include(store)
 ///                 .max_attempts(nonzero!(5u32))
-///                 .dead_letter("payments.dead");
+///                 .dead_letter("payments.dead")
 ///         },
 ///     )
 /// }
@@ -323,12 +319,10 @@ pub(crate) fn publish_destination(subject: &str) -> Result<RedeliveryAddress, Na
 ///
 /// #[ruststream::app]
 /// fn app() -> impl App {
-///     RustStream::new(AppInfo::new("fulfillment", "0.1.0")).with_broker(
-///         NatsBroker::new("nats://localhost:4222"),
-///         |b| {
-///             b.include(fulfil);
-///         },
-///     )
+///     RustStream::new(AppInfo::new("fulfillment", "0.1.0"))
+///         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+///             b.include(fulfil)
+///         })
 /// }
 /// # }
 /// # fn main() {}
@@ -422,7 +416,7 @@ impl Sealed for CoreSubject {
 ///                 .max_attempts(nonzero!(5u32))
 ///                 .dead_letter("orders.dead")
 ///                 .out_retry(Publish)
-///                 .to("orders.audit");
+///                 .to("orders.audit")
 ///         },
 ///     )
 /// }
@@ -521,12 +515,10 @@ impl NatsSubscription for CoreSubject {
 ///
 /// #[ruststream::app]
 /// fn app() -> impl App {
-///     RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(
-///         NatsBroker::new("nats://localhost:4222"),
-///         |b| {
-///             b.include(bill);
-///         },
-///     )
+///     RustStream::new(AppInfo::new("billing", "0.1.0"))
+///         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+///             b.include(bill)
+///         })
 /// }
 /// # }
 /// # fn main() {}
@@ -758,7 +750,7 @@ impl NatsSubscription for JetStreamSubject {
 ///         NatsBroker::new("nats://localhost:4222"),
 ///         |b| {
 ///             let audited = CoreSubject::new("orders.created").queue_group("auditors");
-///             b.include(subscriber(audited, Audit).build());
+///             b.include(subscriber(audited, Audit).build())
 ///         },
 ///     )
 /// }
@@ -817,7 +809,7 @@ impl RedeliveryAddressed<ConnectedNatsBroker> for CoreSubject {
     fn redelivery_address(
         &self,
         _connected: &ConnectedNatsBroker,
-    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> + Send {
+    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> {
         ready(publish_destination(NatsSubscription::subject(self)))
     }
 }
@@ -877,7 +869,7 @@ impl RedeliveryAddressed<ConnectedNatsBroker> for JetStreamSubject {
     fn redelivery_address(
         &self,
         _connected: &ConnectedNatsBroker,
-    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> + Send {
+    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> {
         ready(Ok(RedeliveryAddress::new(
             self.consumer_filter().to_owned(),
         )))

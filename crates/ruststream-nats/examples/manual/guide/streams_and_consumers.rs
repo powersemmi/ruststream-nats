@@ -112,15 +112,15 @@ fn app() -> impl App<State = ()> {
                 )
                 .reply()
                 .build(),
-            );
-            b.include(
+            )
+            .include(
                 subscriber(
                     JetStreamSubject::new("orders.*", "ORDERS").deliver_policy(DeliverPolicy::New),
                     Show,
                 )
                 .build(),
-            );
-            b.include(
+            )
+            .include(
                 subscriber(
                     JetStreamSubject::new("orders.paid", "ORDERS")
                         .durable("reconciler")
@@ -129,7 +129,7 @@ fn app() -> impl App<State = ()> {
                 )
                 .batch(nonzero!(100usize))
                 .build(),
-            );
+            )
         },
     )
 }

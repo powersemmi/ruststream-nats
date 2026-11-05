@@ -28,17 +28,17 @@ async fn consume(order: &Order, ctx: &mut Context<'_, (), Latch>) -> HandlerOutc
 }
 
 fn app(messages: usize) -> Pending {
-    common::pending(messages, |b| {
-        b.include(consume);
-    })
+    common::pending(messages, |b| b.include(consume))
 }
 
 // Seven allocations per delivery and a fraction: the client's pull request every hundred messages,
 // and the channel blocks between its connection task and the subscription, which come every so
 // many deliveries. The floor is therefore stated over a thousand of them. The longest run was seen
-// at 14,391 blocks in each of seven runs; the limit is that plus a tenth of a percent, 14,406, and
-// one more allocation per delivery would add 2,000.
-#[library_benchmark(config = common::config_every(7_059, 1_000, 288))]
+// at 14,412 blocks in each of five runs on 2026-11-05, the commit that first stated the floor
+// included, so the 21 blocks over the earlier 14,391 come from the stand, in the one-off part of
+// the run, and not from a change here or in a dependency. The limit is that plus a tenth of a
+// percent, 14,427, and one more allocation per delivery would add 2,000.
+#[library_benchmark(config = common::config_every(7_059, 1_000, 309))]
 #[bench::first(app(1))]
 #[bench::base(app(MESSAGES))]
 #[bench::twice(app(2 * MESSAGES))]

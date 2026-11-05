@@ -255,8 +255,8 @@ fn app() -> impl App<State = ()> {
                 .reply()
                 .build(),
             )
-            .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"));
-            b.include(
+            .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"))
+            .include(
                 subscriber(
                     JetStreamSubject::new("orders.placed", "ORDERS").durable("archiver"),
                     ArchiveOrder,
@@ -267,20 +267,18 @@ fn app() -> impl App<State = ()> {
                 Archive,
                 JetStreamPublish::default().expect_stream("ARCHIVE"),
             )
-            .build();
-            b.include(
+            .include(
                 subscriber(
                     JetStreamSubject::new("archive.orders", "ARCHIVE").durable("indexer"),
                     Index,
                 )
                 .build(),
-            );
-            b.include(subscriber("commands.change-email", ApplyChange).build())
-                .out(
-                    History,
-                    JetStreamPublish::default().expect_stream("ACCOUNTS"),
-                )
-                .build();
+            )
+            .include(subscriber("commands.change-email", ApplyChange).build())
+            .out(
+                History,
+                JetStreamPublish::default().expect_stream("ACCOUNTS"),
+            )
         },
     )
 }

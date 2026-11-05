@@ -47,13 +47,10 @@ fn broker(addrs: &str) -> NatsBroker {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("pricing", "0.1.0")).with_broker(
-        broker("nats://localhost:4222"),
-        |b| {
-            b.include(reprice);
-            b.include(evict);
-        },
-    )
+    RustStream::new(AppInfo::new("pricing", "0.1.0"))
+        .with_broker(broker("nats://localhost:4222"), |b| {
+            b.include(reprice).include(evict)
+        })
 }
 // --8<-- [end:broker]
 

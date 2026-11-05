@@ -117,17 +117,16 @@ fn app() -> impl App {
         |b| {
             let created = JetStreamSubject::new("orders.created", "ORDERS").durable("confirmer");
             let shipped = JetStreamSubject::new("orders.shipped", "ORDERS").durable("archiver");
-            // The reply is stored in a stream and acknowledged by it; the rest of the service
-            // can keep publishing over Core NATS.
-            b.include(subscriber(created, Confirm).reply().build())
-                .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"));
-            b.include(subscriber(shipped, ArchiveOrder).build())
+            b.after_startup(JetStreamPublish::default().expect_stream("ORDERS"), seed)
+                // The reply is stored in a stream and acknowledged by it; the rest of the service
+                // can keep publishing over Core NATS.
+                .include(subscriber(created, Confirm).reply().build())
+                .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"))
+                .include(subscriber(shipped, ArchiveOrder).build())
                 .out(
                     Archive,
                     JetStreamPublish::default().expect_stream("ARCHIVE"),
                 )
-                .build();
-            b.after_startup(JetStreamPublish::default().expect_stream("ORDERS"), seed);
         },
     )
 }

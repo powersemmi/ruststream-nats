@@ -19,6 +19,7 @@ A drain that fails ends the shutdown with [`NatsError::Shutdown`](api:ruststream
 
 The broker marks the connection closed before it drains.
 A publisher taken earlier keeps pointing at the connection, and a publish through it returns `NatsError::Closed` with the subject it was asked to reach.
+The refusal hands the unsent message back, so a caller can send it elsewhere.
 It never sends into a connection that is going away.
 
 A tool that drives the broker by hand receives a [`ClosedNatsBroker`](api:ruststream_nats::ClosedNatsBroker) from the shutdown.

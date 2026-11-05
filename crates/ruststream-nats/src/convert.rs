@@ -136,6 +136,24 @@ mod tests {
         );
     }
 
+    // The headers are read in place, so a refusal over one of them has the whole message to give
+    // back, and the caller can fix the header and send it again.
+    #[test]
+    fn a_message_whose_header_has_no_nats_form_comes_back_whole() {
+        let headers = one("x-note", "line one\r\nline two");
+        let msg = OutgoingMessage::produced("orders.created", BytesMut::from(&b"{}"[..]))
+            .with_headers(headers.clone());
+
+        let refused = nats_parts(msg).expect_err("a newline has no NATS form");
+        let back = refused
+            .into_message()
+            .expect("the client never took the message, so it comes back");
+
+        assert_eq!(back.name(), "orders.created");
+        assert_eq!(back.payload(), b"{}");
+        assert_eq!(back.headers(), &headers);
+    }
+
     #[test]
     fn a_text_header_survives_the_conversion() {
         let map = headers_to_nats(&one("x-tenant", "acme"))

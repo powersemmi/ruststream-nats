@@ -1,4 +1,4 @@
-//! Delivered-message wrapper that implements [`IncomingMessage`].
+//! Delivered-message wrapper that implements [`IncomingMessage`] and [`Settle`].
 
 // Without the `testing` feature a `JetStream` delivery has one variant; see `broker.rs`.
 #![cfg_attr(
@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_nats::jetstream::AckKind;
-use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned, Str};
+use ruststream::{AckError, HeaderMap, IncomingMessage, Partitioned, Settle, Str};
 
 use crate::convert::headers_from_nats;
 #[cfg(feature = "testing")]
@@ -250,6 +250,22 @@ impl IncomingMessage for NatsMessage {
         self.headers().get(PARTITION_KEY_HEADER)
     }
 
+    /// How many times the server has delivered this message, counting this one.
+    ///
+    /// A `JetStream` consumer keeps that count and reports it on every delivery, so a cap
+    /// declared at the mount site counts the server's own redeliveries - an `ack_wait` that ran
+    /// out, a negative acknowledgement - and not only the copies this process published. Core
+    /// NATS neither stores a message nor redelivers one, so a core delivery has no count and the
+    /// framework's retry-count header is the whole tally.
+    fn redelivery_count(&self) -> Option<u64> {
+        match self {
+            Self::Core(_) => None,
+            Self::JetStream(m) => m.metadata().map(|info| info.delivered.unsigned_abs()),
+        }
+    }
+}
+
+impl Settle for NatsMessage {
     async fn ack(self) -> Result<(), AckError> {
         match self {
             Self::Core(_) => Err(AckError::Unsupported),
@@ -283,20 +299,6 @@ impl IncomingMessage for NatsMessage {
                     .await
                     .map_err(|err| AckError::Broker(format_err(err)))
             }
-        }
-    }
-
-    /// How many times the server has delivered this message, counting this one.
-    ///
-    /// A `JetStream` consumer keeps that count and reports it on every delivery, so a cap
-    /// declared at the mount site counts the server's own redeliveries - an `ack_wait` that ran
-    /// out, a negative acknowledgement - and not only the copies this process published. Core
-    /// NATS neither stores a message nor redelivers one, so a core delivery has no count and the
-    /// framework's retry-count header is the whole tally.
-    fn redelivery_count(&self) -> Option<u64> {
-        match self {
-            Self::Core(_) => None,
-            Self::JetStream(m) => m.metadata().map(|info| info.delivered.unsigned_abs()),
         }
     }
 

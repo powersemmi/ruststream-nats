@@ -8,7 +8,7 @@
 
 use async_nats::Request;
 use bytes::BytesMut;
-use ruststream::{OutgoingMessage, RequestReply};
+use ruststream::{OutgoingMessage, PublishMessageError, RequestReply};
 use std::time::Duration;
 
 use crate::{
@@ -39,7 +39,9 @@ impl RequestReply for NatsPublisher {
             }
         };
         let client = client_for(connection, msg.name())?;
-        let (subject, payload, headers_owned) = nats_parts(msg)?;
+        // A request returns its reply or its error; the message has nowhere to go back to.
+        let (subject, payload, headers_owned) =
+            nats_parts(msg).map_err(PublishMessageError::into_error)?;
 
         let fut = async {
             let request = match headers_owned {

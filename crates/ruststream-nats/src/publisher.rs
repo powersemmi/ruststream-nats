@@ -14,14 +14,17 @@ use std::sync::Arc;
 
 use async_nats::Client;
 use bytes::BytesMut;
-use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, Take};
+use ruststream::{OutgoingMessage, PairError, PublishOutcome, PublishPolicy, Publisher, Take};
 
 use crate::broker::{ConnectedNatsBroker, Link, NatsConnection};
 #[cfg(feature = "testing")]
-use crate::in_process::{Origin, PublishMode};
+use crate::convert::headers_to_nats;
+use crate::convert::{consumed, nats_parts, refused};
+use crate::error::NatsError;
+#[cfg(feature = "testing")]
+use crate::in_process::{Bus, Origin, PublishMode};
 #[cfg(feature = "asyncapi")]
 use crate::message::REPLY_ADDRESS_LOCATION;
-use crate::{convert::nats_parts, error::NatsError};
 
 use self::sealed::Sealed;
 
@@ -219,34 +222,57 @@ impl Publisher for NatsPublisher {
     /// Core NATS publishing is fire-and-forget: the message is handed to the connection's writer
     /// without waiting for the server. Dropping the future may leave the message either sent or
     /// unsent, with no way to tell which.
-    async fn publish(
+    ///
+    /// # Errors
+    ///
+    /// A refusal raised before the client takes the message (the broker has shut down, a header
+    /// has no NATS form) hands the message back. One the client raises after it took the payload
+    /// carries none: `async-nats` keeps the buffer.
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingMessage<'_, BytesMut>,
+        msg: OutgoingMessage<'msg, BytesMut>,
         _options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
+    ) -> PublishOutcome<'msg, Self::Error, Take> {
         let connection = match &self.link {
             Link::Nats(connection) => connection,
             #[cfg(feature = "testing")]
-            Link::InProcess(bus) => {
-                let (subject, payload, headers) = msg.into_parts();
-                return bus
-                    .publish(
-                        subject,
-                        payload.freeze(),
-                        &headers,
-                        None,
-                        PublishMode::Core,
-                        Origin::Connection,
-                    )
-                    .map(drop);
-            }
+            Link::InProcess(bus) => return publish_in_process(bus, msg),
         };
-        let client = client_for(connection, msg.name())?;
+        let client = match client_for(connection, msg.name()) {
+            Ok(client) => client,
+            Err(error) => return Err(refused(error, msg)),
+        };
         let (subject, payload, headers) = nats_parts(msg)?;
         let result = match headers {
             Some(headers) => client.publish_with_headers(subject, headers, payload).await,
             None => client.publish(subject, payload).await,
         };
-        result.map_err(|err| NatsError::Publish(Box::new(err)))
+        result.map_err(|err| consumed(NatsError::Publish(Box::new(err))))
     }
+}
+
+/// The in-process publish, refusing what the client refuses before it takes the message the way
+/// the client does: with the message handed back.
+#[cfg(feature = "testing")]
+fn publish_in_process<'msg>(
+    bus: &Bus,
+    msg: OutgoingMessage<'msg, BytesMut>,
+) -> PublishOutcome<'msg, NatsError, Take> {
+    if let Err(error) = bus.ensure_live(msg.name()) {
+        return Err(refused(error, msg));
+    }
+    if let Err(error) = headers_to_nats(msg.headers()) {
+        return Err(refused(error, msg));
+    }
+    let (subject, payload, headers) = msg.into_parts();
+    bus.publish(
+        subject,
+        payload.freeze(),
+        &headers,
+        None,
+        PublishMode::Core,
+        Origin::Connection,
+    )
+    .map(drop)
+    .map_err(consumed)
 }

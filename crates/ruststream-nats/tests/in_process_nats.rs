@@ -8,6 +8,7 @@
 
 #![cfg(feature = "testing")]
 
+use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -18,7 +19,7 @@ use ruststream::runtime::{App, AppInfo, HandlerOutcome, RustStream};
 use ruststream::testing::{InProcess, TestApp, expect_published};
 use ruststream::{
     AckError, BatchSubscriber, BytesMut, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing,
-    OutgoingMessage, Partitioned, Publisher, RequestReply, Subscriber, nonzero, subscriber,
+    OutgoingMessage, Partitioned, Publisher, RequestReply, Settle, Subscriber, nonzero, subscriber,
 };
 use ruststream_nats::{
     ConnectedNatsBroker, CoreSubject, CoreWildcard, DeliverPolicy, JetStreamOptions,
@@ -26,6 +27,8 @@ use ruststream_nats::{
     NatsSubscriber, NonZeroDuration, PARTITION_KEY_HEADER,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::lent::Lent;
 
 const WAIT: Duration = Duration::from_secs(1);
 
@@ -146,7 +149,7 @@ async fn a_publish_takes_any_subject_the_frame_carries() {
         .publish(OutgoingMessage::new("orders created", b"x"), None)
         .await
         .expect_err("whitespace breaks the frame");
-    assert!(matches!(err, NatsError::Publish(_)), "got {err}");
+    assert!(matches!(err.error(), NatsError::Publish(_)), "got {err}");
 
     assert_eq!(waiting(&mut subscriber), [b"x".to_vec()]);
 }
@@ -524,14 +527,14 @@ async fn a_jetstream_publish_is_acknowledged_by_the_stream_that_stores_it() {
         .publish_ack(OutgoingMessage::new("payments.captured", b"c"), None)
         .await
         .expect_err("no stream stores this subject");
-    assert!(matches!(err, NatsError::JetStream(_)), "got {err}");
+    assert!(matches!(err.error(), NatsError::JetStream(_)), "got {err}");
 
     let err = broker
         .publisher(JetStreamPublish::default().expect_stream("PAYMENTS"))
         .publish_ack(OutgoingMessage::new("orders.created", b"d"), None)
         .await
         .expect_err("the subject is stored in ORDERS");
-    assert!(matches!(err, NatsError::JetStream(_)), "got {err}");
+    assert!(matches!(err.error(), NatsError::JetStream(_)), "got {err}");
 }
 
 // A stream serves the subjects it captures: naming it on a publish to another subject does not
@@ -548,7 +551,7 @@ async fn a_named_stream_refuses_a_subject_it_does_not_serve() {
         .publish_ack(OutgoingMessage::new("payments.created", b"x"), None)
         .await
         .expect_err("ORDERS does not serve payments.created");
-    assert!(matches!(err, NatsError::JetStream(_)), "got {err}");
+    assert!(matches!(err.error(), NatsError::JetStream(_)), "got {err}");
     assert_eq!(waiting(&mut consumer), Vec::<Vec<u8>>::new());
 }
 
@@ -705,7 +708,10 @@ async fn the_stream_checks_the_expectations_a_publish_states() {
         let err = publish(b"2", stale.clone())
             .await
             .expect_err("the stream moved on");
-        assert!(matches!(err, NatsError::JetStream(_)), "{stale:?}: {err}");
+        assert!(
+            matches!(err.error(), NatsError::JetStream(_)),
+            "{stale:?}: {err}"
+        );
     }
 
     publish(
@@ -760,14 +766,12 @@ async fn the_jetstream_settings_reach_the_message_as_protocol_headers() {
 async fn a_message_over_the_server_payload_limit_is_refused() {
     let broker = connected().await;
     let publisher = broker.publisher(NatsPublish);
+    let payload = vec![0; 1024 * 1024 + 1];
     let err = publisher
-        .publish(
-            OutgoingMessage::new("orders", vec![0; 1024 * 1024 + 1].as_slice()),
-            None,
-        )
+        .publish(OutgoingMessage::new("orders", payload.as_slice()), None)
         .await
         .expect_err("over the server's default max_payload");
-    assert!(matches!(err, NatsError::Publish(_)), "got {err}");
+    assert!(matches!(err.error(), NatsError::Publish(_)), "got {err}");
     publisher
         .publish(
             OutgoingMessage::new("orders", vec![0; 1024 * 1024].as_slice()),
@@ -807,7 +811,7 @@ async fn publisher_errors_after_shutdown() {
         .await
         .expect_err("publishing through a closed transport must fail");
     assert!(
-        matches!(&err, NatsError::Closed { subject } if subject == "orders.created"),
+        matches!(err.error(), NatsError::Closed { subject } if subject == "orders.created"),
         "the error must name the subject it could not reach, got: {err}",
     );
 }
@@ -1073,7 +1077,8 @@ async fn a_core_batch_is_capped_by_the_size_the_stream_is_opened_with() {
             .expect("publish");
     }
 
-    let mut batches = Box::pin(sub.batches(nonzero!(3)));
+    let batches = pin!(sub.batches(nonzero!(3)));
+    let mut batches = Lent::new(batches);
     let mut sizes = Vec::new();
     let mut payloads = Vec::new();
     while payloads.len() < 5 {
@@ -1104,7 +1109,8 @@ async fn a_jetstream_batch_hands_over_what_the_consumer_has() {
             .expect("publish");
     }
 
-    let mut batches = Box::pin(sub.batches(nonzero!(4)));
+    let batches = pin!(sub.batches(nonzero!(4)));
+    let mut batches = Lent::new(batches);
     let batch = tokio::time::timeout(WAIT, batches.next())
         .await
         .expect("batch within timeout")
@@ -1155,9 +1161,9 @@ fn app() -> impl App<State = Attempts> {
     RustStream::new(AppInfo::new("svc", "0.1.0"))
         .on_startup(async move |()| Ok::<_, std::convert::Infallible>(Attempts::default()))
         .with_broker(NatsBroker::new(URL), |b| {
-            b.include(ack_order);
-            b.include(durable_order);
-            b.include(retry_then_ack);
+            b.include(ack_order)
+                .include(durable_order)
+                .include(retry_then_ack)
         })
 }
 

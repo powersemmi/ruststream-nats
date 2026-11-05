@@ -18,7 +18,8 @@ use async_nats::jetstream::consumer::Info as ConsumerInfo;
 use async_nats::jetstream::stream::Config as StreamConfig;
 use futures::{Stream, StreamExt};
 use ruststream::{
-    Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, Subscriber, nonzero,
+    Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, Settle, Subscriber,
+    nonzero,
 };
 use ruststream_nats::{
     ConnectedNatsBroker, DeliverPolicy, JetStreamSubject, NatsBroker, NatsError, NatsMessage,

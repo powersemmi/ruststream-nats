@@ -6,18 +6,21 @@
 //!
 //! Skipped unless `NATS_TEST_URL` is set (see `integration_nats.rs` for how to run).
 
+use std::pin::pin;
 use std::time::Duration;
 
 use async_nats::jetstream::stream::Config as StreamConfig;
 use futures::StreamExt;
 use ruststream::{
-    BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, nonzero,
+    BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, Settle,
+    nonzero,
 };
 use ruststream_nats::{
     ConnectedNatsBroker, JetStreamSubject, NatsBroker, NatsPublish, NonZeroDuration,
 };
 use tokio::time::timeout;
 
+use crate::lent::Lent;
 use crate::live;
 
 const WAIT: Duration = Duration::from_secs(2);
@@ -104,7 +107,8 @@ async fn the_batch_size_caps_the_pull_batch() {
 
     let mut received = Vec::new();
     {
-        let mut batches = std::pin::pin!(consumer.batches(nonzero!(3)));
+        let batches = pin!(consumer.batches(nonzero!(3)));
+        let mut batches = Lent::new(batches);
         while received.len() < usize::from(total) {
             let batch = timeout(WAIT, batches.next())
                 .await
@@ -156,7 +160,8 @@ async fn batches_skip_empty_fetches() {
     });
 
     {
-        let mut batches = std::pin::pin!(consumer.batches(nonzero!(10)));
+        let batches = pin!(consumer.batches(nonzero!(10)));
+        let mut batches = Lent::new(batches);
         let batch = timeout(WAIT, batches.next())
             .await
             .expect("timed out waiting for batch")
@@ -196,7 +201,8 @@ async fn batches_can_be_reentered() {
         .expect("consumer create failed");
 
     {
-        let mut batches = std::pin::pin!(consumer.batches(nonzero!(10)));
+        let batches = pin!(consumer.batches(nonzero!(10)));
+        let mut batches = Lent::new(batches);
         let batch = timeout(WAIT, batches.next())
             .await
             .expect("timed out")
@@ -214,7 +220,8 @@ async fn batches_can_be_reentered() {
         .await
         .expect("publish failed");
     {
-        let mut batches = std::pin::pin!(consumer.batches(nonzero!(10)));
+        let batches = pin!(consumer.batches(nonzero!(10)));
+        let mut batches = Lent::new(batches);
         let batch = timeout(WAIT, batches.next())
             .await
             .expect("timed out")

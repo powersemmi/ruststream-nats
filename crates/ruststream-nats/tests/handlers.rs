@@ -20,7 +20,7 @@ use std::time::Duration;
 
 // The derive and the value a transform reads share the name in different namespaces: the derive
 // on the types below is the macro the prelude carries, the value here is the type.
-use ruststream::runtime::{BrokerScope, Outgoing, PublishContext, RETRY_COUNT_HEADER};
+use ruststream::runtime::{Outgoing, PublishContext, RETRY_COUNT_HEADER};
 use ruststream::testing::{Outcome, TestApp};
 use ruststream_nats::PARTITION_KEY_HEADER;
 use ruststream_nats::context::keys::{Delivered, StreamSequence};
@@ -39,13 +39,15 @@ struct Order {
     id: u64,
 }
 
-/// The service's app, built on the production broker as `main` builds it. `TestApp::start` runs
-/// it in process.
-fn app<F>(build: F) -> RustStream
-where
-    F: FnOnce(&mut BrokerScope<NatsBroker>),
-{
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), build)
+/// The service's app, built on the production broker as `main` builds it, mounting what the
+/// closure's chain registers. `TestApp::start` runs it in process.
+///
+/// A macro rather than a function: the closure is handed to `with_broker` itself, so its chain is
+/// typed by the call a service writes, and the helper names no bound of the framework's machinery.
+macro_rules! app {
+    ($build:expr) => {
+        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), $build)
+    };
 }
 
 // --------------------------------------------------------------------- a body receives its input
@@ -58,11 +60,9 @@ async fn receive(order: &Order) -> HandlerOutcome {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_body_receives_the_value_that_was_published() {
-    let tb = TestApp::start(app(|b| {
-        b.include(receive);
-    }))
-    .await
-    .expect("start");
+    let tb = TestApp::start(app!(|b| b.include(receive)))
+        .await
+        .expect("start");
 
     tb.message(&Order { id: 1 })
         .to("orders.created")
@@ -129,11 +129,9 @@ async fn audit(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_body_reads_the_headers_the_delivery_arrived_with() {
-    let tb = TestApp::start(app(|b| {
-        b.include(audit).out(Audit, Publish).build();
-    }))
-    .await
-    .expect("start");
+    let tb = TestApp::start(app!(|b| b.include(audit).out(Audit, Publish)))
+        .await
+        .expect("start");
 
     let mut headers = HeaderMap::new();
     headers.insert("Content-Type", "application/json");
@@ -215,14 +213,10 @@ async fn record_metadata(
 // stream is at sequence 1 and on its first delivery.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_jetstream_handler_reads_the_native_metadata_in_process() {
-    let tb = TestApp::start(app(|b| {
-        b.include(record_metadata)
-            .out(
-                Metadata,
-                JetStreamPublish::default().expect_stream("METADATA"),
-            )
-            .build();
-    }))
+    let tb = TestApp::start(app!(|b| b.include(record_metadata).out(
+        Metadata,
+        JetStreamPublish::default().expect_stream("METADATA"),
+    )))
     .await
     .expect("start");
 
@@ -264,11 +258,9 @@ async fn settle_bulk(orders: &[Order]) -> HandlerOutcome {
 // `integration_nats_batch.rs`; what this pins is that the mount runs end to end in process.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_batch_mount_names_its_size_and_the_body_is_handed_whole_batches() {
-    let tb = TestApp::start(app(|b| {
-        b.include(settle_bulk.batch(nonzero!(8)));
-    }))
-    .await
-    .expect("start");
+    let tb = TestApp::start(app!(|b| b.include(settle_bulk.batch(nonzero!(8)))))
+        .await
+        .expect("start");
 
     for id in 6..9 {
         tb.message(&Order { id })
@@ -314,6 +306,7 @@ const LEFT_THROUGH: &str = "x-left-through";
 /// A transform on the retry position, which reads the delivery being retried. It states no NATS
 /// setting of its own, so it is written generic over the options type and mounts over either
 /// publish surface.
+#[derive(Clone)]
 struct DeferredStamp;
 
 impl<Cx, Options> PublishTransform<ForReply<Cx>, Options> for DeferredStamp {
@@ -339,7 +332,7 @@ async fn a_deferred_retry_comes_back_through_the_publisher_the_mount_named() {
         .with_broker(NatsBroker::new(URL), |b| {
             b.include(defer_once)
                 .out_retry(Publish)
-                .transform(DeferredStamp);
+                .transform(DeferredStamp)
         });
     let tb = TestApp::start(app).await.expect("start");
 
@@ -396,9 +389,7 @@ async fn retry_once(order: &Order, ctx: &mut Context<'_, (), Attempts>) -> Handl
 async fn a_core_subject_does_not_redeliver_a_retried_delivery() {
     let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
         .on_startup(async move |()| Ok::<_, Infallible>(Attempts::default()))
-        .with_broker(NatsBroker::new(URL), |b| {
-            b.include(retry_once);
-        });
+        .with_broker(NatsBroker::new(URL), |b| b.include(retry_once));
     let tb = TestApp::start(app).await.expect("start");
 
     tb.message(&Order { id: 12 })
@@ -441,7 +432,7 @@ async fn a_capped_subject_sends_a_spent_delivery_to_the_dead_letter_subject() {
         RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), |b| {
             b.include(never_ready)
                 .max_attempts(nonzero!(2u32))
-                .dead_letter("orders.dead");
+                .dead_letter("orders.dead")
         });
     let tb = TestApp::start(app).await.expect("start");
 
@@ -483,7 +474,7 @@ async fn a_capped_pattern_takes_its_destination_from_the_mount_site() {
                 .max_attempts(nonzero!(2u32))
                 .dead_letter("dead.wild")
                 .out_retry(Publish)
-                .to("wild.one");
+                .to("wild.one")
         });
     let tb = TestApp::start(app).await.expect("start");
 
@@ -523,7 +514,7 @@ async fn a_capped_consumer_counts_the_deliveries_the_server_made() {
         RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), |b| {
             b.include(never_ready_stream)
                 .max_attempts(nonzero!(2u32))
-                .dead_letter("js.dead");
+                .dead_letter("js.dead")
         });
     let tb = TestApp::start(app).await.expect("start");
 
@@ -554,10 +545,8 @@ async fn a_capped_consumer_counts_the_deliveries_the_server_made() {
 /// instead of dropping every delayed message once it is running.
 #[tokio::test(start_paused = true)]
 async fn a_pattern_with_no_named_destination_refuses_to_start() {
-    let app =
-        RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(NatsBroker::new(URL), |b| {
-            b.include(never_ready_wild);
-        });
+    let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(NatsBroker::new(URL), |b| b.include(never_ready_wild));
 
     let Err(err) = TestApp::start(app).await else {
         panic!("a wildcard subscription with no retry destination must not start");
@@ -617,11 +606,9 @@ async fn respond(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_responder_answers_on_the_inbox_the_request_named() {
-    let tb = TestApp::start(app(|b| {
-        b.include(respond).out(Answers, Publish).build();
-    }))
-    .await
-    .expect("start");
+    let tb = TestApp::start(app!(|b| b.include(respond).out(Answers, Publish)))
+        .await
+        .expect("start");
 
     tb.broker::<NatsBroker>()
         .message(&Question(b"ping".to_vec()))
@@ -689,11 +676,9 @@ async fn confirm(order: &Order) -> Confirmed {
 /// broker that default is the production one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_lands_on_the_destination_its_own_type_declares() {
-    let tb = TestApp::start(app(|b| {
-        b.include(confirm);
-    }))
-    .await
-    .expect("start");
+    let tb = TestApp::start(app!(|b| b.include(confirm)))
+        .await
+        .expect("start");
 
     tb.message(&Order { id: 10 })
         .to("orders.placed")
@@ -734,11 +719,9 @@ async fn issue_receipt(order: &Order) -> Receipt {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_with_no_declared_destination_lands_where_the_mount_names() {
-    let tb = TestApp::start(app(|b| {
-        b.include(issue_receipt);
-    }))
-    .await
-    .expect("start");
+    let tb = TestApp::start(app!(|b| b.include(issue_receipt)))
+        .await
+        .expect("start");
 
     tb.message(&Order { id: 11 })
         .to("orders.billed")
@@ -766,11 +749,9 @@ async fn a_reply_with_no_declared_destination_lands_where_the_mount_names() {
 // what a service would put on the wire.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_position_bound_to_the_production_policy_answers_in_process() {
-    let tb = TestApp::start(app(|b| {
-        b.include(issue_receipt).out_reply(Publish);
-    }))
-    .await
-    .expect("start");
+    let tb = TestApp::start(app!(|b| b.include(issue_receipt).out_reply(Publish)))
+        .await
+        .expect("start");
 
     tb.message(&Order { id: 12 })
         .to("orders.billed")
@@ -832,11 +813,9 @@ async fn archive(
 /// `JetStream` protocol header a server reads.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_step_states_a_jetstream_setting_for_one_message_only() {
-    let tb = TestApp::start(app(|b| {
-        b.include(archive)
-            .out(Archive, JetStreamPublish::default().expect_stream("ORDERS"))
-            .build();
-    }))
+    let tb = TestApp::start(app!(|b| b
+        .include(archive)
+        .out(Archive, JetStreamPublish::default().expect_stream("ORDERS"))))
     .await
     .expect("start");
 
@@ -893,11 +872,9 @@ async fn mirror(
 /// whole answer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_publish_with_no_step_states_nothing_of_its_own() {
-    let tb = TestApp::start(app(|b| {
-        b.include(mirror)
-            .out(Mirror, JetStreamPublish::default().expect_stream("ORDERS"))
-            .build();
-    }))
+    let tb = TestApp::start(app!(|b| b
+        .include(mirror)
+        .out(Mirror, JetStreamPublish::default().expect_stream("ORDERS"))))
     .await
     .expect("start");
 

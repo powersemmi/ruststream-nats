@@ -87,7 +87,7 @@ pub trait NatsPublishPolicy: PublishPolicy<ConnectedNatsBroker> + Sealed {
 ///         NatsBroker::new("nats://localhost:4222"),
 ///         |b| {
 ///             // `Publish` is this policy under the prelude's mount-site name.
-///             b.include(acknowledge).out_reply(Publish);
+///             b.include(acknowledge).out_reply(Publish)
 ///         },
 ///     )
 /// }
@@ -130,7 +130,8 @@ impl NatsPublishPolicy for NatsPublish {
 ///
 /// Exists only from a [`ConnectedNatsBroker`], so it always has a connection. It aliases that
 /// connection, though, and may outlive it: after the broker shuts down every publish reports
-/// [`NatsError::Closed`] instead of silently succeeding against a dead connection.
+/// [`NatsError::Closed`] instead of silently succeeding against a dead connection, and hands the
+/// unsent message back with it.
 ///
 /// NATS correlates a reply with its request natively, so this publisher implements
 /// [`RequestReply`](ruststream::RequestReply): `request(msg, timeout)` publishes with a reply
@@ -162,7 +163,7 @@ impl NatsPublishPolicy for NatsPublish {
 ///                     .map_err(io::Error::other)?;
 ///                 tracing::info!(answer = %String::from_utf8_lossy(reply.payload()), "replied");
 ///                 Ok(())
-///             });
+///             })
 ///         },
 ///     )
 /// }

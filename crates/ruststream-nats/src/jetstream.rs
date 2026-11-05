@@ -114,12 +114,15 @@ pub(crate) const EXPECTED_STREAM: &str = "Nats-Expected-Stream";
 /// }
 ///
 /// pub fn app() -> impl App {
-///     RustStream::new(AppInfo::new("archive", "0.1.0"))
-///         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
-///             b.include(archive)
-///                 .out(Archive, JetStreamPublish::default().expect_stream("ARCHIVE"))
-///                 .build();
-///         })
+///     RustStream::new(AppInfo::new("archive", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.include(archive).out(
+///                 Archive,
+///                 JetStreamPublish::default().expect_stream("ARCHIVE"),
+///             )
+///         },
+///     )
 /// }
 ///
 /// pub async fn archives_once_per_order() -> Result<(), Box<dyn Error>> {
@@ -331,7 +334,7 @@ where
 ///         |b| {
 ///             // The reply is stored, and a subject the ORDERS stream does not serve is an error.
 ///             b.include(record)
-///                 .out_reply(JetStreamPublish::default().expect_stream("ORDERS"));
+///                 .out_reply(JetStreamPublish::default().expect_stream("ORDERS"))
 ///         },
 ///     )
 /// }
@@ -518,24 +521,27 @@ const _: () = assert!(size_of::<JetStreamLink>() == size_of::<(Arc<NatsConnectio
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
 ///         NatsBroker::new("nats://localhost:4222"),
 ///         |b| {
-///             b.include(confirm)
-///                 .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"));
-///
-///             b.include(archive)
-///                 .out(Archive, JetStreamPublish::default().expect_stream("ARCHIVE"))
-///                 .build();
-///
 ///             b.after_startup(
 ///                 JetStreamPublish::default().expect_stream("ORDERS"),
 ///                 async move |publisher| -> io::Result<()> {
 ///                     let ack = publisher
-///                         .publish_ack(OutgoingMessage::new("orders.created", br#"{"id":1}"#), None)
+///                         .publish_ack(
+///                             OutgoingMessage::new("orders.created", br#"{"id":1}"#),
+///                             None,
+///                         )
 ///                         .await
 ///                         .map_err(io::Error::other)?;
 ///                     tracing::info!(stream = %ack.stream, ack.sequence, "seeded");
 ///                     Ok(())
 ///                 },
-///             );
+///             )
+///             .include(confirm)
+///             .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"))
+///             .include(archive)
+///             .out(
+///                 Archive,
+///                 JetStreamPublish::default().expect_stream("ARCHIVE"),
+///             )
 ///         },
 ///     )
 /// }

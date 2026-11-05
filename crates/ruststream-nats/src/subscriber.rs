@@ -141,9 +141,9 @@ impl Subscriber for CoreSubscriber {
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
 ///         NatsBroker::new("nats://localhost:4222"),
 ///         |b| {
-///             b.include(handle);
-///             // One pull request fetches at most six messages.
-///             b.include(reconcile.batch(nonzero!(6)));
+///             b.include(handle)
+///                 // One pull request fetches at most six messages.
+///                 .include(reconcile.batch(nonzero!(6)))
 ///         },
 ///     )
 /// }
@@ -286,13 +286,13 @@ impl Subscriber for NatsSubscriber {
 impl BatchSubscriber for NatsSubscriber {
     type Batch = Vec<NatsMessage>;
 
-    /// Returns a stream of batches of at most `size` messages.
+    /// Returns a stream that fills the slot the runtime lends with batches of at most `size`
+    /// messages.
     ///
     /// `size` is the registration's batch size, and each transport spends it in its own currency.
-    /// `JetStream` batches on the wire: one stream item is one pull `fetch` of up to `size`
-    /// messages, waiting at most [`pull_expires`](crate::JetStreamSubject::pull_expires) before
-    /// delivering a partial batch (an empty fetch is retried, so the stream never yields empty
-    /// batches). Core NATS has no wire-level batching, so its batches are assembled on the client
+    /// `JetStream` batches on the wire: one batch is one pull `fetch` of up to `size` messages,
+    /// waiting at most [`pull_expires`](crate::JetStreamSubject::pull_expires) before delivering a
+    /// partial batch (an empty fetch is retried, so a fill never hands over an empty batch). Core NATS has no wire-level batching, so its batches are assembled on the client
     /// by the framework's [`BufferedSubscriber`]: a batch closes at `size` deliveries or 10 ms
     /// after its first one, whichever comes first.
     ///
@@ -302,9 +302,10 @@ impl BatchSubscriber for NatsSubscriber {
     ///
     /// # Cancel safety
     ///
-    /// Dropping the returned stream between items is allowed. On `JetStream`, dropping it
-    /// mid-fetch can leave already-fetched, undelivered messages to be redelivered after the
-    /// consumer's `ack_wait`.
+    /// A fill that returns `Pending` keeps the messages it collected in the slot, and the next
+    /// poll goes on from them. Dropping the returned stream between fills is allowed. On
+    /// `JetStream`, dropping it mid-fetch can leave already-fetched, undelivered messages to be
+    /// redelivered after the consumer's `ack_wait`.
     fn batches(
         &mut self,
         size: NonZeroUsize,

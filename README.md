@@ -83,7 +83,7 @@ async fn confirm(order: &Order) -> Confirmation {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0"))
         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
-            b.include(confirm).out_reply(Publish);
+            b.include(confirm).out_reply(Publish)
         })
 }
 ```

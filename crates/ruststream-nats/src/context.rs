@@ -63,11 +63,13 @@ use crate::message::NatsMessage;
 ///     RustStream::new(AppInfo::new("ledger", "0.1.0")).with_broker(
 ///         NatsBroker::new("nats://localhost:4222"),
 ///         |b| {
-///             b.include(subscriber(
-///                 JetStreamSubject::new("orders.*", "ORDERS").durable("ledger"),
-///                 Ledger,
+///             b.include(
+///                 subscriber(
+///                     JetStreamSubject::new("orders.*", "ORDERS").durable("ledger"),
+///                     Ledger,
+///                 )
+///                 .build(),
 ///             )
-///             .build());
 ///         },
 ///     )
 /// }
@@ -160,12 +162,10 @@ const _: fn() = || {
 ///
 /// #[ruststream::app]
 /// fn app() -> impl App {
-///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-///         NatsBroker::new("nats://localhost:4222"),
-///         |b| {
-///             b.include(handle);
-///         },
-///     )
+///     RustStream::new(AppInfo::new("orders", "0.1.0"))
+///         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+///             b.include(handle)
+///         })
 /// }
 /// # }
 /// # fn main() {}

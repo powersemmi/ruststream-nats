@@ -28,7 +28,7 @@ fn app() -> impl App {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             // A pattern is no destination, so the mount site names where a delayed copy goes.
-            b.include(audit).out_retry(Publish).to("orders.audit");
+            b.include(audit).out_retry(Publish).to("orders.audit")
         },
     )
 }
@@ -76,12 +76,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_pattern_with_no_retry_subject_does_not_start() {
-        let unnamed = RustStream::new(AppInfo::new("audit", "0.1.0")).with_broker(
-            NatsBroker::new("nats://localhost:4222"),
-            |b| {
-                b.include(audit);
-            },
-        );
+        let unnamed = RustStream::new(AppInfo::new("audit", "0.1.0"))
+            .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+                b.include(audit)
+            });
 
         let refused = TestApp::start(unnamed)
             .await

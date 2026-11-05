@@ -136,8 +136,7 @@ fn app() -> impl App<State = Clients> {
     RustStream::new(AppInfo::new("payments", "0.1.0"))
         .on_startup(async move |()| Ok::<_, Infallible>(Clients::default()))
         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
-            b.include(capture);
-            b.include(refresh);
+            b.include(capture).include(refresh)
         })
 }
 // --8<-- [end:app]

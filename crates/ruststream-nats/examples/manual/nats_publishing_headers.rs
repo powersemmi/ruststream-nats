@@ -79,7 +79,6 @@ fn app() -> impl App {
         |b| {
             b.include(subscriber("orders.billed", Issue).build())
                 .out(Invoices, Publish)
-                .build();
         },
     )
 }

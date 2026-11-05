@@ -47,12 +47,10 @@ impl Handle<Payment> for Book {
 }
 
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("ledger", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(subscriber(CoreSubject::new("payments.captured"), Book).build());
-        },
-    )
+    RustStream::new(AppInfo::new("ledger", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(subscriber(CoreSubject::new("payments.captured"), Book).build())
+        })
 }
 // --8<-- [end:descriptor]
 

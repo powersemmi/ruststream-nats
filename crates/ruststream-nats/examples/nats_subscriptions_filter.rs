@@ -29,12 +29,10 @@ async fn refund(order: &Order) -> HandlerOutcome {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("refunds", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(refund);
-        },
-    )
+    RustStream::new(AppInfo::new("refunds", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(refund)
+        })
 }
 // --8<-- [end:descriptor]
 

@@ -44,12 +44,10 @@ async fn notify(order: &Shipped) -> HandlerOutcome {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("notifications", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(notify);
-        },
-    )
+    RustStream::new(AppInfo::new("notifications", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(notify)
+        })
 }
 
 #[cfg(test)]

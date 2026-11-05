@@ -141,14 +141,14 @@ fn app() -> impl App<State = Clients> {
             // Five deliveries of one payment, the first included; then the dead-letter subject.
             b.include(settle)
                 .max_attempts(nonzero!(5u32))
-                .dead_letter("dead.payments");
-            b.include(review);
-            // A pattern is no subject to publish a copy to, so the mount site names one.
-            b.include(send_refund)
+                .dead_letter("dead.payments")
+                .include(review)
+                // A pattern is no subject to publish a copy to, so the mount site names one.
+                .include(send_refund)
                 .max_attempts(nonzero!(3u32))
                 .dead_letter("dead.refunds")
                 .out_retry(Publish)
-                .to("refunds.retry");
+                .to("refunds.retry")
         })
 }
 // --8<-- [end:app]

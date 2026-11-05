@@ -45,7 +45,7 @@ fn service(addrs: &str) -> impl App<State = ()> {
     RustStream::new(AppInfo::new("orders", "0.1.0"))
         .shutdown_timeout(Duration::from_secs(10))
         .with_broker(NatsBroker::new(addrs), |b| {
-            b.include(subscriber("broker-shutdown.orders", Ship).reply().build());
+            b.include(subscriber("broker-shutdown.orders", Ship).reply().build())
         })
 }
 

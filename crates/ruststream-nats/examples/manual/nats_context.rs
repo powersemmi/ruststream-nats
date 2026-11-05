@@ -72,7 +72,7 @@ fn app() -> impl App {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             b.include(subscriber(ledger(), Record).reply().build())
-                .out_reply(Publish);
+                .out_reply(Publish)
         },
     )
 }

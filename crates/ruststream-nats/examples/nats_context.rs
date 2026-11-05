@@ -59,12 +59,10 @@ async fn record(
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("ledger", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(record).out_reply(Publish);
-        },
-    )
+    RustStream::new(AppInfo::new("ledger", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(record).out_reply(Publish)
+        })
 }
 
 #[cfg(test)]

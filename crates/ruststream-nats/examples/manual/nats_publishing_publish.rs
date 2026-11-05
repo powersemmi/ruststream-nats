@@ -50,7 +50,7 @@ fn app() -> impl App {
         |b| {
             // The confirmation goes out over Core NATS, to the subject its type declares.
             b.include(subscriber("orders.created", Confirm).reply().build())
-                .out_reply(Publish);
+                .out_reply(Publish)
         },
     )
 }

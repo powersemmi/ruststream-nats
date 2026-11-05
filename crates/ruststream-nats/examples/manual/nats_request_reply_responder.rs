@@ -75,7 +75,6 @@ fn app() -> impl App {
         |b| {
             b.include(subscriber("prices.quote", QuotePrice).build())
                 .out(Answers, Publish)
-                .build();
         },
     )
 }

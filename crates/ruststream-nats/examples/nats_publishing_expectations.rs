@@ -101,12 +101,10 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("stock", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
-            b.include(confirm)
-                .out(
-                    Confirmations,
-                    JetStreamPublish::default().expect_stream("STOCK"),
-                )
-                .build();
+            b.include(confirm).out(
+                Confirmations,
+                JetStreamPublish::default().expect_stream("STOCK"),
+            )
         },
     )
 }

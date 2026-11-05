@@ -65,7 +65,7 @@ fn app(url: &str) -> impl App<State = ()> {
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(NatsBroker::new(url), |b| {
         let payments =
             JetStreamSubject::new("testing-live.payments", STREAM).durable("testing-live");
-        b.include(subscriber(payments, Accept).build());
+        b.include(subscriber(payments, Accept).build())
     })
 }
 

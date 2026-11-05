@@ -34,9 +34,8 @@ fn broker(password: &str) -> NatsBroker {
 #[ruststream::app]
 fn app() -> impl App {
     let password = env::var("NATS_PASSWORD").unwrap_or_default();
-    RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker(&password), |b| {
-        b.include(place);
-    })
+    RustStream::new(AppInfo::new("orders", "0.1.0"))
+        .with_broker(broker(&password), |b| b.include(place))
 }
 // --8<-- [end:broker]
 

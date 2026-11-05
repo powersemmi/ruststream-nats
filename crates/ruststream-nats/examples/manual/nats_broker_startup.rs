@@ -46,7 +46,7 @@ fn service(broker: NatsBroker) -> impl App<State = ()> {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(broker, |b| {
         let orders =
             JetStreamSubject::new("broker-startup.orders", STREAM).durable("broker-startup");
-        b.include(subscriber(orders, Place).build());
+        b.include(subscriber(orders, Place).build())
     })
 }
 

@@ -34,8 +34,10 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("fulfilment", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
-            b.include(fulfil);
-            b.include(audit).out_retry(Publish).to("orders.audit");
+            b.include(fulfil)
+                .include(audit)
+                .out_retry(Publish)
+                .to("orders.audit")
         },
     )
 }
@@ -55,9 +57,11 @@ mod tests {
         RustStream::new(AppInfo::new("fulfilment", "0.1.0")).with_broker(
             NatsBroker::new("nats://localhost:4222"),
             |b| {
-                b.include(fulfil);
-                b.include(fulfil);
-                b.include(audit).out_retry(Publish).to("orders.audit");
+                b.include(fulfil)
+                    .include(fulfil)
+                    .include(audit)
+                    .out_retry(Publish)
+                    .to("orders.audit")
             },
         )
     }

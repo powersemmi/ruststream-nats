@@ -104,7 +104,7 @@ fn service(broker: NatsBroker) -> RustStream {
             .build(),
         )
         .max_attempts(nonzero!(3u32))
-        .dead_letter("card.review");
+        .dead_letter("card.review")
     })
 }
 

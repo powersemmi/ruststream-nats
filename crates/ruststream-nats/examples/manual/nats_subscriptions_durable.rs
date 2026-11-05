@@ -48,7 +48,7 @@ fn app() -> impl App {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             let invoices = JetStreamSubject::new("invoices.*", "INVOICES").durable("billing");
-            b.include(subscriber(invoices, Bill).build());
+            b.include(subscriber(invoices, Bill).build())
         },
     )
 }
@@ -69,20 +69,26 @@ mod tests {
 
     use super::{Bill, Invoice, live};
 
-    /// The service on the server at `url`, with `replicas` subscriptions on the consumer.
-    fn app_at(url: &str, replicas: usize) -> impl App {
+    /// The service on the server at `url`, as `main` builds it on its configured address.
+    fn app_at(url: &str) -> impl App {
         RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(NatsBroker::new(url), |b| {
-            for _ in 0..replicas {
-                let invoices = JetStreamSubject::new("invoices.*", "INVOICES").durable("billing");
-                b.include(subscriber(invoices, Bill).build());
-            }
+            let invoices = JetStreamSubject::new("invoices.*", "INVOICES").durable("billing");
+            b.include(subscriber(invoices, Bill).build())
         })
     }
 
     #[tokio::test]
     async fn the_subscriptions_of_one_durable_take_turns() -> Result<(), Box<dyn Error>> {
         // Two replicas of the service, as two subscriptions on one connection.
-        let tb = TestApp::start(app_at("nats://localhost:4222", 2)).await?;
+        let replicas = RustStream::new(AppInfo::new("billing", "0.1.0")).with_broker(
+            NatsBroker::new("nats://localhost:4222"),
+            |b| {
+                let invoices = JetStreamSubject::new("invoices.*", "INVOICES").durable("billing");
+                b.include(subscriber(invoices.clone(), Bill).build())
+                    .include(subscriber(invoices, Bill).build())
+            },
+        );
+        let tb = TestApp::start(replicas).await?;
 
         for id in 1..=4 {
             tb.broker::<NatsBroker>()
@@ -123,7 +129,7 @@ mod tests {
             .await?;
 
         let outcome = async {
-            let tb = TestApp::start_live(app_at(&url, 1)).await?;
+            let tb = TestApp::start_live(app_at(&url)).await?;
             tb.broker::<NatsBroker>()
                 .message(&Invoice { id: 1 })
                 .to("invoices.issued")
@@ -146,7 +152,7 @@ mod tests {
 
             // The consumer resumes in order: the invoice issued during the restart comes first,
             // and the one billed before it is not read again.
-            let tb = TestApp::start_live(app_at(&url, 1)).await?;
+            let tb = TestApp::start_live(app_at(&url)).await?;
             tb.broker::<NatsBroker>()
                 .message(&Invoice { id: 3 })
                 .to("invoices.issued")

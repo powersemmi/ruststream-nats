@@ -136,20 +136,18 @@ fn app() -> impl App<State = ()> {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             b.include(confirm)
-                .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"));
-            b.include(archive)
+                .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"))
+                .include(archive)
                 .out(
                     Archive,
                     JetStreamPublish::default().expect_stream("ARCHIVE"),
                 )
-                .build();
-            b.include(index);
-            b.include(change_email)
+                .include(index)
+                .include(change_email)
                 .out(
                     History,
                     JetStreamPublish::default().expect_stream("ACCOUNTS"),
                 )
-                .build();
         },
     )
 }

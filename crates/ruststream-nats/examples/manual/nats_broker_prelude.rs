@@ -47,10 +47,10 @@ fn app() -> impl App {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             let stored = JetStreamSubject::new("orders.created", "ORDERS").durable("confirmer");
-            b.include(subscriber(stored, Confirm).reply().build())
-                .out_reply(Publish);
             let confirmed = CoreSubject::new("orders.confirmed").queue_group("mailers");
-            b.include(subscriber(confirmed, Mail).build());
+            b.include(subscriber(stored, Confirm).reply().build())
+                .out_reply(Publish)
+                .include(subscriber(confirmed, Mail).build())
         },
     )
 }

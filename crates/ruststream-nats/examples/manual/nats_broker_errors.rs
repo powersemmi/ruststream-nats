@@ -59,7 +59,6 @@ fn app() -> impl App {
         |b| {
             b.include(subscriber("orders.created", Ship).build())
                 .out(Shipments, Publish)
-                .build();
         },
     )
 }
@@ -178,7 +177,6 @@ mod tests {
             |b| {
                 b.include(subscriber("orders.created", Ship).build())
                     .out(Shipments, Publish)
-                    .build();
             },
         );
 
@@ -205,12 +203,10 @@ mod tests {
                 ready(Ok(()))
             }
         }
-        let app = RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
-            NatsBroker::new("nats://localhost:4222"),
-            |b| {
-                b.include(subscriber(CoreSubject::new(""), Nowhere).build());
-            },
-        );
+        let app = RustStream::new(AppInfo::new("orders", "0.1.0"))
+            .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+                b.include(subscriber(CoreSubject::new(""), Nowhere).build())
+            });
 
         let failed = TestApp::start(app).await.err();
         let failed = failed.expect("startup took an empty subject");

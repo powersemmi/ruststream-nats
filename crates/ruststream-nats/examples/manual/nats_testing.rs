@@ -93,9 +93,9 @@ fn app() -> impl App<State = ()> {
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
-            b.include(subscriber("payments.received", Accept).build());
             let captured = JetStreamSubject::new("payments.captured", "PAYMENTS").durable("ledger");
-            b.include(subscriber(captured, Book).build());
+            b.include(subscriber("payments.received", Accept).build())
+                .include(subscriber(captured, Book).build())
         },
     )
 }

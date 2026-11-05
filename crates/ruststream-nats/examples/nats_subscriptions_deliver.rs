@@ -32,12 +32,10 @@ async fn tick(price: &Price) -> HandlerOutcome {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("ticker", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(tick);
-        },
-    )
+    RustStream::new(AppInfo::new("ticker", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(tick)
+        })
 }
 // --8<-- [end:descriptor]
 
@@ -99,12 +97,8 @@ mod tests {
             .await?;
 
         let outcome = async {
-            let service = RustStream::new(AppInfo::new("ticker", "0.1.0")).with_broker(
-                NatsBroker::new(url.as_str()),
-                |b| {
-                    b.include(tick);
-                },
-            );
+            let service = RustStream::new(AppInfo::new("ticker", "0.1.0"))
+                .with_broker(NatsBroker::new(url.as_str()), |b| b.include(tick));
             let tb = TestApp::start_live(service).await?;
             tb.broker::<NatsBroker>()
                 .message(&price(250))

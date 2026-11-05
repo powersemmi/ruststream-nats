@@ -62,7 +62,7 @@ fn service(broker: NatsBroker) -> RustStream {
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(broker, |b| {
         b.include(charge)
             .max_attempts(nonzero!(3u32))
-            .dead_letter("card.review");
+            .dead_letter("card.review")
     })
 }
 

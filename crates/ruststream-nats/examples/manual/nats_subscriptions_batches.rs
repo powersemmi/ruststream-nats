@@ -46,7 +46,7 @@ fn app() -> impl App {
             let orders = JetStreamSubject::new("orders.*", "ORDERS")
                 .durable("reconciler")
                 .pull_expires(NonZeroDuration::from_millis(nonzero!(300)));
-            b.include(subscriber(orders, Reconcile).batch(nonzero!(50)).build());
+            b.include(subscriber(orders, Reconcile).batch(nonzero!(50)).build())
         },
     )
 }

@@ -100,17 +100,16 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
-            // The reply is stored in a stream and acknowledged by it; the rest of the service
-            // can keep publishing over Core NATS.
-            b.include(confirm)
-                .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"));
-            b.include(archive)
+            b.after_startup(JetStreamPublish::default().expect_stream("ORDERS"), seed)
+                // The reply is stored in a stream and acknowledged by it; the rest of the service
+                // can keep publishing over Core NATS.
+                .include(confirm)
+                .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"))
+                .include(archive)
                 .out(
                     Archive,
                     JetStreamPublish::default().expect_stream("ARCHIVE"),
                 )
-                .build();
-            b.after_startup(JetStreamPublish::default().expect_stream("ORDERS"), seed);
         },
     )
 }

@@ -76,16 +76,16 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
+            let stored = JetStreamSubject::new("payments.stored", "PAYMENTS").durable("reconciler");
             // Five deliveries of one payment, the first included; the fifth that still fails goes
             // to "payments.dead" instead, payload and headers as they arrived.
             b.include(subscriber("payments.settled", Reconcile).build())
                 .max_attempts(nonzero!(5u32))
-                .dead_letter("payments.dead");
-            let stored = JetStreamSubject::new("payments.stored", "PAYMENTS").durable("reconciler");
-            b.include(subscriber(stored, Reconcile).build())
+                .dead_letter("payments.dead")
+                .include(subscriber(stored, Reconcile).build())
                 .max_attempts(nonzero!(5u32))
-                .dead_letter("payments.dead");
-            b.include(subscriber("payments.dead", OnDeadLetter).build());
+                .dead_letter("payments.dead")
+                .include(subscriber("payments.dead", OnDeadLetter).build())
         },
     )
 }

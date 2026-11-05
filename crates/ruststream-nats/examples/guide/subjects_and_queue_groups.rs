@@ -83,10 +83,13 @@ fn app() -> impl App<State = ()> {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
-            b.include(pack);
-            b.include(bill).out(Invoices, Publish).build();
-            // A pattern is no subject to publish a retry copy to, so the mount site names one.
-            b.include(audit).out_retry(Publish).to("orders.retry");
+            b.include(pack)
+                .include(bill)
+                .out(Invoices, Publish)
+                // A pattern is no subject to publish a retry copy to, so the mount site names one.
+                .include(audit)
+                .out_retry(Publish)
+                .to("orders.retry")
         },
     )
 }

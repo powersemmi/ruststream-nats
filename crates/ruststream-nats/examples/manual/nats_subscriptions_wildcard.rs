@@ -43,7 +43,7 @@ fn app() -> impl App {
             // A pattern is no destination, so the mount site names where a delayed copy goes.
             b.include(subscriber(CoreWildcard::new("orders.*"), Audit).build())
                 .out_retry(Publish)
-                .to("orders.audit");
+                .to("orders.audit")
         },
     )
 }
@@ -95,12 +95,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_pattern_with_no_retry_subject_does_not_start() {
-        let unnamed = RustStream::new(AppInfo::new("audit", "0.1.0")).with_broker(
-            NatsBroker::new("nats://localhost:4222"),
-            |b| {
-                b.include(subscriber(CoreWildcard::new("orders.*"), Audit).build());
-            },
-        );
+        let unnamed = RustStream::new(AppInfo::new("audit", "0.1.0"))
+            .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+                b.include(subscriber(CoreWildcard::new("orders.*"), Audit).build())
+            });
 
         let refused = TestApp::start(unnamed)
             .await

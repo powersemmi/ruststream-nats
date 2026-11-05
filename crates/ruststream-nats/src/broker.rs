@@ -336,9 +336,7 @@ impl Broker for NatsBroker {
 /// set.
 #[cfg(feature = "testing")]
 impl InProcess for NatsBroker {
-    fn connect_in_process(
-        self,
-    ) -> impl Future<Output = Result<Self::Connected, Self::Error>> + Send {
+    fn connect_in_process(self) -> impl Future<Output = Result<Self::Connected, Self::Error>> {
         ready(
             in_process::connect(&self.addrs, &self.options).map(|bus| ConnectedNatsBroker {
                 routes: RouteBook::new(bus.no_echo()),

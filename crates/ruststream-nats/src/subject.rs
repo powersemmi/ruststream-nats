@@ -817,7 +817,7 @@ impl RedeliveryAddressed<ConnectedNatsBroker> for CoreSubject {
     fn redelivery_address(
         &self,
         _connected: &ConnectedNatsBroker,
-    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> + Send {
+    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> {
         ready(publish_destination(NatsSubscription::subject(self)))
     }
 }
@@ -877,7 +877,7 @@ impl RedeliveryAddressed<ConnectedNatsBroker> for JetStreamSubject {
     fn redelivery_address(
         &self,
         _connected: &ConnectedNatsBroker,
-    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> + Send {
+    ) -> impl Future<Output = Result<RedeliveryAddress, NatsError>> {
         ready(Ok(RedeliveryAddress::new(
             self.consumer_filter().to_owned(),
         )))

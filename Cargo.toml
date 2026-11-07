@@ -23,7 +23,7 @@ ruststream-nats = { path = "crates/ruststream-nats" }
 # The crate's client runs on tokio, so the library names the core's tokio runner in every build.
 ruststream = { version = "0.8.0-rc.1", default-features = false, features = ["tokio"] }
 
-async-nats = "0.50"
+async-nats = "0.51"
 bytes = "1"
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }

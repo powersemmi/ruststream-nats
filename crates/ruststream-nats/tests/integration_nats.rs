@@ -28,7 +28,7 @@ use futures::{Stream, StreamExt};
 use ruststream::{
     AckError, Broker, BuildContext, ConnectedBroker, DescribeServer, Field, HeaderMap,
     IncomingMessage, OutgoingMessage, Partitioned, Publisher, RequestReply, RetryDeclaration,
-    Subscribe, Subscriber, SubscriptionSource, nonzero,
+    Settle, Subscribe, Subscriber, SubscriptionSource, nonzero,
 };
 use ruststream_nats::context::{JetStreamContext, keys};
 use ruststream_nats::{
@@ -199,7 +199,7 @@ async fn the_stream_checks_the_expectations_a_publish_states() {
         .await
         .expect_err("a violated expectation must be refused");
     assert!(
-        matches!(err, NatsError::JetStream(_)),
+        matches!(err.error(), NatsError::JetStream(_)),
         "the stream's refusal must surface as a JetStream error, got: {err}",
     );
 
@@ -309,7 +309,7 @@ async fn an_expected_subject_sequence_is_checked_against_the_subject() {
         .await
         .expect_err("a stale subject sequence must be refused");
     assert!(
-        matches!(err, NatsError::JetStream(_)),
+        matches!(err.error(), NatsError::JetStream(_)),
         "the stream's refusal must surface as a JetStream error, got: {err}",
     );
     assert_eq!(
@@ -364,7 +364,7 @@ async fn an_expected_last_message_id_is_checked_against_the_stream() {
         .await
         .expect_err("a stale last message id must be refused");
     assert!(
-        matches!(err, NatsError::JetStream(_)),
+        matches!(err.error(), NatsError::JetStream(_)),
         "the stream's refusal must surface as a JetStream error, got: {err}",
     );
     assert_eq!(
@@ -401,7 +401,7 @@ async fn a_publisher_requiring_another_stream_is_refused() {
         .await
         .expect_err("a subject served by another stream must be refused");
     assert!(
-        matches!(err, NatsError::JetStream(_)),
+        matches!(err.error(), NatsError::JetStream(_)),
         "the stream's refusal must surface as a JetStream error, got: {err}",
     );
     assert_eq!(
@@ -790,7 +790,7 @@ async fn publisher_errors_after_shutdown() {
         .await
         .expect_err("publishing through a closed connection must fail");
     assert!(
-        matches!(&err, NatsError::Closed { subject: reported } if reported == &subject),
+        matches!(err.error(), NatsError::Closed { subject: reported } if reported == &subject),
         "the error must name the subject it could not reach, got: {err}",
     );
 }

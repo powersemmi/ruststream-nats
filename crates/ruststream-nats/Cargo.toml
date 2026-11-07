@@ -48,6 +48,7 @@ serde = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+pin-project-lite.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

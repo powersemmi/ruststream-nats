@@ -74,7 +74,7 @@ fn app() -> impl App<State = AppState> {
             })
         })
         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
-            b.include(fulfil);
+            b.include(fulfil)
         })
 }
 

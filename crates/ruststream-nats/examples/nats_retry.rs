@@ -73,11 +73,11 @@ fn app() -> impl App {
             // to "payments.dead" instead, payload and headers as they arrived.
             b.include(reconcile)
                 .max_attempts(nonzero!(5u32))
-                .dead_letter("payments.dead");
-            b.include(store)
+                .dead_letter("payments.dead")
+                .include(store)
                 .max_attempts(nonzero!(5u32))
-                .dead_letter("payments.dead");
-            b.include(on_dead_letter);
+                .dead_letter("payments.dead")
+                .include(on_dead_letter)
         },
     )
 }

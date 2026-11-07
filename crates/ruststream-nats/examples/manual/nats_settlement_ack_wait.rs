@@ -75,7 +75,7 @@ impl Handle<Invoice> for Render {
 /// The service on the server at `url`.
 fn app(url: &str) -> impl App<State = ()> {
     RustStream::new(AppInfo::new("invoicing", "0.1.0")).with_broker(NatsBroker::new(url), |b| {
-        b.include(subscriber(invoices(), Render).build());
+        b.include(subscriber(invoices(), Render).build())
     })
 }
 

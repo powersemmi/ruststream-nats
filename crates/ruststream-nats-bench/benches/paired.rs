@@ -1,20 +1,22 @@
 // The benchmark is a binary of its own, not library surface: the framework's macros generate the
 // handler scaffolding, and a measured loop panics on a broker fault rather than threading a
-// `Result` through a scenario nobody recovers from.
+// `Result` through a scenario nobody recovers from. A scenario drives the app on the runtime's own
+// thread with `block_on`, and the app's cold path carries no Send.
 #![allow(
     missing_docs,
     unreachable_pub,
     unused_qualifications,
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::future_not_send
 )]
 //! What this crate costs over the `async-nats` client it wraps, and what the runtime costs over
 //! this crate.
 //!
 //! One scenario, run three ways. **Raw** drives the client directly. **Adapter** drives this
 //! crate's own types by hand - the broker, the subscription descriptor, the `Subscriber` stream,
-//! the `IncomingMessage` and its `ack`, the `Publisher` - with no handler and no runtime above
+//! the delivery and its `ack`, the `Publisher` - with no handler and no runtime above
 //! them. **Service** is the application a user writes: a `#[subscriber]` handler on a started
 //! `RustStream` app.
 //!
@@ -85,7 +87,9 @@ use async_nats::{Client, ConnectOptions, Subject};
 use bytes::Bytes;
 use futures::StreamExt;
 use ruststream::runtime::RunningApp;
-use ruststream::{AckError, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Subscriber};
+use ruststream::{
+    AckError, Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Settle, Subscriber,
+};
 use ruststream_nats::prelude::*;
 use ruststream_nats::{ConnectedNatsBroker, NatsPublish, NatsPublisher, NatsSubscriber};
 use serde::Deserialize;
@@ -425,9 +429,7 @@ async fn stream_consume(order: &Order, ctx: &mut Context<'_, (), Run>) -> Handle
 async fn start_core(url: &str, run: Run) -> RunningApp {
     RustStream::new(AppInfo::new("nats-bench", "0.0.0"))
         .on_startup(async move |()| Ok::<_, Infallible>(run))
-        .with_broker(NatsBroker::new(url), |b| {
-            b.include(core_consume);
-        })
+        .with_broker(NatsBroker::new(url), |b| b.include(core_consume))
         .start()
         .await
         .expect("the service starts")
@@ -436,9 +438,7 @@ async fn start_core(url: &str, run: Run) -> RunningApp {
 async fn start_stream(url: &str, run: Run) -> RunningApp {
     RustStream::new(AppInfo::new("nats-bench", "0.0.0"))
         .on_startup(async move |()| Ok::<_, Infallible>(run))
-        .with_broker(NatsBroker::new(url), |b| {
-            b.include(stream_consume);
-        })
+        .with_broker(NatsBroker::new(url), |b| b.include(stream_consume))
         .start()
         .await
         .expect("the service starts")

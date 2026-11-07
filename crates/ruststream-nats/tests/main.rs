@@ -11,5 +11,6 @@ mod integration_nats;
 mod integration_nats_batch;
 mod integration_nats_consumer;
 mod integration_nats_retry;
+mod lent;
 mod prelude_names;
 mod publish_allocations;

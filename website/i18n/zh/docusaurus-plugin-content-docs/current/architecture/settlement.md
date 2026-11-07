@@ -67,7 +67,7 @@ Core 投递无需结算。`ack`、`retry` 和 `drop` 报告 `AckError::Unsupport
 
 <Diagram name="retries" words={retries} />
 
-上限在挂载点用 [`max_attempts`](api:ruststream::runtime::Mounting::max_attempts) 声明，第一次投递算作一次。在 JetStream 上，次数就是服务器自己的 `delivered`，因此超过 `ack_wait` 的投递也计算在内。在 Core 上，运行时统计它发布的副本，次数记在副本的 `x-ruststream-retry-count` 消息头里。
+上限在挂载点用 [`max_attempts`](api:ruststream::runtime::RouterWith::max_attempts) 声明，第一次投递算作一次。在 JetStream 上，次数就是服务器自己的 `delivered`，因此超过 `ack_wait` 的投递也计算在内。在 Core 上，运行时统计它发布的副本，次数记在副本的 `x-ruststream-retry-count` 消息头里。
 
 低于上限时，两种模型各自把消息带回来。JetStream 从流中重新投递它。在 Core 上，运行时把副本发布到描述符报告的地址。[`CoreSubject`](../components/subscriptions/core-subject.md) 报告它自己的 subject。[`CoreWildcard`](../components/subscriptions/core-wildcard.md) 匹配许多 subject，却不向任何一个发布，所以它的注册要[指定副本发往的 subject](../components/settlement/out-retry.md)，否则应用拒绝启动。
 

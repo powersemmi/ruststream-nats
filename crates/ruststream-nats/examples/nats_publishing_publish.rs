@@ -35,7 +35,7 @@ fn app() -> impl App {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             // The confirmation goes out over Core NATS, to the subject its type declares.
-            b.include(confirm).out_reply(Publish);
+            b.include(confirm).out_reply(Publish)
         },
     )
 }

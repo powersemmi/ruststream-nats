@@ -56,10 +56,10 @@ fn app() -> impl App {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             let fulfilment = CoreSubject::new("orders.created").queue_group("fulfilment");
-            b.include(subscriber(fulfilment, Fulfil).build());
-            b.include(subscriber(CoreWildcard::new("orders.*"), Audit).build())
+            b.include(subscriber(fulfilment, Fulfil).build())
+                .include(subscriber(CoreWildcard::new("orders.*"), Audit).build())
                 .out_retry(Publish)
-                .to("orders.audit");
+                .to("orders.audit")
         },
     )
 }
@@ -83,13 +83,12 @@ mod tests {
         RustStream::new(AppInfo::new("fulfilment", "0.1.0")).with_broker(
             NatsBroker::new("nats://localhost:4222"),
             |b| {
-                for _ in 0..2 {
-                    let fulfilment = CoreSubject::new("orders.created").queue_group("fulfilment");
-                    b.include(subscriber(fulfilment, Fulfil).build());
-                }
-                b.include(subscriber(CoreWildcard::new("orders.*"), Audit).build())
+                let fulfilment = CoreSubject::new("orders.created").queue_group("fulfilment");
+                b.include(subscriber(fulfilment.clone(), Fulfil).build())
+                    .include(subscriber(fulfilment, Fulfil).build())
+                    .include(subscriber(CoreWildcard::new("orders.*"), Audit).build())
                     .out_retry(Publish)
-                    .to("orders.audit");
+                    .to("orders.audit")
             },
         )
     }

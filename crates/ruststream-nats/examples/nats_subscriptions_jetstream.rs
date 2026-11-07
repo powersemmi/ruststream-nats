@@ -25,12 +25,10 @@ async fn ship(order: &Order) -> HandlerOutcome {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("shipping", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(ship);
-        },
-    )
+    RustStream::new(AppInfo::new("shipping", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(ship)
+        })
 }
 // --8<-- [end:descriptor]
 

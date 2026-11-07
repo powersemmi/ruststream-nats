@@ -112,12 +112,10 @@ fn app() -> impl App {
         NatsBroker::new("nats://localhost:4222"),
         |b| {
             let stock = JetStreamSubject::new("stock.*", "STOCK").durable("confirmer");
-            b.include(subscriber(stock, Confirm).build())
-                .out(
-                    Confirmations,
-                    JetStreamPublish::default().expect_stream("STOCK"),
-                )
-                .build();
+            b.include(subscriber(stock, Confirm).build()).out(
+                Confirmations,
+                JetStreamPublish::default().expect_stream("STOCK"),
+            )
         },
     )
 }

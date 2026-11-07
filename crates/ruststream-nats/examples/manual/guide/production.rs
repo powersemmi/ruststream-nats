@@ -116,7 +116,7 @@ fn service(broker: NatsBroker) -> RustStream {
             )
             .reply()
             .build(),
-        );
+        )
     })
 }
 

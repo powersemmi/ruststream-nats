@@ -37,9 +37,7 @@ async fn confirm(order: &Order, ctx: &mut Context<'_, (), Latch>) -> Confirmatio
 }
 
 fn app(messages: usize) -> Pending {
-    common::pending(messages, |b| {
-        b.include(confirm);
-    })
+    common::pending(messages, |b| b.include(confirm))
 }
 
 // Eleven allocations per delivery and the same fraction as consuming, so the floor is stated over

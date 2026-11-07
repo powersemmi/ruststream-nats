@@ -82,7 +82,7 @@ fn app() -> impl App<State = AppState> {
         })
         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
             let orders = JetStreamSubject::new("orders.placed", "ORDERS").durable("fulfilment");
-            b.include(subscriber(orders, Fulfil).build());
+            b.include(subscriber(orders, Fulfil).build())
         })
 }
 

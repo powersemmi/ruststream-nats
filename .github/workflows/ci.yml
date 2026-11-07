@@ -185,6 +185,15 @@ jobs:
         env:
           NATS_PATH: ${{ github.workspace }}/crates/ruststream-nats
         run: |
+          # `[patch]` redirects where a crate comes from, not what the manifest asks for, and Cargo
+          # keeps pre-releases out of a range that does not name one. So while the core or this crate
+          # is on a pre-release, the scaffold's own requirements would reject them. Point the
+          # rendered copy at the versions actually being built; the template keeps the requirements
+          # a user writes for the release it targets.
+          core=$(awk '/^name = "ruststream"$/ { getline; split($0, v, "\""); print v[2] }' Cargo.lock)
+          crate=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name == "ruststream-nats") | .version')
+          test -n "$core" && test -n "$crate"
           for tpl in nats nats-js; do
             name="smoke-$tpl"
             cargo generate --path "templates/$tpl" --name "$name" --destination "$RUNNER_TEMP" --vcs none
@@ -193,6 +202,12 @@ jobs:
             # cargo-generate did drop the suffix, otherwise the append below would quietly write a
             # manifest of its own.
             test -f "$RUNNER_TEMP/$name/Cargo.toml"
+            sed -i -E \
+              -e "s/^(ruststream = \{ version = \")[^\"]*/\1$core/" \
+              -e "s/^(ruststream-nats = (\{ version = )?\")[^\"]*/\1$crate/" \
+              "$RUNNER_TEMP/$name/Cargo.toml"
+            grep -q "^ruststream = { version = \"$core\"" "$RUNNER_TEMP/$name/Cargo.toml"
+            grep -Eq "^ruststream-nats = (\{ version = )?\"$crate\"" "$RUNNER_TEMP/$name/Cargo.toml"
             {
               echo ""
               echo "[patch.crates-io]"

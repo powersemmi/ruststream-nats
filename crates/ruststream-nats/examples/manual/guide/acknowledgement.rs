@@ -183,8 +183,8 @@ fn app() -> impl App<State = Clients> {
                 )
                 .reply()
                 .build(),
-            );
-            b.include(subscriber("payments.captured", Refresh).build());
+            )
+            .include(subscriber("payments.captured", Refresh).build())
         })
 }
 

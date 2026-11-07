@@ -7,15 +7,19 @@
 )]
 
 use async_nats::jetstream::consumer::{PullConsumer, pull::Stream as PullStream};
-use futures::stream::{poll_fn, unfold};
+use futures::stream::poll_fn;
 use futures::{Stream, StreamExt, future::Either};
-use ruststream::{BatchSubscriber, BufferedSubscriber, Subscriber};
+use ruststream::{BatchStream, BatchSubscriber, BufferedSubscriber, Subscriber};
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroUsize;
-#[cfg(feature = "testing")]
-use std::task::Poll;
 use std::{pin::Pin, time::Duration};
 use tracing::warn;
+
+#[cfg(feature = "testing")]
+use self::fills::InProcessPulls;
+use self::fills::{Pulls, Sides};
+
+mod fills;
 
 #[cfg(feature = "testing")]
 use crate::in_process::{Consumer, Feed};
@@ -137,9 +141,9 @@ impl Subscriber for CoreSubscriber {
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
 ///         NatsBroker::new("nats://localhost:4222"),
 ///         |b| {
-///             b.include(handle);
-///             // One pull request fetches at most six messages.
-///             b.include(reconcile.batch(nonzero!(6)));
+///             b.include(handle)
+///                 // One pull request fetches at most six messages.
+///                 .include(reconcile.batch(nonzero!(6)))
 ///         },
 ///     )
 /// }
@@ -282,13 +286,13 @@ impl Subscriber for NatsSubscriber {
 impl BatchSubscriber for NatsSubscriber {
     type Batch = Vec<NatsMessage>;
 
-    /// Returns a stream of batches of at most `size` messages.
+    /// Returns a stream that fills the slot the runtime lends with batches of at most `size`
+    /// messages.
     ///
     /// `size` is the registration's batch size, and each transport spends it in its own currency.
-    /// `JetStream` batches on the wire: one stream item is one pull `fetch` of up to `size`
-    /// messages, waiting at most [`pull_expires`](crate::JetStreamSubject::pull_expires) before
-    /// delivering a partial batch (an empty fetch is retried, so the stream never yields empty
-    /// batches). Core NATS has no wire-level batching, so its batches are assembled on the client
+    /// `JetStream` batches on the wire: one batch is one pull `fetch` of up to `size` messages,
+    /// waiting at most [`pull_expires`](crate::JetStreamSubject::pull_expires) before delivering a
+    /// partial batch (an empty fetch is retried, so a fill never hands over an empty batch). Core NATS has no wire-level batching, so its batches are assembled on the client
     /// by the framework's [`BufferedSubscriber`]: a batch closes at `size` deliveries or 10 ms
     /// after its first one, whichever comes first.
     ///
@@ -298,85 +302,39 @@ impl BatchSubscriber for NatsSubscriber {
     ///
     /// # Cancel safety
     ///
-    /// Dropping the returned stream between items is allowed. On `JetStream`, dropping it
-    /// mid-fetch can leave already-fetched, undelivered messages to be redelivered after the
-    /// consumer's `ack_wait`.
+    /// A fill that returns `Pending` keeps the messages it collected in the slot, and the next
+    /// poll goes on from them. Dropping the returned stream between fills is allowed. On
+    /// `JetStream`, dropping it mid-fetch can leave already-fetched, undelivered messages to be
+    /// redelivered after the consumer's `ack_wait`.
     fn batches(
         &mut self,
         size: NonZeroUsize,
-    ) -> impl Stream<Item = Result<Self::Batch, Self::Error>> + Send + '_ {
+    ) -> impl BatchStream<Self::Batch, Error = Self::Error> + Send + '_ {
         match &mut self.kind {
-            SubscriberKind::Core(core) => Either::Left(core.batches(size)),
-            // A fetch hands over what the consumer has, up to `size`, and waits only for the
-            // first message: so does this.
-            #[cfg(feature = "testing")]
-            SubscriberKind::InProcessJetStream(consumer) => {
-                let limit = size.get();
-                Either::Right(Either::Right(poll_fn(move |cx| {
-                    let first = match consumer.poll_next(cx) {
-                        Poll::Pending => return Poll::Pending,
-                        Poll::Ready(None) => return Poll::Ready(None),
-                        Poll::Ready(Some(delivery)) => delivery,
-                    };
-                    let mut batch = vec![NatsMessage::JetStream(Box::new(
-                        JetStreamMessage::in_process(first),
-                    ))];
-                    while batch.len() < limit {
-                        match consumer.poll_next(cx) {
-                            Poll::Ready(Some(delivery)) => batch.push(NatsMessage::JetStream(
-                                Box::new(JetStreamMessage::in_process(delivery)),
-                            )),
-                            Poll::Ready(None) | Poll::Pending => break,
-                        }
-                    }
-                    Poll::Ready(Some(Ok(batch)))
-                })))
-            }
+            SubscriberKind::Core(core) => Sides::left(core.batches(size)),
             SubscriberKind::JetStream(js) => {
+                let consumer = &js.consumer;
                 let max = size.get();
                 let expires = js.pull_expires;
-                let batches = unfold(&mut js.consumer, move |consumer| async move {
-                    loop {
-                        let fetch = consumer
+                let pulls = Pulls::new(
+                    move || {
+                        consumer
                             .fetch()
                             .max_messages(max)
                             .expires(expires)
                             .messages()
-                            .await;
-                        let mut messages = match fetch {
-                            Ok(messages) => messages,
-                            // BatchError is a concrete sized type; wrap it.
-                            Err(err) => {
-                                return Some((Err(NatsError::JetStream(Box::new(err))), consumer));
-                            }
-                        };
-                        let mut batch = Vec::new();
-                        while let Some(item) = messages.next().await {
-                            match item {
-                                Ok(msg) => batch.push(jetstream_message(msg)),
-                                // crate::Error is already Box<dyn StdError + ...>; use directly.
-                                Err(err) => {
-                                    if batch.is_empty() {
-                                        return Some((Err(NatsError::JetStream(err)), consumer));
-                                    }
-                                    warn!(
-                                        target: "ruststream::nats",
-                                        error = %err,
-                                        "jetstream fetch error mid-batch; delivering the partial batch",
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                        if !batch.is_empty() {
-                            return Some((Ok(batch), consumer));
-                        }
-                        // An empty fetch only means `expires` elapsed with nothing pending.
-                    }
-                });
+                    },
+                    size,
+                );
+                // The in-process arm is a third stream type, so the production one is nested
+                // beside it only when the feature brings it.
                 #[cfg(feature = "testing")]
-                let batches = Either::Left(batches);
-                Either::Right(batches)
+                let pulls = Sides::left(pulls);
+                Sides::right(pulls)
+            }
+            #[cfg(feature = "testing")]
+            SubscriberKind::InProcessJetStream(consumer) => {
+                Sides::right(Sides::right(InProcessPulls::new(consumer, size)))
             }
         }
     }

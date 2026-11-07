@@ -44,7 +44,7 @@ fn app() -> impl App {
             let refunds = JetStreamSubject::new("orders.>", "ORDERS")
                 .durable("refunds")
                 .filter_subject("orders.refunded");
-            b.include(subscriber(refunds, Refund).build());
+            b.include(subscriber(refunds, Refund).build())
         },
     )
 }

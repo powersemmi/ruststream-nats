@@ -137,10 +137,8 @@ fn app() -> impl App {
             // The plain policy pairs into the Core publisher, which also serves requests.
             b.include(subscriber(placed, Price).build())
                 .out(Pricing, Publish)
-                .build();
-            b.include(subscriber("prices.quote", QuotePrice).build())
+                .include(subscriber("prices.quote", QuotePrice).build())
                 .out(Answers, Publish)
-                .build();
         },
     )
 }

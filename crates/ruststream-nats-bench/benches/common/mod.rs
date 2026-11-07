@@ -65,7 +65,10 @@ use bytes::Bytes;
 use futures::future::try_join_all;
 use futures::{StreamExt, TryStreamExt, stream};
 use gungraun::{Callgrind, Dhat, DhatMetric, EntryPoint, LibraryBenchmarkConfig};
-use ruststream::runtime::{AppInfo, BrokerScope, Identity, RunningApp, RustStream};
+use ruststream::runtime::{
+    AppInfo, BrokerScope, Identity, MountChain, MountRoutes, PublishIdentity, RunningApp,
+    RustStream,
+};
 use ruststream_nats::NatsBroker;
 use serde::Deserialize;
 use tokio::runtime::{Builder, Runtime};
@@ -337,8 +340,19 @@ pub struct Pending {
     messages: usize,
 }
 
-/// The mount a scenario passes in: what `with_broker` does with the scope.
-pub type Mount<'a> = &'a mut BrokerScope<NatsBroker, Identity, (), Latch>;
+/// The scope a scenario's mount receives: what `with_broker` hands its closure.
+pub type Mount = BrokerScope<NatsBroker, Identity, (), Latch>;
+
+/// The chain a scenario's mount returns.
+pub trait Mounted:
+    MountChain<Routes: MountRoutes<NatsBroker, Identity, Latch, PublishIdentity>>
+{
+}
+
+impl<Chain: MountChain<Routes: MountRoutes<NatsBroker, Identity, Latch, PublishIdentity>>> Mounted
+    for Chain
+{
+}
 
 /// Builds a one-handler service on the production broker, ready to be started by the body, with
 /// [`STREAM`] recreated empty.
@@ -346,7 +360,7 @@ pub type Mount<'a> = &'a mut BrokerScope<NatsBroker, Identity, (), Latch>;
 /// # Panics
 ///
 /// Panics when `NATS_TEST_URL` is not set, or the server refuses the producer.
-pub fn pending(messages: usize, mount: impl FnOnce(Mount<'_>)) -> Pending {
+pub fn pending<Chain: Mounted>(messages: usize, mount: impl FnOnce(Mount) -> Chain) -> Pending {
     let url = env::var(URL)
         .expect("NATS_TEST_URL names the server to measure against; `just bench-code` sets it");
     let producer = Producer::prepare(&url);

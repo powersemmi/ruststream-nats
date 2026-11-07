@@ -76,7 +76,7 @@ back only as a copy it publishes. That is
 <Diagram name="retries" words={retries} />
 
 The cap is declared at the mount site with
-[`max_attempts`](api:ruststream::runtime::Mounting::max_attempts), and the first delivery counts
+[`max_attempts`](api:ruststream::runtime::RouterWith::max_attempts), and the first delivery counts
 as one. On JetStream the count is the server's own `delivered`, so a delivery that ran past
 `ack_wait` counts too. On Core the runtime counts the copies it published, in the copy's
 `x-ruststream-retry-count` header.

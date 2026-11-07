@@ -210,7 +210,7 @@ async fn a_capped_consumer_sends_its_spent_delivery_to_the_dead_letter_subject()
         .with_broker(NatsBroker::new(observer.url.clone()), |b| {
             b.include(never_ready_stream)
                 .max_attempts(nonzero!(2u32))
-                .dead_letter(JS_DEAD);
+                .dead_letter(JS_DEAD)
         })
         .start()
         .await
@@ -263,7 +263,7 @@ async fn a_capped_consumer_with_no_destination_terminates_its_spent_delivery() {
 
     let running = RustStream::new(AppInfo::new("orders", "0.1.0"))
         .with_broker(NatsBroker::new(observer.url.clone()), |b| {
-            b.include(never_ready_terminal).max_attempts(nonzero!(2u32));
+            b.include(never_ready_terminal).max_attempts(nonzero!(2u32))
         })
         .start()
         .await
@@ -327,7 +327,7 @@ async fn a_capped_subject_carries_its_count_in_a_header_to_the_dead_letter_subje
         .with_broker(NatsBroker::new(observer.url.clone()), |b| {
             b.include(never_ready_subject)
                 .max_attempts(nonzero!(3u32))
-                .dead_letter(CORE_DEAD);
+                .dead_letter(CORE_DEAD)
         })
         .start()
         .await

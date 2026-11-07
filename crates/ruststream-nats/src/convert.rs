@@ -4,7 +4,7 @@ use std::str::{FromStr, from_utf8};
 
 use async_nats::{HeaderName, HeaderValue};
 use bytes::{Bytes, BytesMut};
-use ruststream::{HeaderMap, OutgoingMessage};
+use ruststream::{HeaderMap, OutgoingMessage, PublishMessageError};
 
 use crate::error::NatsError;
 
@@ -21,21 +21,40 @@ pub(crate) fn headers_from_nats(map: Option<&async_nats::HeaderMap>) -> HeaderMa
     headers
 }
 
+/// A publish this crate refused, with the message when the client had not taken it yet.
+pub(crate) type Refused<'msg> = PublishMessageError<NatsError, OutgoingMessage<'msg, BytesMut>>;
+
+/// The refusal raised before the client took the message: the message goes back with it.
+pub(crate) fn refused(error: NatsError, msg: OutgoingMessage<'_, BytesMut>) -> Refused<'_> {
+    PublishMessageError::with_message(error, msg)
+}
+
+/// The refusal raised after the client took the payload: `async-nats` keeps the buffer it was
+/// handed and gives nothing back, so there is no message to return.
+pub(crate) fn consumed<'msg>(error: NatsError) -> Refused<'msg> {
+    PublishMessageError::new(error)
+}
+
 /// An outgoing message as `async-nats` takes it: the subject, the payload the client keeps and
 /// the headers it writes.
 ///
 /// Every publish surface of this crate goes through here, so what the client is handed is
-/// decided in one place.
+/// decided in one place. The headers are read in place, so a message whose headers have no NATS
+/// form comes back whole with the refusal.
 ///
 /// # Errors
 ///
 /// Returns [`NatsError::Publish`] when a header has no NATS form; see [`headers_to_nats`].
 pub(crate) fn nats_parts(
     msg: OutgoingMessage<'_, BytesMut>,
-) -> Result<(String, Bytes, Option<async_nats::HeaderMap>), NatsError> {
-    let (subject, payload, headers) = msg.into_parts();
-    let headers = headers_to_nats(&headers)?;
-    Ok((subject.to_owned(), payload.freeze(), headers))
+) -> Result<(String, Bytes, Option<async_nats::HeaderMap>), Refused<'_>> {
+    match headers_to_nats(msg.headers()) {
+        Ok(headers) => {
+            let (subject, payload, _) = msg.into_parts();
+            Ok((subject.to_owned(), payload.freeze(), headers))
+        }
+        Err(error) => Err(refused(error, msg)),
+    }
 }
 
 /// The framework's headers as NATS headers, or an error naming the one the protocol cannot carry.
@@ -115,6 +134,24 @@ mod tests {
             "async-nats keeps the payload, so the buffer travels into the client rather than \
              being copied into a second one",
         );
+    }
+
+    // The headers are read in place, so a refusal over one of them has the whole message to give
+    // back, and the caller can fix the header and send it again.
+    #[test]
+    fn a_message_whose_header_has_no_nats_form_comes_back_whole() {
+        let headers = one("x-note", "line one\r\nline two");
+        let msg = OutgoingMessage::produced("orders.created", BytesMut::from(&b"{}"[..]))
+            .with_headers(headers.clone());
+
+        let refused = nats_parts(msg).expect_err("a newline has no NATS form");
+        let back = refused
+            .into_message()
+            .expect("the client never took the message, so it comes back");
+
+        assert_eq!(back.name(), "orders.created");
+        assert_eq!(back.payload(), b"{}");
+        assert_eq!(back.headers(), &headers);
     }
 
     #[test]

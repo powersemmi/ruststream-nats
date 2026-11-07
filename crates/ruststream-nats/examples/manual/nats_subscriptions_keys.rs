@@ -53,7 +53,7 @@ fn app() -> impl App {
                 subscriber(placed, Place)
                     .workers_by_key(nonzero!(8))
                     .build(),
-            );
+            )
         },
     )
 }

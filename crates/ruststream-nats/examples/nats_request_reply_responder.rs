@@ -55,12 +55,10 @@ async fn quote_price(
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("prices", "0.1.0")).with_broker(
-        NatsBroker::new("nats://localhost:4222"),
-        |b| {
-            b.include(quote_price).out(Answers, Publish).build();
-        },
-    )
+    RustStream::new(AppInfo::new("prices", "0.1.0"))
+        .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
+            b.include(quote_price).out(Answers, Publish)
+        })
 }
 
 #[cfg(test)]

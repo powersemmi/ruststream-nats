@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 # Dead letters
 
-[`dead_letter(subject)`](api:ruststream::runtime::Mounting::dead_letter) names the subject a spent delivery is published to; a capped JetStream consumer with none terminates it.
+[`dead_letter(subject)`](api:ruststream::runtime::RouterWith::dead_letter) names the subject a spent delivery is published to; a capped JetStream consumer with none terminates it.
 
 It follows [`max_attempts(n)`](./retries.md) at the mount site.
 When a retry would make the delivery the `n`-th one, the framework settles it and publishes it to the dead-letter subject instead, payload and headers as they arrived.

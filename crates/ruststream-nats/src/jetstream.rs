@@ -24,17 +24,24 @@ use ruststream::HeaderMap;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::{Binding, Bindings};
 use ruststream::runtime::{PublishBuilder, PublishSink};
-use ruststream::{OutgoingMessage, PairError, PublishPolicy, Publisher, Take};
+use ruststream::{
+    OutgoingMessage, PairError, PublishMessageError, PublishOutcome, PublishPolicy, Publisher, Take,
+};
 #[cfg(feature = "asyncapi")]
 use serde::Serialize;
 
 use crate::broker::{ConnectedNatsBroker, Link, NatsConnection};
 #[cfg(feature = "testing")]
+use crate::convert::Refused;
+#[cfg(feature = "testing")]
+use crate::convert::headers_to_nats;
+use crate::convert::{consumed, nats_parts, refused};
+use crate::error::NatsError;
+#[cfg(feature = "testing")]
 use crate::in_process::{Bus, Origin, PublishMode};
 use crate::publisher::NatsPublishPolicy;
 #[cfg(feature = "asyncapi")]
 use crate::subject::JETSTREAM_EXTENSION;
-use crate::{convert::nats_parts, error::NatsError};
 
 /// The acknowledgement a `JetStream` stream returns for an accepted publish.
 pub use async_nats::jetstream::publish::PublishAck;
@@ -107,12 +114,15 @@ pub(crate) const EXPECTED_STREAM: &str = "Nats-Expected-Stream";
 /// }
 ///
 /// pub fn app() -> impl App {
-///     RustStream::new(AppInfo::new("archive", "0.1.0"))
-///         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
-///             b.include(archive)
-///                 .out(Archive, JetStreamPublish::default().expect_stream("ARCHIVE"))
-///                 .build();
-///         })
+///     RustStream::new(AppInfo::new("archive", "0.1.0")).with_broker(
+///         NatsBroker::new("nats://localhost:4222"),
+///         |b| {
+///             b.include(archive).out(
+///                 Archive,
+///                 JetStreamPublish::default().expect_stream("ARCHIVE"),
+///             )
+///         },
+///     )
 /// }
 ///
 /// pub async fn archives_once_per_order() -> Result<(), Box<dyn Error>> {
@@ -324,7 +334,7 @@ where
 ///         |b| {
 ///             // The reply is stored, and a subject the ORDERS stream does not serve is an error.
 ///             b.include(record)
-///                 .out_reply(JetStreamPublish::default().expect_stream("ORDERS"));
+///                 .out_reply(JetStreamPublish::default().expect_stream("ORDERS"))
 ///         },
 ///     )
 /// }
@@ -511,24 +521,27 @@ const _: () = assert!(size_of::<JetStreamLink>() == size_of::<(Arc<NatsConnectio
 ///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
 ///         NatsBroker::new("nats://localhost:4222"),
 ///         |b| {
-///             b.include(confirm)
-///                 .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"));
-///
-///             b.include(archive)
-///                 .out(Archive, JetStreamPublish::default().expect_stream("ARCHIVE"))
-///                 .build();
-///
 ///             b.after_startup(
 ///                 JetStreamPublish::default().expect_stream("ORDERS"),
 ///                 async move |publisher| -> io::Result<()> {
 ///                     let ack = publisher
-///                         .publish_ack(OutgoingMessage::new("orders.created", br#"{"id":1}"#), None)
+///                         .publish_ack(
+///                             OutgoingMessage::new("orders.created", br#"{"id":1}"#),
+///                             None,
+///                         )
 ///                         .await
 ///                         .map_err(io::Error::other)?;
 ///                     tracing::info!(stream = %ack.stream, ack.sequence, "seeded");
 ///                     Ok(())
 ///                 },
-///             );
+///             )
+///             .include(confirm)
+///             .out_reply(JetStreamPublish::default().expect_stream("CONFIRMATIONS"))
+///             .include(archive)
+///             .out(
+///                 Archive,
+///                 JetStreamPublish::default().expect_stream("ARCHIVE"),
+///             )
 ///         },
 ///     )
 /// }
@@ -560,17 +573,19 @@ impl JetStreamPublisher {
     ///
     /// Returns [`NatsError::Closed`] when the broker has shut down, [`NatsError::Publish`] when
     /// the message cannot be sent, and [`NatsError::JetStream`] when the stream rejects it (no
-    /// such stream, or an expectation did not hold).
+    /// such stream, or an expectation did not hold). A refusal raised before the client takes the
+    /// message (a shut-down broker, a header with no NATS form) hands the message back in the
+    /// error; once the client has the payload, it keeps it.
     ///
     /// # Cancel safety
     ///
     /// Not cancel-safe: dropping the future after the message is on the wire abandons the
     /// acknowledgement, leaving the publish in an indeterminate state.
-    pub async fn publish_ack(
+    pub async fn publish_ack<'msg>(
         &self,
-        msg: OutgoingMessage<'_, BytesMut>,
+        msg: OutgoingMessage<'msg, BytesMut>,
         options: Option<&JetStreamOptions>,
-    ) -> Result<PublishAck, NatsError> {
+    ) -> Result<PublishAck, PublishMessageError<NatsError, OutgoingMessage<'msg, BytesMut>>> {
         let (connection, context) = match &self.link {
             JetStreamLink::Nats {
                 connection,
@@ -581,7 +596,9 @@ impl JetStreamPublisher {
         };
         // Checked before the send: the context caches a client clone that would happily queue a
         // publish into a drained connection.
-        connection.live_client(msg.name())?;
+        if let Err(error) = connection.live_client(msg.name()) {
+            return Err(refused(error, msg));
+        }
 
         let (subject, payload, headers) = nats_parts(msg)?;
         let mut message = PublishMessage::build().payload(payload);
@@ -598,22 +615,29 @@ impl JetStreamPublisher {
         context
             .send_publish(subject, message)
             .await
-            .map_err(|err| NatsError::Publish(Box::new(err)))?
+            .map_err(|err| consumed(NatsError::Publish(Box::new(err))))?
             .await
-            .map_err(|err| NatsError::JetStream(Box::new(err)))
+            .map_err(|err| consumed(NatsError::JetStream(Box::new(err))))
     }
 }
 
 #[cfg(feature = "testing")]
 impl JetStreamPublisher {
     /// The in-process publish: the client's half is writing the protocol headers, and the
-    /// in-process stream reads them as a server does.
-    fn publish_in_process(
+    /// in-process stream reads them as a server does. What the client refuses before it takes
+    /// the message comes back with the refusal, as it does from the client.
+    fn publish_in_process<'msg>(
         &self,
         bus: &Bus,
-        msg: OutgoingMessage<'_, BytesMut>,
+        msg: OutgoingMessage<'msg, BytesMut>,
         options: Option<&JetStreamOptions>,
-    ) -> Result<PublishAck, NatsError> {
+    ) -> Result<PublishAck, Refused<'msg>> {
+        if let Err(error) = bus.ensure_live(msg.name()) {
+            return Err(refused(error, msg));
+        }
+        if let Err(error) = headers_to_nats(msg.headers()) {
+            return Err(refused(error, msg));
+        }
         let (subject, payload, mut headers) = msg.into_parts();
         self.policy.write_headers(&mut headers);
         if let Some(options) = options {
@@ -627,8 +651,13 @@ impl JetStreamPublisher {
                 None,
                 PublishMode::JetStream,
                 Origin::Connection,
-            )?
-            .ok_or_else(|| NatsError::JetStream("no stream found for given subject".into()))?;
+            )
+            .map_err(consumed)?
+            .ok_or_else(|| {
+                consumed(NatsError::JetStream(
+                    "no stream found for given subject".into(),
+                ))
+            })?;
         Ok(PublishAck {
             stream: stored.stream,
             sequence: stored.sequence,
@@ -649,11 +678,11 @@ impl Publisher for JetStreamPublisher {
     /// # Cancel safety
     ///
     /// Not cancel-safe; see [`publish_ack`](Self::publish_ack).
-    async fn publish(
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingMessage<'_, BytesMut>,
+        msg: OutgoingMessage<'msg, BytesMut>,
         options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
+    ) -> PublishOutcome<'msg, Self::Error, Take> {
         self.publish_ack(msg, options).await.map(|_ack| ())
     }
 }

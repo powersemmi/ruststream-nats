@@ -37,7 +37,7 @@ The dependency line:
 
 ```toml
 [dev-dependencies]
-ruststream-nats = { version = "0.7", features = ["testing"] }
+ruststream-nats = { version = "0.8", features = ["testing"] }
 ```
 
 The tests publish a payment and read how the handler settled it.

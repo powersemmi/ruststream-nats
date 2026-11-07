@@ -25,9 +25,12 @@ The `async-nats` error behind it is its `source`, so the client's types stay out
 | `Shutdown` | draining the connection at shutdown failed |
 | `InvalidOptions` | a descriptor names an empty subject, or a delayed copy is sent to a `CoreSubject` that holds a pattern |
 
-A service meets the error in two places.
+A service meets the error in three places.
 A failed startup carries it as the source of the runtime's error, and the service exits before it reads anything.
 A publish from a handler returns it inside the core's `PublishError`, and the handler decides how the delivery settles.
+A publisher called directly returns it inside the core's `PublishMessageError`.
+When the crate refuses the message before the client takes it, after a shutdown or for a header NATS cannot carry, the error also hands the message back.
+Once the client has the payload, it keeps it, and the error comes alone.
 The enum is `#[non_exhaustive]`, so a `match` on it ends with a wildcard arm.
 
 ## Example

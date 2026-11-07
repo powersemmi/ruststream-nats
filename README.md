@@ -43,12 +43,12 @@ from the framework; this crate is the transport.
 
 ```toml
 [dependencies]
-ruststream = { version = "0.7", features = ["macros", "json"] }
-ruststream-nats = "0.7"
+ruststream = { version = "0.8", features = ["macros", "json"] }
+ruststream-nats = "0.8"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-nats = { version = "0.7", features = ["testing"] }
+ruststream-nats = { version = "0.8", features = ["testing"] }
 ```
 
 Add the `asyncapi` feature to fill the generated document with NATS's own vocabulary.
@@ -83,7 +83,7 @@ async fn confirm(order: &Order) -> Confirmation {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0"))
         .with_broker(NatsBroker::new("nats://localhost:4222"), |b| {
-            b.include(confirm).out_reply(Publish);
+            b.include(confirm).out_reply(Publish)
         })
 }
 ```

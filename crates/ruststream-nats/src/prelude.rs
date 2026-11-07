@@ -61,8 +61,8 @@
 //!         NatsBroker::new("nats://localhost:4222"),
 //!         |b| {
 //!             b.include(confirm)
-//!                 .out_reply(JetStreamPublish::default().expect_stream("ORDERS"));
-//!             b.include(mail);
+//!                 .out_reply(JetStreamPublish::default().expect_stream("ORDERS"))
+//!                 .include(mail)
 //!         },
 //!     )
 //! }

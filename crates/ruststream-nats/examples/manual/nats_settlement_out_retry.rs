@@ -56,7 +56,7 @@ fn app() -> impl App {
                 .max_attempts(nonzero!(3u32))
                 .dead_letter("dead.audits")
                 .out_retry(Publish)
-                .to("audits.retry");
+                .to("audits.retry")
         },
     )
 }
@@ -137,7 +137,7 @@ mod tests {
             |b| {
                 b.include(subscriber(CoreWildcard::new("audits.*"), Audit).build())
                     .max_attempts(nonzero!(3u32))
-                    .dead_letter("dead.audits");
+                    .dead_letter("dead.audits")
             },
         );
 

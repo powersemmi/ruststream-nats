@@ -77,7 +77,7 @@ Core.
 <Diagram name="retries" words={retries} />
 
 Предел объявляется в точке монтирования через
-[`max_attempts`](api:ruststream::runtime::Mounting::max_attempts), и первая доставка считается
+[`max_attempts`](api:ruststream::runtime::RouterWith::max_attempts), и первая доставка считается
 первой попыткой. В JetStream счёт ведёт сам сервер в своём `delivered`, поэтому доставка, которая
 не уложилась в `ack_wait`, тоже учитывается. В Core рантайм считает опубликованные копии в
 заголовке копии `x-ruststream-retry-count`.

@@ -129,11 +129,11 @@ fn app() -> impl App<State = ()> {
     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(
         NatsBroker::new("nats://localhost:4222"),
         |b| {
-            b.include(quote).out(Answers, Publish).build();
-            b.include(price_order)
+            b.include(quote)
+                .out(Answers, Publish)
+                .include(price_order)
                 .out_reply(Publish)
                 .out(Pricing, Publish)
-                .build();
         },
     )
 }
